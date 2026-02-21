@@ -1,0 +1,9 @@
+# Original media - do not commit
+*.iso
+*.7z
+
+# Analysis working files
+analysis/
+
+# Claude settings
+.claude/
