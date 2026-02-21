@@ -7,3 +7,22 @@ analysis/
 
 # Claude settings
 .claude/
+
+# Build output
+build/
+out/
+cmake-build-*/
+
+# IDE files
+.vs/
+*.vcxproj.user
+*.suo
+
+# Tool output directories
+m20_output/
+spam_output/
+
+# Generated decode output (keep source .ftc/.fif, exclude generated images)
+fif_test/*.bmp
+fif_test/*.png
+fif_test/picon_extract/
