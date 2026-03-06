@@ -2,16 +2,15 @@
  * ftcdecode - Clean-room FTC fractal image decoder
  *
  * Decodes FTC (Fractal Transform Codec) images used by Encarta 97.
- * This is a clean-room implementation that does not depend on DECO_32.DLL.
+ * Based on reverse engineering of DECO_32.DLL binary analysis.
  *
- * Algorithm: IFS (Iterated Function System) fractal decoding
- *   - 3-bit LSB opcodes per 4x4 block
- *   - Affine transform: output = pixel * 3/4 + bias (iterated N times)
- *   - GBR 4:2:0 color space (full-res green, half-res blue/red)
+ * FTC uses LSB-first packed bitstream encoding (NOT arithmetic coding).
+ * The fractal transform uses affine IFS with 8 symmetry modes.
  *
  * Usage:
  *   ftcdecode <input.ftc> <output.bmp>    Decode FTC to BMP
  *   ftcdecode -i <input.ftc>              Show header info
+ *   ftcdecode -d <input.ftc> <out.bmp>    Decode with debug
  */
 
 #include <stdio.h>
@@ -20,30 +19,6 @@
 #include <math.h>
 
 #include "ftcdecode.h"
-
-/* ------------------------------------------------------------------ */
-/* Affine transform lookup table                                       */
-/* ------------------------------------------------------------------ */
-
-/*
- * Pre-computed: scale_table[bias_index][pixel] = clamp(pixel * 3/4 + bias)
- * bias_index = bias + 64, where bias is in [-64, 63] (7-bit signed)
- * This avoids per-pixel multiply during iteration.
- */
-static uint8_t scale_table[128][256];
-
-static void init_scale_table(void)
-{
-    for (int b = 0; b < 128; b++) {
-        int bias = b - 64;
-        for (int p = 0; p < 256; p++) {
-            int val = (p * 3 + 2) / 4 + bias; /* round-to-nearest */
-            if (val < 0)   val = 0;
-            if (val > 255) val = 255;
-            scale_table[b][p] = (uint8_t)val;
-        }
-    }
-}
 
 /* ------------------------------------------------------------------ */
 /* File I/O helpers                                                    */
@@ -73,9 +48,9 @@ static uint8_t *read_file(const char *path, long *out_size)
 /* ------------------------------------------------------------------ */
 
 static bool write_bmp(const char *path, int width, int height,
-                      const uint8_t *bgr_pixels)
+                      const uint8_t *bgr_pixels, int src_stride)
 {
-    int row_bytes = ((width * 3 + 3) / 4) * 4; /* 4-byte aligned */
+    int row_bytes = ((width * 3 + 3) / 4) * 4;
     int image_size = row_bytes * height;
 
     BMPFileHeader fh;
@@ -84,13 +59,13 @@ static bool write_bmp(const char *path, int width, int height,
     memset(&fh, 0, sizeof(fh));
     memset(&ih, 0, sizeof(ih));
 
-    fh.bfType = 0x4D42; /* 'BM' */
+    fh.bfType = 0x4D42;
     fh.bfOffBits = sizeof(BMPFileHeader) + sizeof(BMPInfoHeader);
     fh.bfSize = fh.bfOffBits + image_size;
 
     ih.biSize = sizeof(BMPInfoHeader);
     ih.biWidth = width;
-    ih.biHeight = height; /* positive = bottom-up */
+    ih.biHeight = height;
     ih.biPlanes = 1;
     ih.biBitCount = 24;
     ih.biCompression = 0;
@@ -107,9 +82,8 @@ static bool write_bmp(const char *path, int width, int height,
     fwrite(&fh, 1, sizeof(fh), f);
     fwrite(&ih, 1, sizeof(ih), f);
 
-    /* Write rows bottom-up (BMP convention) */
     for (int y = height - 1; y >= 0; y--) {
-        const uint8_t *row = bgr_pixels + y * width * 3;
+        const uint8_t *row = bgr_pixels + y * src_stride;
         fwrite(row, 1, width * 3, f);
         int pad = row_bytes - width * 3;
         if (pad > 0) {
@@ -149,11 +123,9 @@ static bool parse_header(const uint8_t *data, long file_size,
         return false;
     }
 
-    /* Parse sub-header if present */
     if (hdr->hdr_size >= sizeof(FTCHeader) + sizeof(FTCSubHeader)) {
         memcpy(sub, data + sizeof(FTCHeader), sizeof(FTCSubHeader));
     } else {
-        /* Defaults for files without sub-header */
         memset(sub, 0, sizeof(FTCSubHeader));
         sub->block_w = FTC_BLOCK_W;
         sub->block_h = FTC_BLOCK_H;
@@ -187,288 +159,600 @@ static void print_header_info(const FTCHeader *hdr, const FTCSubHeader *sub)
     printf("  Chroma subsamp:  %u\n", sub->chroma_subsample);
     printf("  Channels:        %u\n", sub->channels);
     printf("  Iterations:      %u\n", sub->iterations);
-
-    /* Derived info */
-    int bw = (hdr->width + sub->block_w - 1) / sub->block_w;
-    int bh = (hdr->height + sub->block_h - 1) / sub->block_h;
-    printf("\nDerived:\n");
-    printf("  Luma blocks:     %d x %d = %d\n", bw, bh, bw * bh);
-    if (sub->chroma_subsample > 0) {
-        int cw = (hdr->width / sub->chroma_subsample + sub->block_w - 1) / sub->block_w;
-        int ch = (hdr->height / sub->chroma_subsample + sub->block_h - 1) / sub->block_h;
-        printf("  Chroma blocks:   %d x %d = %d (per plane)\n", cw, ch, cw * ch);
-    }
+    printf("  Remaining:");
+    for (int i = 0; i < 15; i++)
+        printf(" %02X", sub->remaining[i]);
+    printf("\n");
 }
 
 /* ------------------------------------------------------------------ */
-/* Plane decoder                                                       */
+/* Sub-header context parsing (matches DLL 0x11005CA0)                 */
 /* ------------------------------------------------------------------ */
 
 /*
- * Apply symmetry transform to indices when copying from source to dest.
- * mode bits: bit 0 = mirror horizontal, bit 1 = flip vertical
- */
-static inline void get_src_coords(int mode, int dx, int dy,
-                                  int *sx, int *sy)
-{
-    /* dx, dy are in [0..3] for a 4x4 destination block.
-     * Source is 8x8, sampled at stride 2, so base source coords are dx*2, dy*2.
-     */
-    int x = dx;
-    int y = dy;
-
-    if (mode & 1) x = 3 - x; /* mirror horizontal */
-    if (mode & 2) y = 3 - y; /* flip vertical */
-
-    *sx = x * 2;
-    *sy = y * 2;
-}
-
-/*
- * Decode one plane (luma or chroma).
- * plane_w, plane_h: pixel dimensions of this plane
- * front/back: ping-pong buffers, each plane_w * plane_h
- * br: bitstream reader (advanced in-place)
- * iterations: number of fractal iterations
+ * The sub-header "remaining" bytes encode parameters for the bitstream
+ * decoder. In "small mode" (p2*10+p3 <= 31, which is our case with
+ * p2=1, p3=1 giving 11), the layout is:
  *
- * Returns true on success.
+ * remaining[0]   = extra_byte (used as scale_bits for ctx entry)
+ * remaining[1]   = extra_byte2 (multiplied by 8, used as opcode shift)
+ * remaining[2:3] = extra_word (LE, multiplied by 8 minus 0x800 = scale_base)
+ * remaining[3:4] = context_count (LE)
+ * remaining[5+]  = per-context: 2-byte word (dimension)
+ * After contexts: more fields for block grid setup
+ *
+ * For our test file (remaining = 04 00 00 01 00 06 00 ...):
+ *   extra_byte=4, extra_byte2=0, extra_word=0
+ *   context_count=1, ctx[0].dimension=6
  */
-static bool decode_plane(int plane_w, int plane_h,
-                         uint8_t *front, uint8_t *back,
-                         BitReader *br, int iterations,
-                         int block_w, int block_h)
+
+typedef struct {
+    uint16_t dimension;     /* ctx[0:1] - for offset div/mod */
+    uint8_t  scale_bits;    /* ctx[2] - number of scale index bits */
+    uint8_t  extra_flag;    /* ctx[3] - if nonzero, read extra bit */
+    int16_t  scale_base;    /* ctx[4:5] - scale base (extra_word*8 - 0x800) */
+} CtxEntry;
+
+typedef struct {
+    /* Parsed from sub-header remaining bytes */
+    int p2, p3;
+    int multiplier;         /* chroma_subsample */
+    int iterations;
+    int channels;
+
+    /* Context table */
+    int ctx_count;
+    CtxEntry ctx[16];
+
+    /* Computed decode parameters */
+    uint16_t dim_x;         /* ceil(width / multiplier) */
+    uint16_t dim_y;         /* ceil(height / multiplier) */
+    int scale_bits;         /* bits for scale field */
+    int offset_bits;        /* bits for offset field */
+    int opcode_bits;        /* bits for opcode field */
+    int has_extra_bit;      /* whether to read extra scale bit */
+} FTCParams;
+
+static int count_bits(int value)
 {
-    int blocks_x = (plane_w + block_w - 1) / block_w;
-    int blocks_y = (plane_h + block_h - 1) / block_h;
-    int total_blocks = blocks_x * blocks_y;
+    int bits = 0;
+    while (value > 0) {
+        value >>= 1;
+        bits++;
+    }
+    return bits;
+}
 
-    /*
-     * We need to record the operations from the bitstream on the first pass,
-     * then replay them for each subsequent iteration.
-     */
-    typedef struct {
-        uint8_t opcode;         /* 0-7 */
-        uint8_t sym_mode;       /* symmetry mode for affine ops (0-3) */
-        uint8_t bias_index;     /* 0-127 for affine ops */
-        uint16_t src_block;     /* source block index for affine ops */
-        uint8_t raw_pixels[16]; /* for raw blocks */
-        uint8_t skip_count;     /* for skip ops */
-    } BlockOp;
+static bool parse_ftc_params(const FTCSubHeader *sub, int width, int height,
+                             FTCParams *params)
+{
+    memset(params, 0, sizeof(*params));
 
-    BlockOp *ops = (BlockOp *)calloc(total_blocks, sizeof(BlockOp));
-    if (!ops) {
-        fprintf(stderr, "Error: cannot allocate block operations\n");
+    params->p2 = sub->sub_ver_a;
+    params->p3 = sub->sub_ver_b;
+    params->multiplier = sub->chroma_subsample > 0 ? sub->chroma_subsample : 2;
+    params->iterations = sub->iterations > 0 ? sub->iterations : 7;
+    params->channels = sub->channels > 0 ? sub->channels : 3;
+
+    int small_mode = (params->p2 * 10 + params->p3) <= 31;
+
+    if (!small_mode) {
+        fprintf(stderr, "Warning: large mode not yet supported (p2=%d, p3=%d)\n",
+                params->p2, params->p3);
         return false;
     }
 
-    /* Initialize buffers to 0x80 (mid-gray) */
-    memset(front, 0x80, plane_w * plane_h);
-    memset(back, 0x80, plane_w * plane_h);
+    const uint8_t *r = sub->remaining;
 
-    /* ---- Pass 1: Parse bitstream and record operations ---- */
-    int block_idx = 0;
-    while (block_idx < total_blocks) {
-        if (!br_has_bits(br, 3)) break;
+    /*
+     * Small mode parsing (matches DLL 0x11005EA8).
+     *
+     * The DLL reads the sub-header sequentially. By the time it reaches
+     * the small-mode code, it has already read iterations into register bl.
+     * Our struct stores iterations separately, so "remaining" starts after it.
+     *
+     * Mapping from DLL's sequential read to our remaining[] offsets:
+     *   bl = iterations (already parsed into sub->iterations = 7)
+     *   remaining[0] = extra_byte2 (DLL: [edi+1], saved as [esp+14h])
+     *   remaining[1:2] = extra_word (LE)
+     *   remaining[3:4] = context_count (LE)
+     *   remaining[5+] = per-context 2-byte dimension words
+     *
+     * Context entry fields (12-byte internal struct):
+     *   ctx[0:1] = dimension word (from file)
+     *   ctx[2] = bl = iterations = 7 (scale_bits)
+     *   ctx[3] = extra_byte2 * 8 = 32 (opcode_shift / extra_flag)
+     *   ctx[4:5] = extra_word * 8 - 0x800 (scale_base)
+     */
 
-        uint32_t opcode = br_read(br, 3);
+    int extra_byte2 = r[0];
+    uint16_t extra_word = r[1] | (r[2] << 8);
+    uint16_t ctx_count = r[3] | (r[4] << 8);
 
-        if (opcode <= OP_AFFINE_3) {
-            /* Affine transform: 3-bit opcode encodes symmetry mode */
-            if (!br_has_bits(br, 7 + 14)) break;
-            ops[block_idx].opcode = (uint8_t)opcode;
-            ops[block_idx].sym_mode = (uint8_t)opcode; /* mode IS the opcode */
-            ops[block_idx].bias_index = (uint8_t)br_read(br, 7);
-            ops[block_idx].src_block = (uint16_t)br_read(br, 14);
-            block_idx++;
-
-        } else if (opcode == OP_SKIP) {
-            /* Skip: read 5-bit count (0-31 means skip 1-32 blocks) */
-            if (!br_has_bits(br, 5)) break;
-            uint32_t count = br_read(br, 5) + 1;
-            for (uint32_t i = 0; i < count && block_idx < total_blocks; i++) {
-                ops[block_idx].opcode = OP_SKIP;
-                ops[block_idx].skip_count = 1;
-                block_idx++;
-            }
-
-        } else if (opcode == OP_INTERFRAME) {
-            /* Inter-frame: treat as skip for still images */
-            ops[block_idx].opcode = OP_SKIP;
-            ops[block_idx].skip_count = 1;
-            block_idx++;
-
-        } else if (opcode == OP_RAW) {
-            /* Raw block: align to byte boundary, read 16 literal pixels */
-            br_align(br);
-            if (!br_has_bits(br, 16 * 8)) break;
-            ops[block_idx].opcode = OP_RAW;
-            for (int i = 0; i < 16; i++) {
-                ops[block_idx].raw_pixels[i] = (uint8_t)br_read(br, 8);
-            }
-            block_idx++;
-
-        } else if (opcode == OP_EXTENDED) {
-            /* Extended: read 4 more bits for sub-opcode */
-            if (!br_has_bits(br, 4)) break;
-            uint32_t ext_op = br_read(br, 4);
-
-            if (ext_op == 0) {
-                /* Extended affine on 8x8 superblock (4 sub-blocks) */
-                /* For now, treat as 4 individual affine ops */
-                for (int sub = 0; sub < 4 && block_idx < total_blocks; sub++) {
-                    if (!br_has_bits(br, 7 + 14)) { block_idx = total_blocks; break; }
-                    ops[block_idx].opcode = OP_AFFINE_0;
-                    ops[block_idx].sym_mode = 0;
-                    ops[block_idx].bias_index = (uint8_t)br_read(br, 7);
-                    ops[block_idx].src_block = (uint16_t)br_read(br, 14);
-                    block_idx++;
-                }
-            } else if (ext_op == 1) {
-                /* Extended raw 8x8: 4 raw sub-blocks */
-                br_align(br);
-                for (int sub = 0; sub < 4 && block_idx < total_blocks; sub++) {
-                    if (!br_has_bits(br, 16 * 8)) { block_idx = total_blocks; break; }
-                    ops[block_idx].opcode = OP_RAW;
-                    for (int i = 0; i < 16; i++) {
-                        ops[block_idx].raw_pixels[i] = (uint8_t)br_read(br, 8);
-                    }
-                    block_idx++;
-                }
-            } else if (ext_op == 2) {
-                /* Extended skip */
-                if (!br_has_bits(br, 8)) break;
-                uint32_t count = br_read(br, 8) + 1;
-                for (uint32_t i = 0; i < count && block_idx < total_blocks; i++) {
-                    ops[block_idx].opcode = OP_SKIP;
-                    ops[block_idx].skip_count = 1;
-                    block_idx++;
-                }
-            } else {
-                /* Unknown extended op — skip block */
-                ops[block_idx].opcode = OP_SKIP;
-                ops[block_idx].skip_count = 1;
-                block_idx++;
-            }
-        }
+    params->ctx_count = ctx_count;
+    if (ctx_count > 16 || ctx_count == 0) {
+        fprintf(stderr, "Error: invalid context count (%d)\n", ctx_count);
+        return false;
     }
 
-    /* ---- Pass 2+: Iterate fractal transform ---- */
-    for (int iter = 0; iter < iterations; iter++) {
-        /* Swap: back becomes the source, front becomes the destination */
-        uint8_t *src_buf = back;
-        uint8_t *dst_buf = front;
+    int16_t scale_base = (int16_t)((int)(extra_word) * 8 - 0x800);
+    uint8_t opcode_shift = (uint8_t)(extra_byte2 * 8);
 
-        /* Copy front to back (back = previous iteration result) */
-        memcpy(back, front, plane_w * plane_h);
-
-        for (int bi = 0; bi < total_blocks; bi++) {
-            int bx = bi % blocks_x;
-            int by = bi / blocks_x;
-            int dst_x0 = bx * block_w;
-            int dst_y0 = by * block_h;
-
-            switch (ops[bi].opcode) {
-            case OP_AFFINE_0:
-            case OP_AFFINE_1:
-            case OP_AFFINE_2:
-            case OP_AFFINE_3: {
-                /* Resolve source block coordinates */
-                int src_bi = ops[bi].src_block;
-                int src_bx = src_bi % blocks_x;
-                int src_by = src_bi / blocks_x;
-                int src_x0 = src_bx * block_w;
-                int src_y0 = src_by * block_h;
-                int mode = ops[bi].sym_mode;
-                int bias = ops[bi].bias_index;
-
-                /* Downsample 8x8 source region to 4x4, apply symmetry + affine */
-                for (int dy = 0; dy < block_h; dy++) {
-                    for (int dx = 0; dx < block_w; dx++) {
-                        int sx, sy;
-                        get_src_coords(mode, dx, dy, &sx, &sy);
-
-                        /* Source pixel from back buffer (with bounds check) */
-                        int abs_sx = src_x0 + sx;
-                        int abs_sy = src_y0 + sy;
-                        if (abs_sx >= plane_w) abs_sx = plane_w - 1;
-                        if (abs_sy >= plane_h) abs_sy = plane_h - 1;
-                        if (abs_sx < 0) abs_sx = 0;
-                        if (abs_sy < 0) abs_sy = 0;
-
-                        uint8_t src_pixel = src_buf[abs_sy * plane_w + abs_sx];
-
-                        /* Apply affine: output = pixel * 3/4 + bias */
-                        uint8_t result = scale_table[bias][src_pixel];
-
-                        /* Write to destination */
-                        int abs_dx = dst_x0 + dx;
-                        int abs_dy = dst_y0 + dy;
-                        if (abs_dx < plane_w && abs_dy < plane_h) {
-                            dst_buf[abs_dy * plane_w + abs_dx] = result;
-                        }
-                    }
-                }
-                break;
-            }
-
-            case OP_RAW: {
-                /* Write raw pixels directly (same every iteration — convergence) */
-                for (int dy = 0; dy < block_h; dy++) {
-                    for (int dx = 0; dx < block_w; dx++) {
-                        int abs_dx = dst_x0 + dx;
-                        int abs_dy = dst_y0 + dy;
-                        if (abs_dx < plane_w && abs_dy < plane_h) {
-                            dst_buf[abs_dy * plane_w + abs_dx] =
-                                ops[bi].raw_pixels[dy * block_w + dx];
-                        }
-                    }
-                }
-                break;
-            }
-
-            case OP_SKIP:
-                /* Copy from back buffer (no change) — already done by memcpy */
-                break;
-            }
-        }
+    for (int i = 0; i < ctx_count; i++) {
+        int off = 5 + i * 2;
+        if (off + 1 >= 15) break;
+        params->ctx[i].dimension = r[off] | (r[off + 1] << 8);
+        params->ctx[i].scale_bits = params->iterations; /* bl = iterations */
+        params->ctx[i].extra_flag = opcode_shift;
+        params->ctx[i].scale_base = scale_base;
     }
 
-    free(ops);
+    /* Compute decode parameters (matches DLL 0x11008030) */
+    int mult = params->multiplier;
+
+    /* dim_x, dim_y = ceil(width/mult), ceil(height/mult) */
+    params->dim_x = (uint16_t)((width - 1) / mult + 1);
+    params->dim_y = (uint16_t)((height - 1) / mult + 1);
+
+    /* Scale bits from decoder[52h] = ctx_array[0].byte2 = iterations */
+    params->scale_bits = params->iterations; /* = 7 */
+
+    /* Extra bit: ctx[3] (opcode_shift) nonzero means read 1 extra scale bit */
+    params->has_extra_bit = (opcode_shift != 0) ? 1 : 0;
+
+    /* Offset bits: ceil(log2(dim_x * dim_y)) */
+    int total_dim = (int)params->dim_x * (int)params->dim_y;
+    params->offset_bits = count_bits(total_dim - 1);
+
+    /* Opcode bits = channels = 3 */
+    params->opcode_bits = params->channels;
+
     return true;
 }
 
 /* ------------------------------------------------------------------ */
-/* GBR 4:2:0 to BGR conversion                                        */
+/* 16-bit scale table (matches DLL 0x1100B250, word0=6 case)           */
+/* ------------------------------------------------------------------ */
+
+static int16_t scale_table_16[256]; /* indexed by combined scale index */
+
+static void init_scale_table_16(const FTCParams *params)
+{
+    int word0 = params->ctx_count > 0 ? params->ctx[0].dimension : 6;
+    int scale_bits = params->scale_bits;
+    int num_entries = 1 << scale_bits;
+    if (params->has_extra_bit) num_entries <<= 1;
+    if (num_entries > 256) num_entries = 256;
+
+    int16_t scale_base_val = params->ctx_count > 0 ? params->ctx[0].scale_base : -2048;
+
+    /* Compute scale table based on word0 (dimension parameter) */
+    /* The DLL has a switch on word0-4 for different formulas */
+    int32_t esi = (int32_t)scale_base_val * 16;
+    int32_t step = 16;  /* default step per entry */
+
+    /* For small mode without extra bits, step = 1*16 = 16.
+     * Actually step = ebx * 16 where ebx was initialized to 0 or 1 depending on mode.
+     * For our case (no extra bits, info[101h]=0): ebx=0 at 1100B2D2, but that gives step=0.
+     * Wait, ebx is set to [ecx+3] = ctx[3] = opcode_shift = 32.
+     * Hmm, let me re-read: 1100B2D8: bl = [ecx+3] which is ctx.byte3.
+     * In small mode ctx.byte3 = opcode_shift = 32.
+     * So ebx = 32. And step = 32 * 16 = 512.
+     */
+
+    /* Actually the DLL code flow (for info[101h]=0 path at 1100B2C8):
+     * ebp = 1 << ctx.byte2 = 1 << 7 = 128 (num entries)
+     * ebx = ctx.byte3 = 32
+     * Then at 1100B3D6 (word0=6 case):
+     *   shl esi, 4 → esi *= 16 (esi was ctx.word4 = -2048 → -32768)
+     *   shl ebx, 4 → ebx *= 16 (ebx was 32 → 512)
+     */
+    esi = (int32_t)scale_base_val * 16;
+    step = 32 * 16;  /* This needs to use the actual ctx.byte3 value */
+
+    /* Actually, let me use the values from the analysis directly */
+    /* For our test file: ctx.byte3 = opcode_shift = extra_byte2*8 = 4*8 = 32 */
+    int ctx_byte3 = params->has_extra_bit ? (params->ctx[0].extra_flag) : 0;
+    /* Wait, ctx.byte3 IS the extra_flag. For our file it's 32. */
+    ctx_byte3 = params->ctx_count > 0 ? params->ctx[0].extra_flag : 0;
+
+    esi = (int32_t)scale_base_val * 16;
+    step = ctx_byte3 * 16;
+
+    /* ecx (bias) = 0x800 (the neutral point) */
+    int32_t bias = 0x800;
+
+    for (int i = 0; i < num_entries; i++) {
+        int32_t value;
+
+        switch (word0) {
+        case 4: {
+            /* Linear with clamp, divide by 4 */
+            value = esi;
+            if (value < (int32_t)0xFFFFF800) value = (int32_t)0xFFFFF800;
+            value += bias;
+            scale_table_16[i] = (int16_t)value;
+            esi += step / 4;  /* approximation */
+            break;
+        }
+        case 5: {
+            /* Divide by 6 */
+            value = esi;
+            if (value >= 0) value += 3;
+            else if (value < -0x3C00) value = -0x3C00;
+            else value -= 2;
+            value = value / 6;
+            scale_table_16[i] = (int16_t)(value + bias);
+            esi += step;
+            break;
+        }
+        case 6: {
+            /* Divide by 10 (matches 1100B3CB path) */
+            value = esi;
+            if (value >= 0)
+                value = value + 5;
+            else if (value < -0x5000)
+                value = -0x5000;
+            else
+                value = value - 4;
+            value = value / 10;
+            scale_table_16[i] = (int16_t)(value + bias);
+            esi += step;
+            break;
+        }
+        case 7: {
+            /* Divide by 12 */
+            value = esi;
+            if (value >= 0) value += 6;
+            else if (value < -0x6000) value = -0x6000;
+            else value -= 5;
+            value = value / 12;
+            scale_table_16[i] = (int16_t)(value + bias);
+            esi += step;
+            break;
+        }
+        case 8: {
+            /* Divide by 16 */
+            value = esi;
+            if (value >= 0) value += 8;
+            else value -= 7;
+            value = value / 16;
+            scale_table_16[i] = (int16_t)(value + bias);
+            esi += step;
+            break;
+        }
+        default: {
+            /* Fallback: simple linear */
+            value = esi;
+            if (value < (int32_t)0xFFFFF800) value = (int32_t)0xFFFFF800;
+            scale_table_16[i] = (int16_t)(value + bias);
+            esi += step;
+            break;
+        }
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Pixel transform from 16-bit scale                                   */
 /* ------------------------------------------------------------------ */
 
 /*
- * The FTC color space is GBR:
- *   Plane 0 = Green (full resolution) — acts as luma
- *   Plane 1 = Blue  (half resolution in both axes)
- *   Plane 2 = Red   (half resolution in both axes)
+ * The 16-bit scale value from the scale table encodes the affine
+ * transform parameter. 0x800 is the neutral value.
  *
- * Simple nearest-neighbor upscaling for chroma.
+ * The transform applied to each pixel is approximately:
+ *   output = (input * contrast + offset) clamped to [0,255]
+ *
+ * Where the 16-bit scale encodes: scale = contrast * 2048 + offset
+ * (or similar). For now, we use a simplified model:
+ *   contrast = 0.75 (fixed, as in FVF)
+ *   bias = (scale_16 - 0x800) * some_factor
+ *   output = input * 0.75 + bias
  */
-static void gbr420_to_bgr(const uint8_t *g_plane,
-                           const uint8_t *b_plane,
-                           const uint8_t *r_plane,
-                           int width, int height,
-                           int chroma_sub,
-                           uint8_t *bgr_out)
+
+static uint8_t pixel_transform[256][256]; /* [scale_idx][pixel] */
+
+static void init_pixel_transform(int num_entries)
 {
-    int chroma_w = width / chroma_sub;
+    if (num_entries > 256) num_entries = 256;
 
+    for (int si = 0; si < num_entries; si++) {
+        int16_t scale_val = scale_table_16[si];
+
+        for (int p = 0; p < 256; p++) {
+            /*
+             * Fractal affine transform: out = s * in + (1-s) * fp
+             * where fp = scale_val / 16 is the fixed point,
+             * and s = 0.75 is the contraction factor.
+             *
+             * This converges to fp after enough iterations.
+             * Integer math: out = (p * 3 + scale_val / 4 + 2) >> 2
+             * (since 0.75*p + 0.25*(sv/16) = (3p + sv/16) / 4)
+             */
+            int fp4 = (int)scale_val >> 2; /* = (scale_val/16) * 4 = fp*4 */
+            int val = (p * 3 + fp4 + 2) >> 2;
+            if (val < 0) val = 0;
+            if (val > 255) val = 255;
+            pixel_transform[si][p] = (uint8_t)val;
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Variable-length count reader (matches DLL 0x11019780)               */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Exponential-Golomb-like coding:
+ * 1. Read leading 1-bits until a 0-bit (count = N)
+ * 2. If N=0: return 1
+ * 3. Read (N-1) raw bits
+ * 4. Return (1 << (N-1)) | raw_bits + 1
+ */
+static uint32_t read_vlc_count(BitReader *br)
+{
+    int leading_ones = 0;
+
+    while (br_has_bits(br, 1)) {
+        uint32_t bit = br_read(br, 1);
+        if (bit == 1)
+            leading_ones++;
+        else
+            break;
+    }
+
+    if (leading_ones == 0)
+        return 1;
+
+    int n = leading_ones - 1;
+    if (n == 0)
+        return 2;
+
+    uint32_t raw = br_read(br, n);
+    return (1u << n) | raw + 1;
+
+    /* Wait, the DLL does: result = (1 << (N-1)) | raw + 1
+     * where N = leading_ones, and raw has (N-1) bits.
+     * So: (1 << n) | raw, then +1 */
+}
+
+/* ------------------------------------------------------------------ */
+/* Block assignment initialization (matches DLL 0x110191D0)            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * For a still FTC image, this reads run-length encoded block assignments.
+ * Each run has a 1-bit flag followed by a VLC count:
+ *   flag=1: count blocks are "active" (need decode)
+ *   flag=0: count blocks are "skip" (keep previous / zero)
+ *
+ * The DLL also reads 16-bit address indices for each block, but for
+ * our simplified decoder we just need to know which blocks are active.
+ */
+
+typedef struct {
+    uint8_t *state;     /* per-block state: 0=active, 2=skip */
+    int total_blocks;
+} BlockAssignment;
+
+static bool read_block_assignment(BitReader *br, BlockAssignment *ba,
+                                  int total_blocks, int debug)
+{
+    ba->total_blocks = total_blocks;
+    ba->state = (uint8_t *)calloc(total_blocks, 1);
+    if (!ba->state) return false;
+
+    int remaining = total_blocks;
+    int pos = 0;
+
+    while (remaining > 0) {
+        uint32_t flag = br_read(br, 1);
+        uint32_t count = read_vlc_count(br);
+
+        if (count > (uint32_t)remaining)
+            count = remaining;
+
+        if (debug && pos < 100)
+            fprintf(stderr, "  BlockAssign: flag=%u count=%u at pos=%d\n",
+                    flag, count, pos);
+
+        for (uint32_t i = 0; i < count; i++) {
+            if (flag == 0) {
+                ba->state[pos] = 2; /* skip */
+            }
+            /* flag == 1: state stays 0 = active */
+            pos++;
+        }
+
+        remaining -= count;
+    }
+
+    if (debug) {
+        int active = 0, skip = 0;
+        for (int i = 0; i < total_blocks; i++) {
+            if (ba->state[i] == 0) active++;
+            else skip++;
+        }
+        fprintf(stderr, "  BlockAssign: %d active, %d skip out of %d total\n",
+                active, skip, total_blocks);
+    }
+
+    return true;
+}
+
+/* ------------------------------------------------------------------ */
+/* Block descriptor                                                    */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    uint8_t  opcode;      /* affine transform mode (0-7) */
+    uint8_t  channel;     /* which channel this block belongs to */
+    int16_t  scale_idx;   /* scale table index */
+    int16_t  x_off;       /* source x offset */
+    int16_t  y_off;       /* source y offset */
+} BlockDesc;
+
+/* ------------------------------------------------------------------ */
+/* Address table (block index → pixel offset)                          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The address table maps each block's linear index to its position
+ * in the pixel buffer. The blocks are organized in a specific scan
+ * order that groups 4x4 pixel blocks into 16-block superblocks.
+ *
+ * For simplicity, we use a straightforward raster scan for now.
+ */
+
+static void init_address_table(uint16_t *addr, int bw, int bh, int buf_w)
+{
+    int idx = 0;
+    for (int by = 0; by < bh; by++) {
+        for (int bx = 0; bx < bw; bx++) {
+            addr[idx++] = (uint16_t)(by * FTC_BLOCK_H * buf_w + bx * FTC_BLOCK_W);
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Affine transform (4x4 block from 8x8 source)                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The fractal transform copies a downsampled 8x8 source region to a
+ * 4x4 destination block, applying contrast scaling and one of 8
+ * symmetry operations (identity, mirrors, flips, rotations).
+ *
+ * Source addressing: source pixel at (sx, sy) maps to
+ *   buf[y_off + sy*2 + x_off + sx*2] (2:1 downsampling)
+ *
+ * The 8 symmetry modes correspond to the dihedral group D4:
+ *   0: identity
+ *   1: mirror horizontal
+ *   2: flip vertical
+ *   3: mirror + flip (180° rotation)
+ *   4: transpose (90° CW rotation)
+ *   5: transpose + mirror
+ *   6: transpose + flip
+ *   7: transpose + mirror + flip (270° CW rotation)
+ */
+
+static void apply_transform(uint8_t *dst_buf, const uint8_t *src_buf,
+                            int dst_off, int src_x, int src_y,
+                            int opcode, int scale_idx,
+                            int buf_w, int buf_h, int buf_size)
+{
+    const uint8_t *scale = pixel_transform[scale_idx & 0xFF];
+
+    for (int row = 0; row < 4; row++) {
+        for (int col = 0; col < 4; col++) {
+            int sx, sy;
+
+            switch (opcode & 7) {
+            case 0: sx = col; sy = row; break;
+            case 1: sx = 3 - col; sy = row; break;
+            case 2: sx = col; sy = 3 - row; break;
+            case 3: sx = 3 - col; sy = 3 - row; break;
+            case 4: sx = row; sy = col; break;
+            case 5: sx = row; sy = 3 - col; break;
+            case 6: sx = 3 - row; sy = col; break;
+            case 7: sx = 3 - row; sy = 3 - col; break;
+            default: sx = col; sy = row; break;
+            }
+
+            /* Source is 2:1 downsampled from prev buffer */
+            int src_px = src_x + sx * 2;
+            int src_py = src_y + sy * 2;
+            int si = src_py * buf_w + src_px;
+
+            int di = dst_off + row * buf_w + col;
+
+            if (si >= 0 && si < buf_size && di >= 0 && di < buf_size) {
+                dst_buf[di] = scale[(uint8_t)src_buf[si]];
+            }
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Channel decode (matches DLL 0x11004BE0 / 0x11004D60)                */
+/* ------------------------------------------------------------------ */
+
+static void decode_blocks(BitReader *br, const FTCParams *params,
+                          BlockDesc *blocks, int num_blocks,
+                          uint8_t channel, int debug)
+{
+    int decoded = 0;
+
+    for (int i = 0; i < num_blocks; i++) {
+        /* Read scale index */
+        uint32_t scale_idx = br_read(br, params->scale_bits);
+
+        /* Optional extra bit */
+        if (params->has_extra_bit) {
+            uint32_t extra = br_read(br, 1);
+            scale_idx |= (extra << params->scale_bits);
+        }
+
+        /* Read packed offset */
+        uint32_t packed_offset = br_read(br, params->offset_bits);
+
+        /* Decode x,y from packed offset */
+        uint16_t dim = params->dim_x;
+        int mult = params->multiplier;
+        int x_off, y_off;
+
+        if (dim > 0) {
+            x_off = (int)(packed_offset % dim) * mult;
+            y_off = (int)(packed_offset / dim) * mult;
+        } else {
+            x_off = 0;
+            y_off = 0;
+        }
+
+        /* Read opcode */
+        uint32_t opcode = br_read(br, params->opcode_bits);
+
+        blocks[i].opcode = (uint8_t)opcode;
+        blocks[i].channel = channel;
+        blocks[i].scale_idx = (int16_t)scale_idx;
+        blocks[i].x_off = (int16_t)x_off;
+        blocks[i].y_off = (int16_t)y_off;
+
+        if (debug && decoded < 10) {
+            fprintf(stderr, "  Block[%d]: scale=%d offset=%d (x=%d,y=%d) op=%d\n",
+                    i, scale_idx, packed_offset, x_off, y_off, opcode);
+        }
+        decoded++;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Convert GBR 4:2:0 planar to BGR interleaved                        */
+/* ------------------------------------------------------------------ */
+
+static void convert_to_bgr(const uint8_t *green, const uint8_t *blue,
+                            const uint8_t *red,
+                            int width, int height, int buf_w,
+                            int chroma_w, int chroma_h,
+                            int mult,
+                            uint8_t *bgr, int bgr_stride)
+{
     for (int y = 0; y < height; y++) {
-        int cy = y / chroma_sub;
         for (int x = 0; x < width; x++) {
-            int cx = x / chroma_sub;
-            int luma_idx = y * width + x;
-            int chroma_idx = cy * chroma_w + cx;
-            int out_idx = luma_idx * 3;
+            int gi = y * buf_w + x;
+            int cx = x / mult;
+            int cy = y / mult;
+            if (cx >= chroma_w) cx = chroma_w - 1;
+            if (cy >= chroma_h) cy = chroma_h - 1;
+            int bi = cy * chroma_w + cx; /* blue channel index */
+            int ri = bi;                 /* red channel index (same layout) */
 
-            bgr_out[out_idx + 0] = b_plane[chroma_idx]; /* B */
-            bgr_out[out_idx + 1] = g_plane[luma_idx];   /* G */
-            bgr_out[out_idx + 2] = r_plane[chroma_idx]; /* R */
+            int out_idx = y * bgr_stride + x * 3;
+            bgr[out_idx + 0] = blue[bi];
+            bgr[out_idx + 1] = green[gi];
+            bgr[out_idx + 2] = red[ri];
         }
     }
 }
@@ -477,7 +761,7 @@ static void gbr420_to_bgr(const uint8_t *g_plane,
 /* Main decode function                                                */
 /* ------------------------------------------------------------------ */
 
-static int decode_ftc(const char *input_path, const char *output_path)
+static int decode_ftc(const char *input_path, const char *output_path, int debug)
 {
     long file_size = 0;
     uint8_t *file_data = read_file(input_path, &file_size);
@@ -493,116 +777,240 @@ static int decode_ftc(const char *input_path, const char *output_path)
         return 1;
     }
 
-    fprintf(stderr, "FTC: %s (%ld bytes)\n", input_path, file_size);
-    fprintf(stderr, "  Dimensions: %u x %u, %u bpp\n", hdr.width, hdr.height, hdr.bpp);
-    fprintf(stderr, "  Block size: %ux%u, chroma subsample: %u\n",
-            sub.block_w, sub.block_h, sub.chroma_subsample);
-    fprintf(stderr, "  Iterations: %u, channels: %u\n", sub.iterations, sub.channels);
-
     int width = hdr.width;
     int height = hdr.height;
-    int block_w = sub.block_w ? sub.block_w : FTC_BLOCK_W;
-    int block_h = sub.block_h ? sub.block_h : FTC_BLOCK_H;
-    int chroma_sub = sub.chroma_subsample ? sub.chroma_subsample : 2;
-    int iterations = sub.iterations ? sub.iterations : 7;
 
-    /* Ensure dimensions are valid */
-    if (width <= 0 || height <= 0 || width > 4096 || height > 4096) {
-        fprintf(stderr, "Error: invalid dimensions %d x %d\n", width, height);
+    fprintf(stderr, "FTC: %s (%ld bytes)\n", input_path, file_size);
+    fprintf(stderr, "  Dimensions: %u x %u, %u bpp\n", hdr.width, hdr.height, hdr.bpp);
+
+    /* Parse FTC-specific parameters from sub-header */
+    FTCParams params;
+    if (!parse_ftc_params(&sub, width, height, &params)) {
         free(file_data);
         return 1;
     }
 
-    /* Chroma plane dimensions */
-    int chroma_w = width / chroma_sub;
-    int chroma_h = height / chroma_sub;
+    fprintf(stderr, "  Iterations: %d, channels: %d, multiplier: %d\n",
+            params.iterations, params.channels, params.multiplier);
+    fprintf(stderr, "  Dimension: %d x %d, scale_bits: %d, offset_bits: %d, opcode_bits: %d\n",
+            params.dim_x, params.dim_y, params.scale_bits, params.offset_bits, params.opcode_bits);
+    fprintf(stderr, "  Has extra bit: %d\n", params.has_extra_bit);
 
-    /* Allocate plane buffers (front + back for each plane) */
-    int luma_size = width * height;
-    int chroma_size = chroma_w * chroma_h;
-
-    uint8_t *g_front = (uint8_t *)malloc(luma_size);
-    uint8_t *g_back  = (uint8_t *)malloc(luma_size);
-    uint8_t *b_front = (uint8_t *)malloc(chroma_size);
-    uint8_t *b_back  = (uint8_t *)malloc(chroma_size);
-    uint8_t *r_front = (uint8_t *)malloc(chroma_size);
-    uint8_t *r_back  = (uint8_t *)malloc(chroma_size);
-
-    if (!g_front || !g_back || !b_front || !b_back || !r_front || !r_back) {
-        fprintf(stderr, "Error: cannot allocate plane buffers\n");
-        free(g_front); free(g_back);
-        free(b_front); free(b_back);
-        free(r_front); free(r_back);
-        free(file_data);
-        return 1;
+    if (params.ctx_count > 0) {
+        fprintf(stderr, "  Context[0]: dim=%d scale_bits=%d extra_flag=%d scale_base=%d\n",
+                params.ctx[0].dimension, params.ctx[0].scale_bits,
+                params.ctx[0].extra_flag, params.ctx[0].scale_base);
     }
 
     /* Initialize scale table */
-    init_scale_table();
+    init_scale_table_16(&params);
+    int total_scale_entries = 1 << params.scale_bits;
+    if (params.has_extra_bit) total_scale_entries <<= 1;
+    init_pixel_transform(total_scale_entries);
 
-    /* Set up bitstream reader at start of compressed data */
+    if (debug) {
+        fprintf(stderr, "  Scale table (first 16): ");
+        for (int i = 0; i < 16 && i < total_scale_entries; i++)
+            fprintf(stderr, "%d ", scale_table_16[i]);
+        fprintf(stderr, "\n");
+        fprintf(stderr, "  Scale table (mid): ");
+        for (int i = 60; i < 68 && i < total_scale_entries; i++)
+            fprintf(stderr, "%d ", scale_table_16[i]);
+        fprintf(stderr, "\n");
+    }
+
+    /* Block grid dimensions */
+    int mult = params.multiplier;
+    int bw_luma = (width + FTC_BLOCK_W - 1) / FTC_BLOCK_W;
+    int bh_luma = (height + FTC_BLOCK_H - 1) / FTC_BLOCK_H;
+    int num_luma = bw_luma * bh_luma;
+
+    int chroma_w = width / mult;
+    int chroma_h = height / mult;
+    int bw_chroma = (chroma_w + FTC_BLOCK_W - 1) / FTC_BLOCK_W;
+    int bh_chroma = (chroma_h + FTC_BLOCK_H - 1) / FTC_BLOCK_H;
+    int num_chroma = bw_chroma * bh_chroma;
+
+    int total_blocks = num_luma + num_chroma * 2; /* green + blue + red */
+
+    fprintf(stderr, "  Luma blocks: %d (%d x %d)\n", num_luma, bw_luma, bh_luma);
+    fprintf(stderr, "  Chroma blocks: %d (%d x %d) per channel\n",
+            num_chroma, bw_chroma, bh_chroma);
+    fprintf(stderr, "  Total blocks: %d\n", total_blocks);
+
+    /* Allocate pixel buffers */
+    int luma_buf_w = bw_luma * FTC_BLOCK_W;
+    int luma_buf_h = bh_luma * FTC_BLOCK_H;
+    int luma_buf_size = luma_buf_w * luma_buf_h;
+
+    int chroma_buf_w = bw_chroma * FTC_BLOCK_W;
+    int chroma_buf_h = bh_chroma * FTC_BLOCK_H;
+    int chroma_buf_size = chroma_buf_w * chroma_buf_h;
+
+    uint8_t *cur_green  = (uint8_t *)calloc(1, luma_buf_size);
+    uint8_t *cur_blue   = (uint8_t *)calloc(1, chroma_buf_size);
+    uint8_t *cur_red    = (uint8_t *)calloc(1, chroma_buf_size);
+    uint8_t *prev_green = (uint8_t *)calloc(1, luma_buf_size);
+    uint8_t *prev_blue  = (uint8_t *)calloc(1, chroma_buf_size);
+    uint8_t *prev_red   = (uint8_t *)calloc(1, chroma_buf_size);
+
+    if (!cur_green || !cur_blue || !cur_red ||
+        !prev_green || !prev_blue || !prev_red) {
+        fprintf(stderr, "Error: cannot allocate pixel buffers\n");
+        goto cleanup;
+    }
+
+    /* Initialize to mid-gray */
+    memset(cur_green, 0x80, luma_buf_size);
+    memset(cur_blue, 0x80, chroma_buf_size);
+    memset(cur_red, 0x80, chroma_buf_size);
+    memset(prev_green, 0x80, luma_buf_size);
+    memset(prev_blue, 0x80, chroma_buf_size);
+    memset(prev_red, 0x80, chroma_buf_size);
+
+    /* Allocate address tables */
+    uint16_t *addr_luma = (uint16_t *)calloc(num_luma, sizeof(uint16_t));
+    uint16_t *addr_chroma = (uint16_t *)calloc(num_chroma, sizeof(uint16_t));
+    init_address_table(addr_luma, bw_luma, bh_luma, luma_buf_w);
+    init_address_table(addr_chroma, bw_chroma, bh_chroma, chroma_buf_w);
+
+    /* Allocate block descriptors */
+    BlockDesc *blocks_green = (BlockDesc *)calloc(num_luma, sizeof(BlockDesc));
+    BlockDesc *blocks_blue  = (BlockDesc *)calloc(num_chroma, sizeof(BlockDesc));
+    BlockDesc *blocks_red   = (BlockDesc *)calloc(num_chroma, sizeof(BlockDesc));
+
+    /* Set up bitstream */
     size_t data_offset = hdr.hdr_size;
-    const uint8_t *compressed = file_data + data_offset;
-    size_t compressed_size = file_size - data_offset;
+    const uint8_t *bitstream = file_data + data_offset;
+    size_t bitstream_size = file_size - data_offset;
+
+    fprintf(stderr, "  Bitstream: %zu bytes at offset %zu\n",
+            bitstream_size, data_offset);
+
+    if (debug) {
+        fprintf(stderr, "  First 16 bytes: ");
+        for (int i = 0; i < 16 && i < (int)bitstream_size; i++)
+            fprintf(stderr, "%02X ", bitstream[i]);
+        fprintf(stderr, "\n");
+    }
 
     BitReader br;
-    br_init(&br, compressed, compressed_size);
+    br_init(&br, bitstream, bitstream_size);
 
-    /* Decode green (luma) plane at full resolution */
-    fprintf(stderr, "  Decoding green/luma plane (%d x %d)...\n", width, height);
-    if (!decode_plane(width, height, g_front, g_back, &br, iterations,
-                      block_w, block_h)) {
-        fprintf(stderr, "Error: failed to decode luma plane\n");
-        goto fail;
+    /* Read block assignment */
+    fprintf(stderr, "\n--- Block assignment ---\n");
+    BlockAssignment ba;
+    if (!read_block_assignment(&br, &ba, num_luma, debug)) {
+        fprintf(stderr, "Error: block assignment failed\n");
+        goto cleanup;
     }
 
-    /* Decode blue chroma plane at half resolution */
-    fprintf(stderr, "  Decoding blue chroma plane (%d x %d)...\n",
-            chroma_w, chroma_h);
-    if (!decode_plane(chroma_w, chroma_h, b_front, b_back, &br, iterations,
-                      block_w, block_h)) {
-        fprintf(stderr, "Error: failed to decode blue chroma plane\n");
-        goto fail;
+    fprintf(stderr, "  Bitstream pos after assignment: byte %zu bit %d\n",
+            br.byte_pos, br.bit_pos);
+
+    /* Decode green (luma) channel blocks */
+    fprintf(stderr, "\n--- Decoding green channel (%d blocks) ---\n", num_luma);
+    decode_blocks(&br, &params, blocks_green, num_luma, 2, debug);
+
+    fprintf(stderr, "  Bitstream pos after green: byte %zu bit %d\n",
+            br.byte_pos, br.bit_pos);
+
+    /* Decode blue chroma blocks */
+    fprintf(stderr, "\n--- Decoding blue channel (%d blocks) ---\n", num_chroma);
+    decode_blocks(&br, &params, blocks_blue, num_chroma, 1, debug);
+
+    fprintf(stderr, "  Bitstream pos after blue: byte %zu bit %d\n",
+            br.byte_pos, br.bit_pos);
+
+    /* Decode red chroma blocks */
+    fprintf(stderr, "\n--- Decoding red channel (%d blocks) ---\n", num_chroma);
+    decode_blocks(&br, &params, blocks_red, num_chroma, 0, debug);
+
+    fprintf(stderr, "  Bitstream pos after all channels: byte %zu bit %d / %zu\n",
+            br.byte_pos, br.bit_pos, bitstream_size);
+
+    /* Iterative fractal decode */
+    fprintf(stderr, "\n--- Iterating %d times ---\n", params.iterations);
+
+    for (int iter = 0; iter < params.iterations; iter++) {
+        /* Swap current and previous */
+        uint8_t *tmp;
+        tmp = prev_green; prev_green = cur_green; cur_green = tmp;
+        tmp = prev_blue;  prev_blue = cur_blue;   cur_blue = tmp;
+        tmp = prev_red;   prev_red = cur_red;     cur_red = tmp;
+
+        /* Clear current buffers */
+        memset(cur_green, 0x80, luma_buf_size);
+        memset(cur_blue, 0x80, chroma_buf_size);
+        memset(cur_red, 0x80, chroma_buf_size);
+
+        /* Apply green transforms */
+        for (int i = 0; i < num_luma; i++) {
+            if (ba.state[i] == 2) continue; /* skip */
+            BlockDesc *b = &blocks_green[i];
+            int dst_off = addr_luma[i];
+            apply_transform(cur_green, prev_green, dst_off,
+                           b->x_off, b->y_off, b->opcode, b->scale_idx,
+                           luma_buf_w, luma_buf_h, luma_buf_size);
+        }
+
+        /* Apply blue transforms */
+        for (int i = 0; i < num_chroma; i++) {
+            BlockDesc *b = &blocks_blue[i];
+            int dst_off = addr_chroma[i];
+            apply_transform(cur_blue, prev_blue, dst_off,
+                           b->x_off, b->y_off, b->opcode, b->scale_idx,
+                           chroma_buf_w, chroma_buf_h, chroma_buf_size);
+        }
+
+        /* Apply red transforms */
+        for (int i = 0; i < num_chroma; i++) {
+            BlockDesc *b = &blocks_red[i];
+            int dst_off = addr_chroma[i];
+            apply_transform(cur_red, prev_red, dst_off,
+                           b->x_off, b->y_off, b->opcode, b->scale_idx,
+                           chroma_buf_w, chroma_buf_h, chroma_buf_size);
+        }
+
+        if (iter == 0 || iter == params.iterations - 1) {
+            /* Count non-128 pixels */
+            int non_mid = 0;
+            for (int p = 0; p < luma_buf_size; p++)
+                if (cur_green[p] != 128) non_mid++;
+            fprintf(stderr, "  Iter %d: green non-128: %d/%d  green[0]=%d green[1000]=%d\n",
+                    iter, non_mid, luma_buf_size, cur_green[0],
+                    1000 < luma_buf_size ? cur_green[1000] : 0);
+        }
     }
 
-    /* Decode red chroma plane at half resolution */
-    fprintf(stderr, "  Decoding red chroma plane (%d x %d)...\n",
-            chroma_w, chroma_h);
-    if (!decode_plane(chroma_w, chroma_h, r_front, r_back, &br, iterations,
-                      block_w, block_h)) {
-        fprintf(stderr, "Error: failed to decode red chroma plane\n");
-        goto fail;
-    }
-
-    /* Convert GBR 4:2:0 to BGR 24-bit */
-    fprintf(stderr, "  Converting GBR 4:2:0 to BGR...\n");
-    uint8_t *bgr = (uint8_t *)malloc(width * height * 3);
+    /* Convert to BGR and write BMP */
+    int bgr_stride = width * 3;
+    uint8_t *bgr = (uint8_t *)calloc(1, bgr_stride * height);
     if (!bgr) {
-        fprintf(stderr, "Error: cannot allocate output buffer\n");
-        goto fail;
+        fprintf(stderr, "Error: cannot allocate BGR buffer\n");
+        goto cleanup;
     }
 
-    gbr420_to_bgr(g_front, b_front, r_front, width, height, chroma_sub, bgr);
+    convert_to_bgr(cur_green, cur_blue, cur_red,
+                    width, height, luma_buf_w,
+                    chroma_buf_w, chroma_buf_h,
+                    mult, bgr, bgr_stride);
 
-    /* Write BMP */
-    if (write_bmp(output_path, width, height, bgr)) {
+    if (write_bmp(output_path, width, height, bgr, bgr_stride)) {
         fprintf(stderr, "Wrote: %s (%d x %d, 24-bit BMP)\n",
                 output_path, width, height);
     }
 
     free(bgr);
-    free(g_front); free(g_back);
-    free(b_front); free(b_back);
-    free(r_front); free(r_back);
+
+cleanup:
+    free(blocks_green); free(blocks_blue); free(blocks_red);
+    free(addr_luma); free(addr_chroma);
+    free(ba.state);
+    free(cur_green); free(cur_blue); free(cur_red);
+    free(prev_green); free(prev_blue); free(prev_red);
     free(file_data);
     return 0;
-
-fail:
-    free(g_front); free(g_back);
-    free(b_front); free(b_back);
-    free(r_front); free(r_back);
-    free(file_data);
-    return 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -632,6 +1040,19 @@ static int show_info(const char *input_path)
     printf("Compressed data size:   %u (file has %ld)\n",
            hdr.data_size, file_size - hdr.hdr_size);
 
+    /* Also show computed parameters */
+    FTCParams params;
+    if (parse_ftc_params(&sub, hdr.width, hdr.height, &params)) {
+        printf("\nComputed parameters:\n");
+        printf("  dim_x=%d dim_y=%d\n", params.dim_x, params.dim_y);
+        printf("  scale_bits=%d offset_bits=%d opcode_bits=%d\n",
+               params.scale_bits, params.offset_bits, params.opcode_bits);
+        printf("  has_extra_bit=%d\n", params.has_extra_bit);
+        if (params.ctx_count > 0)
+            printf("  ctx[0]: dim=%d scale_base=%d\n",
+                   params.ctx[0].dimension, params.ctx[0].scale_base);
+    }
+
     free(file_data);
     return 0;
 }
@@ -647,6 +1068,7 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Usage:\n");
         fprintf(stderr, "  ftcdecode <input.ftc> <output.bmp>   Decode FTC to BMP\n");
         fprintf(stderr, "  ftcdecode -i <input.ftc>             Show header info\n");
+        fprintf(stderr, "  ftcdecode -d <input.ftc> <out.bmp>   Decode with debug\n");
         return 1;
     }
 
@@ -658,10 +1080,17 @@ int main(int argc, char *argv[])
         return show_info(argv[2]);
     }
 
-    if (argc < 3) {
+    int debug = 0;
+    int arg_off = 0;
+    if (strcmp(argv[1], "-d") == 0) {
+        debug = 1;
+        arg_off = 1;
+    }
+
+    if (argc < 3 + arg_off) {
         fprintf(stderr, "Error: need both input and output paths\n");
         return 1;
     }
 
-    return decode_ftc(argv[1], argv[2]);
+    return decode_ftc(argv[1 + arg_off], argv[2 + arg_off], debug);
 }

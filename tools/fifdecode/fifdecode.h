@@ -55,7 +55,7 @@ typedef void     (__cdecl *pfnClearFTTBuffer)(HDECOMP);
 typedef int      (__cdecl *pfnGetOriginalResolution)(HDECOMP, int*, int*);
 typedef int      (__cdecl *pfnSetOutputResolution)(HDECOMP, int, int);
 typedef int      (__cdecl *pfnGetOutputResolution)(HDECOMP, int*, int*);
-typedef int      (__cdecl *pfnSetOutputFormat)(HDECOMP, int);
+typedef int      (__cdecl *pfnSetOutputFormat)(HDECOMP, int, ...);
 typedef int      (__cdecl *pfnGetOutputFormat)(HDECOMP);
 
 /* Color table management */
@@ -67,7 +67,7 @@ typedef int      (__cdecl *pfnGetOutputColorTable)(HDECOMP, void*);
 typedef int      (__cdecl *pfnGetPhysicalDimensions)(HDECOMP, int*, int*);
 
 /* Decompression */
-typedef int      (__cdecl *pfnDecompressToBuffer)(HDECOMP, void*, int);
+typedef int      (__cdecl *pfnDecompressToBuffer)(HDECOMP, ...);
 typedef int      (__cdecl *pfnDecompressToYUV)(HDECOMP, void*, void*, void*, int, int);
 
 /* Version info */
