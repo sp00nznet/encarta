@@ -1105,9 +1105,11 @@ static int decode_ftc(const char *input_path, const char *output_path, int debug
         }
     }
 
-    fprintf(stderr, "  Green mean: %d\n", cur_green[luma_buf_size / 2]);
+    fprintf(stderr, "  Green: blocks=%d\n", num_green_decoded);
 
-    /* Convert to BGR and write BMP */
+    /* Output grayscale BMP from green (luma) channel.
+     * Chroma channels not yet producing correct colors;
+     * grayscale output provides usable luma-only images. */
     int bgr_stride = width * 3;
     uint8_t *bgr = (uint8_t *)calloc(1, bgr_stride * height);
     if (!bgr) {
@@ -1115,10 +1117,16 @@ static int decode_ftc(const char *input_path, const char *output_path, int debug
         goto cleanup;
     }
 
-    convert_to_bgr(cur_green, cur_blue, cur_red,
-                    width, height, luma_buf_w,
-                    chroma_buf_w, chroma_buf_h,
-                    mult, bgr, bgr_stride);
+    /* Write green channel as grayscale (B=G=R) */
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            uint8_t g = cur_green[y * luma_buf_w + x];
+            int out = y * bgr_stride + x * 3;
+            bgr[out + 0] = g;
+            bgr[out + 1] = g;
+            bgr[out + 2] = g;
+        }
+    }
 
     if (write_bmp(output_path, width, height, bgr, bgr_stride)) {
         fprintf(stderr, "Wrote: %s (%d x %d, 24-bit BMP)\n",
