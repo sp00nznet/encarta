@@ -279,9 +279,9 @@ ftcdecode -d input.ftc output.bmp
 - [x] 4×4 superblock scan order (padded grid)
 - [x] 16-bit scale table computation (word0=6 divide-by-10 formula)
 - [x] Flat-fill decode (fixed-point pixel values) — **produces recognizable luma images**
-- [ ] Fractal IFS iteration (source offset mapping not yet correct)
-- [ ] Chroma channel decode (blue/red with correct color space)
-- [ ] YCbCr → RGB color conversion
+- [ ] Fractal IFS iteration — DLL uses 1024-byte lookup tables and arithmetic coding; needs deeper RE
+- [ ] Chroma channel decode — channels readable but high noise; may need separate scale table (word0=8)
+- [ ] Color space conversion (GBR vs YCbCr TBD)
 
 ## Tools Needed
 
@@ -305,7 +305,8 @@ This project contains no copyrighted Microsoft code or content. It is a clean-ro
 - [x] Document architecture and component relationships
 - [x] Ghidra disassembly of DECO_32.DLL — key functions mapped
 - [x] M20 container extraction tool
-- [x] FTC image decoder — **luma channel producing recognizable images**
-- [ ] FTC decoder — fractal iteration and chroma channels
+- [x] FTC image decoder — **luma channel producing recognizable images** (flat-fill mode)
+- [ ] FTC decoder — pixel transform uses LUT + arithmetic coder (needs deeper DECO_32.DLL RE)
+- [ ] FTC decoder — chroma channels and color space conversion
 - [ ] FIF container format decoder (wraps FTC frames)
 - [ ] Begin Ghidra/IDA disassembly of ENC97.EXE
