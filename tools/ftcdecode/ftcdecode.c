@@ -1129,12 +1129,90 @@ static int show_info(const char *input_path)
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* FTT raw image decoder                                               */
+/* ------------------------------------------------------------------ */
+
+/*
+ * FTT files are uncompressed raw pixel data with a 26-byte header.
+ * Header: "FTT\0" magic, width, height, bpp (usually 8 = grayscale).
+ * Data follows immediately after header, width*height bytes.
+ */
+
+static int decode_ftt(const char *input_path, const char *output_path)
+{
+    long file_size = 0;
+    uint8_t *file_data = read_file(input_path, &file_size);
+    if (!file_data) {
+        fprintf(stderr, "Error: cannot read '%s'\n", input_path);
+        return 1;
+    }
+
+    if (file_size < 26 || memcmp(file_data, "FTT", 3) != 0) {
+        fprintf(stderr, "Error: not an FTT file\n");
+        free(file_data);
+        return 1;
+    }
+
+    /* FTT header: 26 bytes (similar to FTC but no sub-header) */
+    uint16_t width  = *(uint16_t *)(file_data + 8);
+    uint16_t height = *(uint16_t *)(file_data + 10);
+    uint16_t bpp    = *(uint16_t *)(file_data + 12);
+    uint16_t hdr_size = *(uint16_t *)(file_data + 16);
+
+    fprintf(stderr, "FTT: %s (%ld bytes)\n", input_path, file_size);
+    fprintf(stderr, "  Dimensions: %u x %u, %u bpp, header %u bytes\n",
+            width, height, bpp, hdr_size);
+
+    if (bpp != 8) {
+        fprintf(stderr, "Warning: FTT with bpp=%u (expected 8)\n", bpp);
+    }
+
+    const uint8_t *pixels = file_data + hdr_size;
+    long pixel_count = (long)width * height;
+
+    if (hdr_size + pixel_count > file_size) {
+        fprintf(stderr, "Error: data truncated\n");
+        free(file_data);
+        return 1;
+    }
+
+    /* Write grayscale BMP */
+    int bgr_stride = width * 3;
+    uint8_t *bgr = (uint8_t *)calloc(1, bgr_stride * height);
+    if (!bgr) { free(file_data); return 1; }
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            uint8_t v = pixels[y * width + x];
+            int out = y * bgr_stride + x * 3;
+            bgr[out + 0] = v;
+            bgr[out + 1] = v;
+            bgr[out + 2] = v;
+        }
+    }
+
+    if (write_bmp(output_path, width, height, bgr, bgr_stride)) {
+        fprintf(stderr, "Wrote: %s (%d x %d, 24-bit BMP)\n",
+                output_path, width, height);
+    }
+
+    free(bgr);
+    free(file_data);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Main                                                                */
+/* ------------------------------------------------------------------ */
+
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
-        fprintf(stderr, "ftcdecode - Clean-room FTC fractal image decoder\n\n");
+        fprintf(stderr, "ftcdecode - FTC/FTT image decoder for Encarta 97\n\n");
         fprintf(stderr, "Usage:\n");
         fprintf(stderr, "  ftcdecode <input.ftc> <output.bmp>   Decode FTC to BMP\n");
+        fprintf(stderr, "  ftcdecode <input.ftt> <output.bmp>   Decode FTT to BMP\n");
         fprintf(stderr, "  ftcdecode -i <input.ftc>             Show header info\n");
         fprintf(stderr, "  ftcdecode -d <input.ftc> <out.bmp>   Decode with debug\n");
         return 1;
@@ -1160,5 +1238,21 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    return decode_ftc(argv[1 + arg_off], argv[2 + arg_off], debug);
+    const char *input = argv[1 + arg_off];
+    const char *output = argv[2 + arg_off];
+
+    /* Auto-detect format by reading magic bytes */
+    FILE *f = fopen(input, "rb");
+    if (!f) {
+        fprintf(stderr, "Error: cannot open '%s'\n", input);
+        return 1;
+    }
+    char magic[4];
+    fread(magic, 1, 4, f);
+    fclose(f);
+
+    if (memcmp(magic, "FTT", 3) == 0 && magic[3] == '\0') {
+        return decode_ftt(input, output);
+    }
+    return decode_ftc(input, output, debug);
 }

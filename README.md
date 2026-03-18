@@ -248,7 +248,7 @@ cmake --build build --config Release --target m20dump
 
 | Tool | Directory | Description | Status |
 |------|-----------|-------------|--------|
-| `ftcdecode` | `tools/ftcdecode/` | FTC fractal image decoder | **Working** (flat-fill luma) |
+| `ftcdecode` | `tools/ftcdecode/` | FTC/FTT image decoder | **Working** (FTC grayscale + FTT raw) |
 | `m20dump` | `tools/m20dump/` | M20/MVB 2.0 container extractor | Working |
 | `fifdecode` | `tools/fifdecode/` | DLL bridge to DECO_32.DLL | Broken on Win11 (DEP) |
 | `strdump` | `tools/strdump/` | STR string table dumper | Working |
@@ -257,14 +257,17 @@ cmake --build build --config Release --target m20dump
 
 ### FTC Decoder (`ftcdecode`)
 
-Clean-room reimplementation of the FTC (Fractal Transform Codec) image decoder used by Encarta 97. Based on reverse engineering of `DECO_32.DLL`.
+Clean-room image decoder for Encarta 97's FTC (Fractal Transform Codec) and FTT (raw pixel) formats. Based on reverse engineering of `DECO_32.DLL`.
 
 ```bash
+# Decode FTC (fractal compressed) to grayscale BMP
+ftcdecode input.ftc output.bmp
+
+# Decode FTT (raw uncompressed) to BMP — perfect quality
+ftcdecode input.ftt output.bmp
+
 # Show header info
 ftcdecode -i input.ftc
-
-# Decode to BMP
-ftcdecode input.ftc output.bmp
 
 # Decode with debug output
 ftcdecode -d input.ftc output.bmp
@@ -278,7 +281,8 @@ ftcdecode -d input.ftc output.bmp
 - [x] 24-bit block decoding (7 scale + 14 offset + 3 opcode)
 - [x] 4×4 superblock scan order (padded grid)
 - [x] 16-bit scale table computation (word0=6 divide-by-10 formula)
-- [x] Flat-fill decode — **produces recognizable grayscale images** for all test files
+- [x] FTT raw decode — **perfect quality** grayscale output (uncompressed format)
+- [x] FTC flat-fill decode — **produces recognizable grayscale images** for all test files
 - [x] Chroma scale table (word0=8 divide-by-16, separate from luma word0=6)
 - [ ] Color output — chroma blocks decoded but high spatial noise; DLL pixel transform uses 1024-byte LUT + arithmetic coder, needs deeper RE
 - [ ] Fractal IFS iteration — DLL applies one-shot transform via LUT, not iterative convergence as initially assumed
@@ -305,8 +309,8 @@ This project contains no copyrighted Microsoft code or content. It is a clean-ro
 - [x] Document architecture and component relationships
 - [x] Ghidra disassembly of DECO_32.DLL — key functions mapped
 - [x] M20 container extraction tool
+- [x] FTT image decoder — **perfect quality** raw pixel decode
 - [x] FTC image decoder — **luma channel producing recognizable images** (flat-fill mode)
-- [ ] FTC decoder — pixel transform uses LUT + arithmetic coder (needs deeper DECO_32.DLL RE)
-- [ ] FTC decoder — chroma channels and color space conversion
+- [ ] FTC decoder — color output (pixel transform uses LUT + arithmetic coder, needs deeper RE)
 - [ ] FIF container format decoder (wraps FTC frames)
 - [ ] Begin Ghidra/IDA disassembly of ENC97.EXE
