@@ -1203,16 +1203,114 @@ static int decode_ftt(const char *input_path, const char *output_path)
 }
 
 /* ------------------------------------------------------------------ */
+/* FIF container decoder                                               */
+/* ------------------------------------------------------------------ */
+
+/*
+ * FIF files may contain embedded FTT or FTC sub-images.
+ * Scan for magic bytes and extract the first valid sub-image.
+ */
+
+static int decode_fif(const char *input_path, const char *output_path, int debug)
+{
+    long file_size = 0;
+    uint8_t *file_data = read_file(input_path, &file_size);
+    if (!file_data) {
+        fprintf(stderr, "Error: cannot read '%s'\n", input_path);
+        return 1;
+    }
+
+    fprintf(stderr, "FIF: %s (%ld bytes)\n", input_path, file_size);
+
+    /* Scan for embedded FTT or FTC sub-images */
+    for (long off = 0; off < file_size - 26; off++) {
+        if (file_data[off] == 'F' && file_data[off+1] == 'T' &&
+            file_data[off+3] == '\0' &&
+            (file_data[off+2] == 'T' || file_data[off+2] == 'C')) {
+
+            int is_ftt = (file_data[off+2] == 'T');
+            uint16_t w = *(uint16_t *)(file_data + off + 8);
+            uint16_t h = *(uint16_t *)(file_data + off + 10);
+            uint16_t bpp = *(uint16_t *)(file_data + off + 12);
+            uint16_t hdr_sz = *(uint16_t *)(file_data + off + 16);
+
+            /* Sanity check dimensions */
+            if (w < 4 || w > 4096 || h < 4 || h > 4096 ||
+                hdr_sz < 20 || hdr_sz > 256 || bpp == 0 || bpp > 32)
+                continue;
+
+            fprintf(stderr, "  Found %s at offset %ld: %dx%d, %d bpp, hdr %d\n",
+                    is_ftt ? "FTT" : "FTC", off, w, h, bpp, hdr_sz);
+
+            if (is_ftt && bpp == 8) {
+                /* FTT: raw pixels */
+                const uint8_t *pixels = file_data + off + hdr_sz;
+                long avail = file_size - off - hdr_sz;
+                int rows = (int)(avail / w);
+                if (rows > h) rows = h;
+
+                int bgr_stride = w * 3;
+                uint8_t *bgr = (uint8_t *)calloc(1, bgr_stride * h);
+                if (!bgr) { free(file_data); return 1; }
+
+                /* Initialize to mid-gray for any missing rows */
+                memset(bgr, 0x80, bgr_stride * h);
+
+                for (int y = 0; y < rows; y++) {
+                    for (int x = 0; x < w; x++) {
+                        uint8_t v = pixels[y * w + x];
+                        int out = y * bgr_stride + x * 3;
+                        bgr[out] = v; bgr[out+1] = v; bgr[out+2] = v;
+                    }
+                }
+
+                if (write_bmp(output_path, w, rows, bgr, bgr_stride)) {
+                    fprintf(stderr, "Wrote: %s (%d x %d, from embedded FTT)\n",
+                            output_path, w, rows);
+                }
+                free(bgr);
+                free(file_data);
+                return 0;
+
+            } else if (!is_ftt) {
+                /* FTC: write temp data and decode */
+                long sub_size = file_size - off;
+                fprintf(stderr, "  Decoding embedded FTC (%ld bytes)\n", sub_size);
+
+                /* Create a temp file-like view and decode */
+                /* For now, write the sub-data to a temp file */
+                char tmp_path[512];
+                snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.ftc", output_path);
+                FILE *tmp = fopen(tmp_path, "wb");
+                if (tmp) {
+                    fwrite(file_data + off, 1, sub_size, tmp);
+                    fclose(tmp);
+                    int result = decode_ftc(tmp_path, output_path, debug);
+                    remove(tmp_path);
+                    free(file_data);
+                    return result;
+                }
+            }
+        }
+    }
+
+    fprintf(stderr, "Error: no embedded FTT/FTC found in FIF file\n");
+    free(file_data);
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
-        fprintf(stderr, "ftcdecode - FTC/FTT image decoder for Encarta 97\n\n");
+        fprintf(stderr, "ftcdecode - FTC/FTT/FIF image decoder for Encarta 97\n\n");
         fprintf(stderr, "Usage:\n");
         fprintf(stderr, "  ftcdecode <input.ftc> <output.bmp>   Decode FTC to BMP\n");
         fprintf(stderr, "  ftcdecode <input.ftt> <output.bmp>   Decode FTT to BMP\n");
+        fprintf(stderr, "  ftcdecode <input.fif> <output.bmp>   Extract from FIF container\n");
         fprintf(stderr, "  ftcdecode -i <input.ftc>             Show header info\n");
         fprintf(stderr, "  ftcdecode -d <input.ftc> <out.bmp>   Decode with debug\n");
         return 1;
@@ -1254,5 +1352,9 @@ int main(int argc, char *argv[])
     if (memcmp(magic, "FTT", 3) == 0 && magic[3] == '\0') {
         return decode_ftt(input, output);
     }
-    return decode_ftc(input, output, debug);
+    if (memcmp(magic, "FTC", 3) == 0 && magic[3] == '\0') {
+        return decode_ftc(input, output, debug);
+    }
+    /* Default: try as FIF container (scan for embedded sub-images) */
+    return decode_fif(input, output, debug);
 }
