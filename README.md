@@ -232,13 +232,63 @@ The `.M20` files are Microsoft Multimedia Viewer 2.0 containers — a successor 
 
 ## Building
 
-*Not yet buildable — project is in the reverse engineering phase.*
+```bash
+# Configure (requires Visual Studio 2022, Win32 target)
+cmake -B build -G "Visual Studio 17 2022" -A Win32
+
+# Build all tools
+cmake --build build --config Release
+
+# Build a specific tool
+cmake --build build --config Release --target ftcdecode
+cmake --build build --config Release --target m20dump
+```
+
+### Tools
+
+| Tool | Directory | Description | Status |
+|------|-----------|-------------|--------|
+| `ftcdecode` | `tools/ftcdecode/` | FTC fractal image decoder | **Working** (flat-fill luma) |
+| `m20dump` | `tools/m20dump/` | M20/MVB 2.0 container extractor | Working |
+| `fifdecode` | `tools/fifdecode/` | DLL bridge to DECO_32.DLL | Broken on Win11 (DEP) |
+| `strdump` | `tools/strdump/` | STR string table dumper | Working |
+| `spamdump` | `tools/spamdump/` | SPAM multimedia format dumper | Working |
+| `datdump` | `tools/datdump/` | DAT configuration dumper | Working |
+
+### FTC Decoder (`ftcdecode`)
+
+Clean-room reimplementation of the FTC (Fractal Transform Codec) image decoder used by Encarta 97. Based on reverse engineering of `DECO_32.DLL`.
+
+```bash
+# Show header info
+ftcdecode -i input.ftc
+
+# Decode to BMP
+ftcdecode input.ftc output.bmp
+
+# Decode with debug output
+ftcdecode -d input.ftc output.bmp
+```
+
+**Decode pipeline status:**
+- [x] FTC header + sub-header parsing (28 + 39 bytes)
+- [x] Sub-header context/parameter extraction (small mode)
+- [x] LSB-first bitstream reader
+- [x] 3-pass block assignment (green/skip/blue/red states)
+- [x] 24-bit block decoding (7 scale + 14 offset + 3 opcode)
+- [x] 4×4 superblock scan order (padded grid)
+- [x] 16-bit scale table computation (word0=6 divide-by-10 formula)
+- [x] Flat-fill decode (fixed-point pixel values) — **produces recognizable luma images**
+- [ ] Fractal IFS iteration (source offset mapping not yet correct)
+- [ ] Chroma channel decode (blue/red with correct color space)
+- [ ] YCbCr → RGB color conversion
 
 ## Tools Needed
 
 - [Ghidra](https://ghidra-sre.org/) or IDA Pro — for disassembly of PE32 binaries
 - [Resource Hacker](http://www.angusj.com/resourcehacker/) — for extracting resources from ENCRES97.DLL
-- MSVC 2022 or MinGW-w64 — for recompilation
+- Visual Studio 2022 (MSVC) — for building tools (Win32 target)
+- CMake 3.16+ — build system
 - Python 3 + `pefile` — for PE analysis scripts
 
 ## Legal
@@ -247,11 +297,15 @@ This project contains no copyrighted Microsoft code or content. It is a clean-ro
 
 ## Status
 
-**Current Phase: 0 — Binary Analysis & Documentation**
+**Current Phase: 1 — Data Format Reverse Engineering**
 
 - [x] Identify all executables and DLLs (PE32 vs NE/16-bit)
 - [x] Catalog PE sections, imports, exports for all 32-bit modules
 - [x] Map data file formats and multimedia assets
 - [x] Document architecture and component relationships
-- [ ] Begin Ghidra/IDA disassembly of DECO_32.DLL
+- [x] Ghidra disassembly of DECO_32.DLL — key functions mapped
+- [x] M20 container extraction tool
+- [x] FTC image decoder — **luma channel producing recognizable images**
+- [ ] FTC decoder — fractal iteration and chroma channels
+- [ ] FIF container format decoder (wraps FTC frames)
 - [ ] Begin Ghidra/IDA disassembly of ENC97.EXE
