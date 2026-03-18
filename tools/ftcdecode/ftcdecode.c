@@ -297,8 +297,8 @@ static bool parse_ftc_params(const FTCSubHeader *sub, int width, int height,
     /* Scale bits from decoder[52h] = ctx_array[0].byte2 = iterations */
     params->scale_bits = params->iterations; /* = 7 */
 
-    /* Extra bit: ctx[3] (opcode_shift) nonzero means read 1 extra scale bit */
-    params->has_extra_bit = (opcode_shift != 0) ? 1 : 0;
+    /* No extra scale bit - 24 bits per block (7 scale + 14 offset + 3 opcode) */
+    params->has_extra_bit = 0;
 
     /* Offset bits: ceil(log2(dim_x * dim_y)) */
     int total_dim = (int)params->dim_x * (int)params->dim_y;
@@ -463,15 +463,15 @@ static void init_pixel_transform(int num_entries)
         for (int p = 0; p < 256; p++) {
             /*
              * Fractal affine transform: out = s * in + (1-s) * fp
-             * where fp = scale_val / 16 is the fixed point,
-             * and s = 0.75 is the contraction factor.
+             * where fp = scale_val / 16 is the fixed point target,
+             * and s = 3/4 is the contraction factor.
              *
-             * This converges to fp after enough iterations.
-             * Integer math: out = (p * 3 + scale_val / 4 + 2) >> 2
-             * (since 0.75*p + 0.25*(sv/16) = (3p + sv/16) / 4)
+             * out = (3/4)*p + (1/4)*fp = (3*p + fp) / 4
+             * With fp = scale_val / 16:
+             *   out = (3*p + scale_val/16 + 2) / 4
              */
-            int fp4 = (int)scale_val >> 2; /* = (scale_val/16) * 4 = fp*4 */
-            int val = (p * 3 + fp4 + 2) >> 2;
+            int fp = (int)scale_val >> 4;
+            int val = (3 * p + fp + 2) >> 2;
             if (val < 0) val = 0;
             if (val > 255) val = 255;
             pixel_transform[si][p] = (uint8_t)val;
@@ -510,11 +510,7 @@ static uint32_t read_vlc_count(BitReader *br)
         return 2;
 
     uint32_t raw = br_read(br, n);
-    return (1u << n) | raw + 1;
-
-    /* Wait, the DLL does: result = (1 << (N-1)) | raw + 1
-     * where N = leading_ones, and raw has (N-1) bits.
-     * So: (1 << n) | raw, then +1 */
+    return ((1u << n) | raw) + 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -522,19 +518,51 @@ static uint32_t read_vlc_count(BitReader *br)
 /* ------------------------------------------------------------------ */
 
 /*
- * For a still FTC image, this reads run-length encoded block assignments.
- * Each run has a 1-bit flag followed by a VLC count:
- *   flag=1: count blocks are "active" (need decode)
- *   flag=0: count blocks are "skip" (keep previous / zero)
+ * 3-pass block assignment (matches DLL 0x110191D0).
  *
- * The DLL also reads 16-bit address indices for each block, but for
- * our simplified decoder we just need to know which blocks are active.
+ * The DLL reads run-length encoded assignments in 3 passes:
+ *   Pass 1: flag=0 → state |= 2 (GREEN),  flag=1 → kept for pass 2
+ *   Pass 2: flag=0 → state |= 6 (SKIP),   flag=1 → kept for pass 3
+ *   Pass 3: flag=0 → state |= 1 (BLUE),   flag=1 → kept (RED, state=0)
+ *
+ * For luma level where all blocks are green: pass 1 assigns all with flag=1
+ * (meaning "all are active/green"), and passes 2-3 process the remaining.
  */
 
 typedef struct {
-    uint8_t *state;     /* per-block state: 0=active, 2=skip */
+    uint8_t *state;     /* per-block state: 0=red, 1=blue, 2=green, 6=skip */
     int total_blocks;
 } BlockAssignment;
+
+static void run_assignment_pass(BitReader *br, uint8_t *state,
+                                int *indices, int count,
+                                uint8_t assign_state, int debug,
+                                int pass_num, int *out_remaining,
+                                int *remaining_indices)
+{
+    int pos = 0;
+    int kept = 0;
+
+    while (pos < count) {
+        uint32_t flag = br_read(br, 1);
+        uint32_t run = read_vlc_count(br);
+
+        if (run > (uint32_t)(count - pos))
+            run = count - pos;
+
+        for (uint32_t i = 0; i < run; i++) {
+            int idx = indices[pos + i];
+            if (flag == 0) {
+                state[idx] = assign_state;
+            } else {
+                remaining_indices[kept++] = idx;
+            }
+        }
+        pos += run;
+    }
+
+    *out_remaining = kept;
+}
 
 static bool read_block_assignment(BitReader *br, BlockAssignment *ba,
                                   int total_blocks, int debug)
@@ -543,39 +571,61 @@ static bool read_block_assignment(BitReader *br, BlockAssignment *ba,
     ba->state = (uint8_t *)calloc(total_blocks, 1);
     if (!ba->state) return false;
 
-    int remaining = total_blocks;
-    int pos = 0;
-
-    while (remaining > 0) {
-        uint32_t flag = br_read(br, 1);
-        uint32_t count = read_vlc_count(br);
-
-        if (count > (uint32_t)remaining)
-            count = remaining;
-
-        if (debug && pos < 100)
-            fprintf(stderr, "  BlockAssign: flag=%u count=%u at pos=%d\n",
-                    flag, count, pos);
-
-        for (uint32_t i = 0; i < count; i++) {
-            if (flag == 0) {
-                ba->state[pos] = 2; /* skip */
-            }
-            /* flag == 1: state stays 0 = active */
-            pos++;
-        }
-
-        remaining -= count;
+    /* All blocks start as state 0 (potential red/unassigned) */
+    int *indices = (int *)malloc(total_blocks * sizeof(int));
+    int *remaining = (int *)malloc(total_blocks * sizeof(int));
+    if (!indices || !remaining) {
+        free(indices); free(remaining);
+        return false;
     }
 
+    for (int i = 0; i < total_blocks; i++)
+        indices[i] = i;
+
+    /* Pass 1: assign GREEN (state 2), keep rest */
+    int count = total_blocks;
+    int kept = 0;
+    size_t pass1_start = br->byte_pos * 8 + br->bit_pos;
+    run_assignment_pass(br, ba->state, indices, count, 2, debug, 1,
+                        &kept, remaining);
+    if (debug)
+        fprintf(stderr, "  Pass 1: %d green, %d kept (%zu bits)\n",
+                count - kept, kept,
+                br->byte_pos * 8 + br->bit_pos - pass1_start);
+
+    /* Pass 2: assign SKIP (state 6), keep rest */
+    if (kept > 0) {
+        count = kept;
+        size_t pass2_start = br->byte_pos * 8 + br->bit_pos;
+        run_assignment_pass(br, ba->state, remaining, count, 6, debug, 2,
+                            &kept, indices);
+        if (debug)
+            fprintf(stderr, "  Pass 2: %d skip, %d kept (%zu bits)\n",
+                    count - kept, kept,
+                    br->byte_pos * 8 + br->bit_pos - pass2_start);
+    }
+
+    /* Pass 3: assign BLUE (state 1), rest stays RED (state 0) */
+    if (kept > 0) {
+        count = kept;
+        size_t pass3_start = br->byte_pos * 8 + br->bit_pos;
+        run_assignment_pass(br, ba->state, indices, count, 1, debug, 3,
+                            &kept, remaining);
+        if (debug)
+            fprintf(stderr, "  Pass 3: %d blue, %d red (%zu bits)\n",
+                    count - kept, kept,
+                    br->byte_pos * 8 + br->bit_pos - pass3_start);
+    }
+
+    free(indices);
+    free(remaining);
+
     if (debug) {
-        int active = 0, skip = 0;
-        for (int i = 0; i < total_blocks; i++) {
-            if (ba->state[i] == 0) active++;
-            else skip++;
-        }
-        fprintf(stderr, "  BlockAssign: %d active, %d skip out of %d total\n",
-                active, skip, total_blocks);
+        int counts[7] = {0};
+        for (int i = 0; i < total_blocks; i++)
+            if (ba->state[i] < 7) counts[ba->state[i]]++;
+        fprintf(stderr, "  Assignment: green=%d skip=%d blue=%d red=%d\n",
+                counts[2], counts[6], counts[1], counts[0]);
     }
 
     return true;
@@ -599,20 +649,35 @@ typedef struct {
 
 /*
  * The address table maps each block's linear index to its position
- * in the pixel buffer. The blocks are organized in a specific scan
- * order that groups 4x4 pixel blocks into 16-block superblocks.
- *
- * For simplicity, we use a straightforward raster scan for now.
+ * in the pixel buffer. Blocks are organized in 4x4 superblock scan
+ * order: within each 16×16 pixel superblock (4×4 blocks), blocks
+ * are scanned in raster order, and superblocks are scanned left-to-right,
+ * top-to-bottom. The grid is padded to multiples of 4 blocks.
  */
 
-static void init_address_table(uint16_t *addr, int bw, int bh, int buf_w)
+static int init_address_table(uint16_t *addr, int bw, int bh, int buf_w,
+                              int padded_bw, int padded_bh)
 {
-    int idx = 0;
-    for (int by = 0; by < bh; by++) {
-        for (int bx = 0; bx < bw; bx++) {
-            addr[idx++] = (uint16_t)(by * FTC_BLOCK_H * buf_w + bx * FTC_BLOCK_W);
+    int sbw = padded_bw / 4;   /* superblocks across */
+    int sbh = padded_bh / 4;   /* superblocks down */
+    int num_padded = padded_bw * padded_bh;
+    int valid = 0;
+
+    for (int i = 0; i < num_padded; i++) {
+        int sb_idx = i / 16;
+        int local = i % 16;
+        int sb_x = sb_idx % sbw;
+        int sb_y = sb_idx / sbw;
+        int local_x = local % 4;
+        int local_y = local / 4;
+        int bx = sb_x * 4 + local_x;
+        int by = sb_y * 4 + local_y;
+
+        if (bx < bw && by < bh) {
+            addr[valid++] = (uint16_t)(by * FTC_BLOCK_H * buf_w + bx * FTC_BLOCK_W);
         }
     }
+    return valid;
 }
 
 /* ------------------------------------------------------------------ */
@@ -679,13 +744,30 @@ static void apply_transform(uint8_t *dst_buf, const uint8_t *src_buf,
 /* Channel decode (matches DLL 0x11004BE0 / 0x11004D60)                */
 /* ------------------------------------------------------------------ */
 
-static void decode_blocks(BitReader *br, const FTCParams *params,
-                          BlockDesc *blocks, int num_blocks,
-                          uint8_t channel, int debug)
+/*
+ * Decode blocks from bitstream in superblock scan order.
+ * num_blocks is the PADDED block count (includes invalid padding blocks).
+ * Blocks in padding positions are read from the bitstream but discarded.
+ * Returns the number of VALID blocks stored in the blocks array.
+ */
+static int decode_blocks(BitReader *br, const FTCParams *params,
+                          BlockDesc *blocks, int num_padded,
+                          uint8_t channel, int mult_override,
+                          int debug)
 {
-    int decoded = 0;
+    int valid = 0;
+    int bits_per_block = params->scale_bits + params->has_extra_bit +
+                         params->offset_bits + params->opcode_bits;
 
-    for (int i = 0; i < num_blocks; i++) {
+    uint16_t dim = params->dim_x;
+    int total_dim = (int)params->dim_x * (int)params->dim_y;
+    int mult = mult_override > 0 ? mult_override : params->multiplier;
+
+    for (int i = 0; i < num_padded; i++) {
+        /* Check if enough bits remain for a full block */
+        if (!br_has_bits(br, bits_per_block))
+            break;
+
         /* Read scale index */
         uint32_t scale_idx = br_read(br, params->scale_bits);
 
@@ -698,11 +780,12 @@ static void decode_blocks(BitReader *br, const FTCParams *params,
         /* Read packed offset */
         uint32_t packed_offset = br_read(br, params->offset_bits);
 
-        /* Decode x,y from packed offset */
-        uint16_t dim = params->dim_x;
-        int mult = params->multiplier;
-        int x_off, y_off;
+        /* Wrap offset into valid domain range */
+        if (total_dim > 0)
+            packed_offset = packed_offset % (uint32_t)total_dim;
 
+        /* Decode x,y from packed offset */
+        int x_off, y_off;
         if (dim > 0) {
             x_off = (int)(packed_offset % dim) * mult;
             y_off = (int)(packed_offset / dim) * mult;
@@ -714,18 +797,27 @@ static void decode_blocks(BitReader *br, const FTCParams *params,
         /* Read opcode */
         uint32_t opcode = br_read(br, params->opcode_bits);
 
-        blocks[i].opcode = (uint8_t)opcode;
-        blocks[i].channel = channel;
-        blocks[i].scale_idx = (int16_t)scale_idx;
-        blocks[i].x_off = (int16_t)x_off;
-        blocks[i].y_off = (int16_t)y_off;
+        /* Store only valid (non-padding) blocks.
+         * The address table already maps valid indices to pixel positions,
+         * so we just store sequentially. */
+        blocks[valid].opcode = (uint8_t)opcode;
+        blocks[valid].channel = channel;
+        blocks[valid].scale_idx = (int16_t)scale_idx;
+        blocks[valid].x_off = (int16_t)x_off;
+        blocks[valid].y_off = (int16_t)y_off;
 
-        if (debug && decoded < 10) {
-            fprintf(stderr, "  Block[%d]: scale=%d offset=%d (x=%d,y=%d) op=%d\n",
-                    i, scale_idx, packed_offset, x_off, y_off, opcode);
+        if (debug && valid < 10) {
+            fprintf(stderr, "  Block[%d/%d]: scale=%d offset=%d (x=%d,y=%d) op=%d\n",
+                    valid, i, scale_idx, packed_offset, x_off, y_off, opcode);
         }
-        decoded++;
+        valid++;
     }
+
+    if (debug) {
+        fprintf(stderr, "  Decoded %d valid blocks from %d padded for ch %d\n",
+                valid, num_padded, channel);
+    }
+    return valid;
 }
 
 /* ------------------------------------------------------------------ */
@@ -825,18 +917,24 @@ static int decode_ftc(const char *input_path, const char *output_path, int debug
     int bh_luma = (height + FTC_BLOCK_H - 1) / FTC_BLOCK_H;
     int num_luma = bw_luma * bh_luma;
 
+    /* Padded grid: rounds up to 4-block groups for superblock scan */
+    int padded_bw_luma = ((width + 15) / 16) * 4;
+    int padded_bh_luma = ((height + 15) / 16) * 4;
+    int num_padded_luma = padded_bw_luma * padded_bh_luma;
+
     int chroma_w = width / mult;
     int chroma_h = height / mult;
     int bw_chroma = (chroma_w + FTC_BLOCK_W - 1) / FTC_BLOCK_W;
     int bh_chroma = (chroma_h + FTC_BLOCK_H - 1) / FTC_BLOCK_H;
     int num_chroma = bw_chroma * bh_chroma;
+    int padded_bw_chroma = ((chroma_w + 15) / 16) * 4;
+    int padded_bh_chroma = ((chroma_h + 15) / 16) * 4;
+    int num_padded_chroma = padded_bw_chroma * padded_bh_chroma;
 
-    int total_blocks = num_luma + num_chroma * 2; /* green + blue + red */
-
-    fprintf(stderr, "  Luma blocks: %d (%d x %d)\n", num_luma, bw_luma, bh_luma);
-    fprintf(stderr, "  Chroma blocks: %d (%d x %d) per channel\n",
-            num_chroma, bw_chroma, bh_chroma);
-    fprintf(stderr, "  Total blocks: %d\n", total_blocks);
+    fprintf(stderr, "  Luma blocks: %d (%d x %d), padded: %d (%d x %d)\n",
+            num_luma, bw_luma, bh_luma, num_padded_luma, padded_bw_luma, padded_bh_luma);
+    fprintf(stderr, "  Chroma blocks: %d (%d x %d), padded: %d (%d x %d)\n",
+            num_chroma, bw_chroma, bh_chroma, num_padded_chroma, padded_bw_chroma, padded_bh_chroma);
 
     /* Allocate pixel buffers */
     int luma_buf_w = bw_luma * FTC_BLOCK_W;
@@ -868,11 +966,15 @@ static int decode_ftc(const char *input_path, const char *output_path, int debug
     memset(prev_blue, 0x80, chroma_buf_size);
     memset(prev_red, 0x80, chroma_buf_size);
 
-    /* Allocate address tables */
+    /* Allocate address tables (superblock scan order) */
     uint16_t *addr_luma = (uint16_t *)calloc(num_luma, sizeof(uint16_t));
     uint16_t *addr_chroma = (uint16_t *)calloc(num_chroma, sizeof(uint16_t));
-    init_address_table(addr_luma, bw_luma, bh_luma, luma_buf_w);
-    init_address_table(addr_chroma, bw_chroma, bh_chroma, chroma_buf_w);
+    int valid_luma = init_address_table(addr_luma, bw_luma, bh_luma, luma_buf_w,
+                                        padded_bw_luma, padded_bh_luma);
+    int valid_chroma = init_address_table(addr_chroma, bw_chroma, bh_chroma, chroma_buf_w,
+                                          padded_bw_chroma, padded_bh_chroma);
+    fprintf(stderr, "  Address table: %d luma, %d chroma valid blocks\n",
+            valid_luma, valid_chroma);
 
     /* Allocate block descriptors */
     BlockDesc *blocks_green = (BlockDesc *)calloc(num_luma, sizeof(BlockDesc));
@@ -897,8 +999,8 @@ static int decode_ftc(const char *input_path, const char *output_path, int debug
     BitReader br;
     br_init(&br, bitstream, bitstream_size);
 
-    /* Read block assignment */
-    fprintf(stderr, "\n--- Block assignment ---\n");
+    /* Read 3-pass block assignment (uses actual block count, not padded) */
+    fprintf(stderr, "\n--- Block assignment (3-pass) ---\n");
     BlockAssignment ba;
     if (!read_block_assignment(&br, &ba, num_luma, debug)) {
         fprintf(stderr, "Error: block assignment failed\n");
@@ -908,80 +1010,102 @@ static int decode_ftc(const char *input_path, const char *output_path, int debug
     fprintf(stderr, "  Bitstream pos after assignment: byte %zu bit %d\n",
             br.byte_pos, br.bit_pos);
 
-    /* Decode green (luma) channel blocks */
-    fprintf(stderr, "\n--- Decoding green channel (%d blocks) ---\n", num_luma);
-    decode_blocks(&br, &params, blocks_green, num_luma, 2, debug);
+    /* Decode green (luma) blocks in superblock order.
+     * Read num_padded_luma blocks but only store valid ones. */
+    fprintf(stderr, "\n--- Decoding green channel (%d padded, %d valid) ---\n",
+            num_padded_luma, num_luma);
+    int num_green_decoded = decode_blocks(&br, &params, blocks_green,
+                                          num_padded_luma, 2, mult, debug);
 
     fprintf(stderr, "  Bitstream pos after green: byte %zu bit %d\n",
             br.byte_pos, br.bit_pos);
 
     /* Decode blue chroma blocks */
-    fprintf(stderr, "\n--- Decoding blue channel (%d blocks) ---\n", num_chroma);
-    decode_blocks(&br, &params, blocks_blue, num_chroma, 1, debug);
+    fprintf(stderr, "\n--- Decoding blue channel (%d padded, %d valid) ---\n",
+            num_padded_chroma, num_chroma);
+    int num_blue_decoded = decode_blocks(&br, &params, blocks_blue,
+                                         num_padded_chroma, 1, 1, debug);
 
     fprintf(stderr, "  Bitstream pos after blue: byte %zu bit %d\n",
             br.byte_pos, br.bit_pos);
 
     /* Decode red chroma blocks */
-    fprintf(stderr, "\n--- Decoding red channel (%d blocks) ---\n", num_chroma);
-    decode_blocks(&br, &params, blocks_red, num_chroma, 0, debug);
+    fprintf(stderr, "\n--- Decoding red channel (%d padded, %d valid) ---\n",
+            num_padded_chroma, num_chroma);
+    int num_red_decoded = decode_blocks(&br, &params, blocks_red,
+                                        num_padded_chroma, 0, 1, debug);
 
     fprintf(stderr, "  Bitstream pos after all channels: byte %zu bit %d / %zu\n",
             br.byte_pos, br.bit_pos, bitstream_size);
 
-    /* Iterative fractal decode */
-    fprintf(stderr, "\n--- Iterating %d times ---\n", params.iterations);
+    /* Cap decoded block counts at valid (non-padding) counts */
+    if (num_green_decoded > valid_luma) num_green_decoded = valid_luma;
+    if (num_blue_decoded > valid_chroma) num_blue_decoded = valid_chroma;
+    if (num_red_decoded > valid_chroma) num_red_decoded = valid_chroma;
 
-    for (int iter = 0; iter < params.iterations; iter++) {
-        /* Swap current and previous */
-        uint8_t *tmp;
-        tmp = prev_green; prev_green = cur_green; cur_green = tmp;
-        tmp = prev_blue;  prev_blue = cur_blue;   cur_blue = tmp;
-        tmp = prev_red;   prev_red = cur_red;     cur_red = tmp;
+    fprintf(stderr, "\n--- Flat-fill decode (FP values) ---\n");
+    fprintf(stderr, "  Green: %d, Blue: %d, Red: %d blocks\n",
+            num_green_decoded, num_blue_decoded, num_red_decoded);
 
-        /* Clear current buffers */
-        memset(cur_green, 0x80, luma_buf_size);
-        memset(cur_blue, 0x80, chroma_buf_size);
-        memset(cur_red, 0x80, chroma_buf_size);
+    /* Flat-fill: write fixed-point value (scale_val / 16) directly into each block */
+    for (int i = 0; i < num_green_decoded; i++) {
+        BlockDesc *b = &blocks_green[i];
+        int si = b->scale_idx;
+        if (si < 0) si = 0;
+        if (si >= total_scale_entries) si = total_scale_entries - 1;
+        int fp = scale_table_16[si] >> 4;
+        if (fp < 0) fp = 0;
+        if (fp > 255) fp = 255;
 
-        /* Apply green transforms */
-        for (int i = 0; i < num_luma; i++) {
-            if (ba.state[i] == 2) continue; /* skip */
-            BlockDesc *b = &blocks_green[i];
-            int dst_off = addr_luma[i];
-            apply_transform(cur_green, prev_green, dst_off,
-                           b->x_off, b->y_off, b->opcode, b->scale_idx,
-                           luma_buf_w, luma_buf_h, luma_buf_size);
-        }
-
-        /* Apply blue transforms */
-        for (int i = 0; i < num_chroma; i++) {
-            BlockDesc *b = &blocks_blue[i];
-            int dst_off = addr_chroma[i];
-            apply_transform(cur_blue, prev_blue, dst_off,
-                           b->x_off, b->y_off, b->opcode, b->scale_idx,
-                           chroma_buf_w, chroma_buf_h, chroma_buf_size);
-        }
-
-        /* Apply red transforms */
-        for (int i = 0; i < num_chroma; i++) {
-            BlockDesc *b = &blocks_red[i];
-            int dst_off = addr_chroma[i];
-            apply_transform(cur_red, prev_red, dst_off,
-                           b->x_off, b->y_off, b->opcode, b->scale_idx,
-                           chroma_buf_w, chroma_buf_h, chroma_buf_size);
-        }
-
-        if (iter == 0 || iter == params.iterations - 1) {
-            /* Count non-128 pixels */
-            int non_mid = 0;
-            for (int p = 0; p < luma_buf_size; p++)
-                if (cur_green[p] != 128) non_mid++;
-            fprintf(stderr, "  Iter %d: green non-128: %d/%d  green[0]=%d green[1000]=%d\n",
-                    iter, non_mid, luma_buf_size, cur_green[0],
-                    1000 < luma_buf_size ? cur_green[1000] : 0);
+        int dst_off = addr_luma[i];
+        for (int row = 0; row < 4; row++) {
+            for (int col = 0; col < 4; col++) {
+                int di = dst_off + row * luma_buf_w + col;
+                if (di >= 0 && di < luma_buf_size)
+                    cur_green[di] = (uint8_t)fp;
+            }
         }
     }
+
+    for (int i = 0; i < num_blue_decoded; i++) {
+        BlockDesc *b = &blocks_blue[i];
+        int si = b->scale_idx;
+        if (si < 0) si = 0;
+        if (si >= total_scale_entries) si = total_scale_entries - 1;
+        int fp = scale_table_16[si] >> 4;
+        if (fp < 0) fp = 0;
+        if (fp > 255) fp = 255;
+
+        int dst_off = addr_chroma[i];
+        for (int row = 0; row < 4; row++) {
+            for (int col = 0; col < 4; col++) {
+                int di = dst_off + row * chroma_buf_w + col;
+                if (di >= 0 && di < chroma_buf_size)
+                    cur_blue[di] = (uint8_t)fp;
+            }
+        }
+    }
+
+    for (int i = 0; i < num_red_decoded; i++) {
+        BlockDesc *b = &blocks_red[i];
+        int si = b->scale_idx;
+        if (si < 0) si = 0;
+        if (si >= total_scale_entries) si = total_scale_entries - 1;
+        int fp = scale_table_16[si] >> 4;
+        if (fp < 0) fp = 0;
+        if (fp > 255) fp = 255;
+
+        int dst_off = addr_chroma[i];
+        for (int row = 0; row < 4; row++) {
+            for (int col = 0; col < 4; col++) {
+                int di = dst_off + row * chroma_buf_w + col;
+                if (di >= 0 && di < chroma_buf_size)
+                    cur_red[di] = (uint8_t)fp;
+            }
+        }
+    }
+
+    fprintf(stderr, "  Green mean: %d\n", cur_green[luma_buf_size / 2]);
 
     /* Convert to BGR and write BMP */
     int bgr_stride = width * 3;
