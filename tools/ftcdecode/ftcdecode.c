@@ -314,123 +314,59 @@ static bool parse_ftc_params(const FTCSubHeader *sub, int width, int height,
 /* 16-bit scale table (matches DLL 0x1100B250, word0=6 case)           */
 /* ------------------------------------------------------------------ */
 
-static int16_t scale_table_16[256]; /* indexed by combined scale index */
+static int16_t scale_table_16[256];       /* luma scale table */
+static int16_t scale_table_chroma[256];   /* chroma scale table (may use word0=8) */
 
-static void init_scale_table_16(const FTCParams *params)
+static void init_scale_table_for_word0(int16_t *table, int word0,
+                                        int num_entries, int16_t scale_base_val,
+                                        int ctx_byte3)
 {
-    int word0 = params->ctx_count > 0 ? params->ctx[0].dimension : 6;
-    int scale_bits = params->scale_bits;
-    int num_entries = 1 << scale_bits;
-    if (params->has_extra_bit) num_entries <<= 1;
-    if (num_entries > 256) num_entries = 256;
-
-    int16_t scale_base_val = params->ctx_count > 0 ? params->ctx[0].scale_base : -2048;
-
-    /* Compute scale table based on word0 (dimension parameter) */
-    /* The DLL has a switch on word0-4 for different formulas */
     int32_t esi = (int32_t)scale_base_val * 16;
-    int32_t step = 16;  /* default step per entry */
-
-    /* For small mode without extra bits, step = 1*16 = 16.
-     * Actually step = ebx * 16 where ebx was initialized to 0 or 1 depending on mode.
-     * For our case (no extra bits, info[101h]=0): ebx=0 at 1100B2D2, but that gives step=0.
-     * Wait, ebx is set to [ecx+3] = ctx[3] = opcode_shift = 32.
-     * Hmm, let me re-read: 1100B2D8: bl = [ecx+3] which is ctx.byte3.
-     * In small mode ctx.byte3 = opcode_shift = 32.
-     * So ebx = 32. And step = 32 * 16 = 512.
-     */
-
-    /* Actually the DLL code flow (for info[101h]=0 path at 1100B2C8):
-     * ebp = 1 << ctx.byte2 = 1 << 7 = 128 (num entries)
-     * ebx = ctx.byte3 = 32
-     * Then at 1100B3D6 (word0=6 case):
-     *   shl esi, 4 → esi *= 16 (esi was ctx.word4 = -2048 → -32768)
-     *   shl ebx, 4 → ebx *= 16 (ebx was 32 → 512)
-     */
-    esi = (int32_t)scale_base_val * 16;
-    step = 32 * 16;  /* This needs to use the actual ctx.byte3 value */
-
-    /* Actually, let me use the values from the analysis directly */
-    /* For our test file: ctx.byte3 = opcode_shift = extra_byte2*8 = 4*8 = 32 */
-    int ctx_byte3 = params->has_extra_bit ? (params->ctx[0].extra_flag) : 0;
-    /* Wait, ctx.byte3 IS the extra_flag. For our file it's 32. */
-    ctx_byte3 = params->ctx_count > 0 ? params->ctx[0].extra_flag : 0;
-
-    esi = (int32_t)scale_base_val * 16;
-    step = ctx_byte3 * 16;
-
-    /* ecx (bias) = 0x800 (the neutral point) */
+    int32_t step = ctx_byte3 * 16;
     int32_t bias = 0x800;
 
     for (int i = 0; i < num_entries; i++) {
         int32_t value;
-
         switch (word0) {
-        case 4: {
-            /* Linear with clamp, divide by 4 */
+        case 6:
             value = esi;
-            if (value < (int32_t)0xFFFFF800) value = (int32_t)0xFFFFF800;
-            value += bias;
-            scale_table_16[i] = (int16_t)value;
-            esi += step / 4;  /* approximation */
-            break;
-        }
-        case 5: {
-            /* Divide by 6 */
-            value = esi;
-            if (value >= 0) value += 3;
-            else if (value < -0x3C00) value = -0x3C00;
-            else value -= 2;
-            value = value / 6;
-            scale_table_16[i] = (int16_t)(value + bias);
-            esi += step;
-            break;
-        }
-        case 6: {
-            /* Divide by 10 (matches 1100B3CB path) */
-            value = esi;
-            if (value >= 0)
-                value = value + 5;
-            else if (value < -0x5000)
-                value = -0x5000;
-            else
-                value = value - 4;
+            if (value >= 0) value += 5;
+            else if (value < -0x5000) value = -0x5000;
+            else value -= 4;
             value = value / 10;
-            scale_table_16[i] = (int16_t)(value + bias);
-            esi += step;
             break;
-        }
-        case 7: {
-            /* Divide by 12 */
-            value = esi;
-            if (value >= 0) value += 6;
-            else if (value < -0x6000) value = -0x6000;
-            else value -= 5;
-            value = value / 12;
-            scale_table_16[i] = (int16_t)(value + bias);
-            esi += step;
-            break;
-        }
-        case 8: {
-            /* Divide by 16 */
+        case 8:
             value = esi;
             if (value >= 0) value += 8;
             else value -= 7;
             value = value / 16;
-            scale_table_16[i] = (int16_t)(value + bias);
-            esi += step;
             break;
-        }
-        default: {
-            /* Fallback: simple linear */
+        default:
             value = esi;
             if (value < (int32_t)0xFFFFF800) value = (int32_t)0xFFFFF800;
-            scale_table_16[i] = (int16_t)(value + bias);
-            esi += step;
             break;
         }
-        }
+        table[i] = (int16_t)(value + bias);
+        esi += step;
     }
+}
+
+static void init_scale_table_16(const FTCParams *params)
+{
+    int word0 = params->ctx_count > 0 ? params->ctx[0].dimension : 6;
+    int num_entries = 1 << params->scale_bits;
+    if (num_entries > 256) num_entries = 256;
+    int16_t scale_base = params->ctx_count > 0 ? params->ctx[0].scale_base : -2048;
+    int ctx_byte3 = params->ctx_count > 0 ? params->ctx[0].extra_flag : 0;
+
+    /* Build luma scale table (word0 from context, e.g. 6 = divide-by-10) */
+    init_scale_table_for_word0(scale_table_16, word0, num_entries,
+                                scale_base, (int16_t)ctx_byte3);
+
+    /* Build chroma scale table: sub-header bytes[7:8] may specify word0=8 */
+    int chroma_word0 = 8; /* divide-by-16: maps 128 entries to FP range 0-254 */
+    init_scale_table_for_word0(scale_table_chroma, chroma_word0, num_entries,
+                                scale_base, (int16_t)ctx_byte3);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1067,12 +1003,13 @@ static int decode_ftc(const char *input_path, const char *output_path, int debug
         }
     }
 
+    /* Use chroma scale table (word0=8) for blue/red flat-fill */
     for (int i = 0; i < num_blue_decoded; i++) {
         BlockDesc *b = &blocks_blue[i];
         int si = b->scale_idx;
         if (si < 0) si = 0;
         if (si >= total_scale_entries) si = total_scale_entries - 1;
-        int fp = scale_table_16[si] >> 4;
+        int fp = scale_table_chroma[si] >> 4;
         if (fp < 0) fp = 0;
         if (fp > 255) fp = 255;
 
@@ -1091,7 +1028,7 @@ static int decode_ftc(const char *input_path, const char *output_path, int debug
         int si = b->scale_idx;
         if (si < 0) si = 0;
         if (si >= total_scale_entries) si = total_scale_entries - 1;
-        int fp = scale_table_16[si] >> 4;
+        int fp = scale_table_chroma[si] >> 4;
         if (fp < 0) fp = 0;
         if (fp > 255) fp = 255;
 
@@ -1105,11 +1042,10 @@ static int decode_ftc(const char *input_path, const char *output_path, int debug
         }
     }
 
-    fprintf(stderr, "  Green: blocks=%d\n", num_green_decoded);
+    fprintf(stderr, "  Green: %d, Blue: %d, Red: %d blocks\n",
+            num_green_decoded, num_blue_decoded, num_red_decoded);
 
-    /* Output grayscale BMP from green (luma) channel.
-     * Chroma channels not yet producing correct colors;
-     * grayscale output provides usable luma-only images. */
+    /* Output BMP: grayscale from luma, or experimental color */
     int bgr_stride = width * 3;
     uint8_t *bgr = (uint8_t *)calloc(1, bgr_stride * height);
     if (!bgr) {
@@ -1117,7 +1053,7 @@ static int decode_ftc(const char *input_path, const char *output_path, int debug
         goto cleanup;
     }
 
-    /* Write green channel as grayscale (B=G=R) */
+    /* Grayscale output from luma channel (reliable) */
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             uint8_t g = cur_green[y * luma_buf_w + x];

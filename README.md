@@ -278,10 +278,10 @@ ftcdecode -d input.ftc output.bmp
 - [x] 24-bit block decoding (7 scale + 14 offset + 3 opcode)
 - [x] 4×4 superblock scan order (padded grid)
 - [x] 16-bit scale table computation (word0=6 divide-by-10 formula)
-- [x] Flat-fill decode (fixed-point pixel values) — **produces recognizable luma images**
-- [ ] Fractal IFS iteration — DLL uses 1024-byte lookup tables and arithmetic coding; needs deeper RE
-- [ ] Chroma channel decode — channels readable but high noise; may need separate scale table (word0=8)
-- [ ] Color space conversion (GBR vs YCbCr TBD)
+- [x] Flat-fill decode — **produces recognizable grayscale images** for all test files
+- [x] Chroma scale table (word0=8 divide-by-16, separate from luma word0=6)
+- [ ] Color output — chroma blocks decoded but high spatial noise; DLL pixel transform uses 1024-byte LUT + arithmetic coder, needs deeper RE
+- [ ] Fractal IFS iteration — DLL applies one-shot transform via LUT, not iterative convergence as initially assumed
 
 ## Tools Needed
 
