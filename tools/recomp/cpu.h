@@ -93,6 +93,67 @@ static inline uint32_t flags_dec32(CPU *c, uint32_t a) {
     uint32_t keepcf = c->cf, r = flags_sub32(c, a, 1); c->cf = keepcf; return r;
 }
 
+/* ---- width-generic flag helpers (sz in {1,2,4}); used by generated code ---- */
+static inline uint32_t mask_sz(int sz) { return sz == 1 ? 0xFFu : sz == 2 ? 0xFFFFu : 0xFFFFFFFFu; }
+static inline uint32_t sign_sz(int sz) { return sz == 1 ? 0x80u : sz == 2 ? 0x8000u : 0x80000000u; }
+
+static inline uint32_t flags_sub(CPU *c, uint32_t a, uint32_t b, int sz) {
+    uint32_t m = mask_sz(sz), s = sign_sz(sz);
+    a &= m; b &= m; uint32_t r = (a - b) & m;
+    c->cf = (a < b); c->zf = (r == 0); c->sf = (r & s) != 0;
+    c->of = (((a ^ b) & (a ^ r)) & s) != 0; c->af = ((a ^ b ^ r) & 0x10) != 0;
+    c->pf = parity8((uint8_t)r); return r;
+}
+static inline uint32_t flags_add(CPU *c, uint32_t a, uint32_t b, int sz) {
+    uint32_t m = mask_sz(sz), s = sign_sz(sz);
+    a &= m; b &= m; uint32_t r = (a + b) & m;
+    c->cf = (r < a); c->zf = (r == 0); c->sf = (r & s) != 0;
+    c->of = ((~(a ^ b) & (a ^ r)) & s) != 0; c->af = ((a ^ b ^ r) & 0x10) != 0;
+    c->pf = parity8((uint8_t)r); return r;
+}
+static inline uint32_t flags_logicz(CPU *c, uint32_t r, int sz) {
+    uint32_t m = mask_sz(sz), s = sign_sz(sz); r &= m;
+    c->cf = 0; c->of = 0; c->sf = (r & s) != 0; c->zf = (r == 0);
+    c->pf = parity8((uint8_t)r); return r;
+}
+static inline uint32_t flags_incs(CPU *c, uint32_t a, int sz) {
+    uint32_t keep = c->cf, r = flags_add(c, a, 1, sz); c->cf = keep; return r;
+}
+static inline uint32_t flags_decs(CPU *c, uint32_t a, int sz) {
+    uint32_t keep = c->cf, r = flags_sub(c, a, 1, sz); c->cf = keep; return r;
+}
+static inline uint32_t flags_adc(CPU *c, uint32_t a, uint32_t b, int sz) {
+    uint32_t m = mask_sz(sz), s = sign_sz(sz), cin = c->cf & 1;
+    a &= m; b &= m; uint64_t full = (uint64_t)a + b + cin; uint32_t r = (uint32_t)full & m;
+    c->cf = (full >> (sz * 8)) & 1; c->zf = (r == 0); c->sf = (r & s) != 0;
+    c->of = ((~(a ^ b) & (a ^ r)) & s) != 0; c->af = ((a ^ b ^ r) & 0x10) != 0;
+    c->pf = parity8((uint8_t)r); return r;
+}
+static inline uint32_t flags_sbb(CPU *c, uint32_t a, uint32_t b, int sz) {
+    uint32_t m = mask_sz(sz), s = sign_sz(sz), bin = c->cf & 1;
+    a &= m; b &= m; uint64_t full = (uint64_t)a - b - bin; uint32_t r = (uint32_t)full & m;
+    c->cf = (full >> (sz * 8)) & 1; c->zf = (r == 0); c->sf = (r & s) != 0;
+    c->of = (((a ^ b) & (a ^ r)) & s) != 0; c->af = ((a ^ b ^ r) & 0x10) != 0;
+    c->pf = parity8((uint8_t)r); return r;
+}
+
+static inline uint32_t op_shl(CPU *c, uint32_t v, uint32_t cnt, int sz) {
+    uint32_t m = mask_sz(sz); cnt &= 31; if (!cnt) return v & m;
+    c->cf = (v >> (sz * 8 - cnt)) & 1; uint32_t r = (v << cnt) & m;
+    c->zf = (r == 0); c->sf = (r & sign_sz(sz)) != 0; c->pf = parity8((uint8_t)r); return r;
+}
+static inline uint32_t op_shr(CPU *c, uint32_t v, uint32_t cnt, int sz) {
+    uint32_t m = mask_sz(sz); v &= m; cnt &= 31; if (!cnt) return v;
+    c->cf = (v >> (cnt - 1)) & 1; uint32_t r = v >> cnt;
+    c->zf = (r == 0); c->sf = (r & sign_sz(sz)) != 0; c->pf = parity8((uint8_t)r); return r;
+}
+static inline uint32_t op_sar(CPU *c, uint32_t v, uint32_t cnt, int sz) {
+    uint32_t m = mask_sz(sz), s = sign_sz(sz); v &= m; cnt &= 31; if (!cnt) return v;
+    uint32_t ext = (v & s) ? (m << (sz * 8 - cnt)) & m : 0;
+    c->cf = (v >> (cnt - 1)) & 1; uint32_t r = ((v >> cnt) | ext) & m;
+    c->zf = (r == 0); c->sf = (r & s) != 0; c->pf = parity8((uint8_t)r); return r;
+}
+
 /* ---- shifts (set flags like x86; count masked to 5 bits) ---- */
 static inline uint32_t shr32(CPU *c, uint32_t v, uint32_t cnt) {
     cnt &= 31; if (!cnt) return v;

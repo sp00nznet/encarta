@@ -8,8 +8,6 @@
  */
 #include "cpu.h"
 
-uint32_t g_image_delta = 0;
-
 /* sub_11019780 - VLC / Exp-Golomb count reader (__thiscall, this in ECX).
  * Reads a unary prefix of 1-bits, then that many suffix bits, from the
  * bitstream pointed to by [this+0x3C] at bit position [this+0x40]. */
