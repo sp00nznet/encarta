@@ -22,9 +22,10 @@ typedef struct {
     uint32_t eip;
     /* flags as discrete bits (0/1) */
     uint32_t cf, zf, sf, of, pf, af;
-    /* x87: stack of doubles, top index (st0 == st[top]) */
+    /* x87: register-stack of doubles. st0 == st[fpu_top]; push pre-decrements. */
     double   st[8];
     int      fpu_top;
+    uint32_t fpu_sw;   /* status word: only C0/C1/C2/C3 condition bits modelled */
 } CPU;
 
 /* ---- partial register access (preserve unaffected bits, like x86) ---- */
@@ -42,6 +43,16 @@ static inline uint32_t rd32(uint32_t a) { return *(uint32_t *)(uintptr_t)a; }
 static inline void wr8 (uint32_t a, uint8_t  v) { *(uint8_t  *)(uintptr_t)a = v; }
 static inline void wr16(uint32_t a, uint16_t v) { *(uint16_t *)(uintptr_t)a = v; }
 static inline void wr32(uint32_t a, uint32_t v) { *(uint32_t *)(uintptr_t)a = v; }
+
+/* ---- EFLAGS pack/unpack (modelled bits only) ---- */
+static inline uint32_t eflags_pack(CPU *c) {
+    return 0x202u | (c->cf) | (c->pf << 2) | (c->af << 4) |
+           (c->zf << 6) | (c->sf << 7) | (c->of << 11);
+}
+static inline void eflags_unpack(CPU *c, uint32_t v) {
+    c->cf = v & 1; c->pf = (v >> 2) & 1; c->af = (v >> 4) & 1;
+    c->zf = (v >> 6) & 1; c->sf = (v >> 7) & 1; c->of = (v >> 11) & 1;
+}
 
 /* ---- stack ---- */
 static inline void push32(CPU *c, uint32_t v) { c->esp -= 4; wr32(c->esp, v); }
@@ -175,6 +186,39 @@ static inline uint8_t shr8(CPU *c, uint8_t v, uint32_t cnt) {
     uint8_t r = (cnt < 8) ? (uint8_t)(v >> cnt) : 0;
     c->zf = (r == 0); c->sf = (r >> 7) & 1; c->pf = parity8(r);
     return r;
+}
+
+/* ---- x87 FPU ---- */
+#include <math.h>
+static inline void   fpush(CPU *c, double v) { c->fpu_top = (c->fpu_top - 1) & 7; c->st[c->fpu_top] = v; }
+static inline double fpop(CPU *c) { double v = c->st[c->fpu_top]; c->fpu_top = (c->fpu_top + 1) & 7; return v; }
+static inline double *fst(CPU *c, int i) { return &c->st[(c->fpu_top + i) & 7]; }
+
+/* float/double/int memory operands (memcpy avoids alignment/aliasing issues) */
+static inline double rdf32(uint32_t a) { float  f; memcpy(&f, (void *)(uintptr_t)a, 4); return (double)f; }
+static inline double rdf64(uint32_t a) { double d; memcpy(&d, (void *)(uintptr_t)a, 8); return d; }
+static inline double rdi16(uint32_t a) { int16_t i; memcpy(&i, (void *)(uintptr_t)a, 2); return (double)i; }
+static inline double rdi32(uint32_t a) { int32_t i; memcpy(&i, (void *)(uintptr_t)a, 4); return (double)i; }
+static inline double rdi64(uint32_t a) { int64_t i; memcpy(&i, (void *)(uintptr_t)a, 8); return (double)i; }
+static inline void   wrf32(uint32_t a, double v) { float  f = (float)v; memcpy((void *)(uintptr_t)a, &f, 4); }
+static inline void   wrf64(uint32_t a, double v) { memcpy((void *)(uintptr_t)a, &v, 8); }
+static inline void   wri32(uint32_t a, double v) { int32_t i = (int32_t)nearbyint(v); memcpy((void *)(uintptr_t)a, &i, 4); }
+static inline void   wri16(uint32_t a, double v) { int16_t i = (int16_t)nearbyint(v); memcpy((void *)(uintptr_t)a, &i, 2); }
+static inline void   wri64(uint32_t a, double v) { int64_t i = (int64_t)nearbyint(v); memcpy((void *)(uintptr_t)a, &i, 8); }
+
+/* fcom/fcomp: set C3/C2/C0 (st0 vs v). Cleared C1. */
+static inline void fcompare(CPU *c, double a, double b) {
+    uint32_t sw = c->fpu_sw & ~0x4700u;
+    if      (a > b)  { /* 000 */ }
+    else if (a < b)  sw |= 0x0100u;          /* C0 */
+    else if (a == b) sw |= 0x4000u;          /* C3 */
+    else             sw |= 0x4700u;          /* unordered: C3|C2|C0 */
+    c->fpu_sw = sw;
+}
+/* sahf: load AH into CF,PF,AF,ZF,SF */
+static inline void do_sahf(CPU *c, uint8_t ah) {
+    c->cf = ah & 1; c->pf = (ah >> 2) & 1; c->af = (ah >> 4) & 1;
+    c->zf = (ah >> 6) & 1; c->sf = (ah >> 7) & 1;
 }
 
 #endif /* DECO_CPU_H */
