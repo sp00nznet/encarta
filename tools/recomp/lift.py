@@ -12,7 +12,7 @@ Usage:
 
 ida_funcs.txt lines: "0xADDR  size  name" (from IDA). Used for function bounds.
 """
-import sys
+import sys, re
 from capstone import *
 from capstone.x86 import *
 
@@ -106,6 +106,13 @@ class Lifter:
         def two(): return ops[0], ops[1]
         def sz0(): return ops[0].size
 
+        if m[0] == "f":
+            return self.fpu(insn)
+        if m == "sahf":
+            return ["do_sahf(c, R8H(c->eax));"]
+        if m == "lahf":
+            return ["SET8H(c->eax, (c->sf<<7)|(c->zf<<6)|(c->af<<4)|(c->pf<<2)|2|c->cf);"]
+
         # arithmetic / logic
         if m == "mov":
             d, s = two(); return [self.dst_write(insn, d, self.src(insn, s))]
@@ -153,6 +160,60 @@ class Lifter:
             return [f"{{ uint32_t _t = {self._read_dst(insn,d)}; " +
                     self.dst_write(insn, d, self.src(insn, s)).rstrip(';') + "; " +
                     self.dst_write(insn, s, "_t").rstrip(';') + "; }"]
+        if m == "pushfd": return ["push32(c, eflags_pack(c));"]
+        if m == "popfd":  return ["eflags_unpack(c, pop32(c));"]
+        if m == "pushf":  return ["push32(c, eflags_pack(c) & 0xFFFFu);"]
+        if m == "popf":   return ["eflags_unpack(c, pop32(c) & 0xFFFFu);"]
+        if m in ("cbw",):  return ["SET16(c->eax, (uint16_t)(int16_t)(int8_t)R8L(c->eax));"]
+        if m in ("cwd",):  return ["SET16(c->edx, (R16(c->eax) & 0x8000u) ? 0xFFFFu : 0u);"]
+        if m in ("wait","fwait","nop"): return [f"/* {m} */"]
+
+        # multiply / divide (1-operand edx:eax forms + imul r,rm[,imm])
+        if m == "mul":
+            s = ops[0]; sz = s.size; v = self.src(insn, s)
+            if sz == 4: return [f"{{ uint64_t _p=(uint64_t)c->eax*(uint32_t)({v}); c->eax=(uint32_t)_p; c->edx=(uint32_t)(_p>>32); c->cf=c->of=(c->edx!=0); }}"]
+            if sz == 2: return [f"{{ uint32_t _p=(uint32_t)R16(c->eax)*(uint16_t)({v}); SET16(c->eax,_p); SET16(c->edx,_p>>16); c->cf=c->of=((_p>>16)!=0); }}"]
+            return [f"{{ uint16_t _p=(uint16_t)R8L(c->eax)*(uint8_t)({v}); SET16(c->eax,_p); c->cf=c->of=((_p>>8)!=0); }}"]
+        if m == "imul":
+            if len(ops) == 1:
+                s = ops[0]; sz = s.size; v = self.src(insn, s)
+                if sz == 4: return [f"{{ int64_t _p=(int64_t)(int32_t)c->eax*(int32_t)({v}); c->eax=(uint32_t)_p; c->edx=(uint32_t)((uint64_t)_p>>32); c->cf=c->of=((int32_t)_p!=_p); }}"]
+                if sz == 2: return [f"{{ int32_t _p=(int32_t)(int16_t)R16(c->eax)*(int16_t)({v}); SET16(c->eax,_p); SET16(c->edx,_p>>16); c->cf=c->of=((int16_t)_p!=_p); }}"]
+                return [f"{{ int16_t _p=(int16_t)(int8_t)R8L(c->eax)*(int8_t)({v}); SET16(c->eax,_p); c->cf=c->of=((int8_t)_p!=_p); }}"]
+            d = ops[0]; sz = d.size; cast = {1:"int8_t",2:"int16_t",4:"int32_t"}[sz]
+            if len(ops) == 2: a = self._read_dst(insn, d); b = self.src(insn, ops[1])
+            else:             a = self.src(insn, ops[1]); b = self.src(insn, ops[2])
+            return [f"{{ int64_t _p=(int64_t)({cast})({a})*({cast})({b}); " +
+                    self.dst_write(insn, d, "(uint32_t)_p").rstrip(';') + f"; c->cf=c->of=(({cast})_p!=_p); }}"]
+        if m in ("div","idiv"):
+            s = ops[0]; sz = s.size; v = self.src(insn, s); sg = (m == "idiv")
+            if sz == 4:
+                if sg: return [f"{{ int64_t _n=(int64_t)(((uint64_t)c->edx<<32)|c->eax); int32_t _d=(int32_t)({v}); c->eax=(uint32_t)(_n/_d); c->edx=(uint32_t)(_n%_d); }}"]
+                return [f"{{ uint64_t _n=((uint64_t)c->edx<<32)|c->eax; uint32_t _d=(uint32_t)({v}); c->eax=(uint32_t)(_n/_d); c->edx=(uint32_t)(_n%_d); }}"]
+            if sz == 2:
+                if sg: return [f"{{ int32_t _n=(int32_t)(((uint32_t)R16(c->edx)<<16)|R16(c->eax)); int16_t _d=(int16_t)({v}); SET16(c->eax,(uint16_t)(int16_t)(_n/_d)); SET16(c->edx,(uint16_t)(int16_t)(_n%_d)); }}"]
+                return [f"{{ uint32_t _n=((uint32_t)R16(c->edx)<<16)|R16(c->eax); uint16_t _d=(uint16_t)({v}); SET16(c->eax,_n/_d); SET16(c->edx,_n%_d); }}"]
+            if sg: return [f"{{ int16_t _n=(int16_t)R16(c->eax); int8_t _d=(int8_t)({v}); SET8L(c->eax,(uint8_t)(int8_t)(_n/_d)); SET8H(c->eax,(uint8_t)(int8_t)(_n%_d)); }}"]
+            return [f"{{ uint16_t _n=R16(c->eax); uint8_t _d=(uint8_t)({v}); SET8L(c->eax,_n/_d); SET8H(c->eax,_n%_d); }}"]
+
+        # string ops (assume DF=0 / forward; rep prefix loops on ECX)
+        parts = m.split()
+        if parts[0] in ("rep","repe","repz","repne","repnz") or parts[0] in ("movsb","movsd","movsw","stosb","stosd","stosw","scasb","scasd","lodsb","lodsd"):
+            rep = parts[0] if len(parts) > 1 else None
+            base = parts[1] if rep else parts[0]
+            esz = {"b":1,"w":2,"d":4}[base[-1]]
+            wfn = {1:"wr8",2:"wr16",4:"wr32"}[esz]; rfn = {1:"rd8",2:"rd16",4:"rd32"}[esz]
+            areg = {1:"R8L(c->eax)",2:"R16(c->eax)",4:"c->eax"}[esz]
+            if base.startswith("stos"): body = f"{wfn}(c->edi, {areg}); c->edi += {esz};"
+            elif base.startswith("movs"): body = f"{wfn}(c->edi, {rfn}(c->esi)); c->esi += {esz}; c->edi += {esz};"
+            elif base.startswith("lods"): body = f"{('SET8L(c->eax,'+rfn+'(c->esi))') if esz==1 else (('SET16(c->eax,'+rfn+'(c->esi))') if esz==2 else 'c->eax = '+rfn+'(c->esi)')}; c->esi += {esz};"
+            elif base.startswith("scas"):
+                cmp = f"flags_sub(c, {areg}, {rfn}(c->edi), {esz}); c->edi += {esz};"
+                if rep in ("repe","repz"):  return [f"while (c->ecx) {{ c->ecx--; {cmp} if (!c->zf) break; }}"]
+                if rep in ("repne","repnz"):return [f"while (c->ecx) {{ c->ecx--; {cmp} if (c->zf) break; }}"]
+                return [cmp]
+            if rep: return [f"while (c->ecx) {{ {body} c->ecx--; }}"]
+            return [body]
 
         # stack
         if m == "push":
@@ -187,6 +248,82 @@ class Lifter:
             return ["c->esp = c->ebp; c->ebp = pop32(c);"]
 
         return [f"/* TODO {m} {insn.op_str} */ abort();"]
+
+    # ---- x87 FPU ----
+    def _st_idx(self, op):
+        mm = re.match(r"st\((\d)\)", self.md.reg_name(op.reg))
+        return int(mm.group(1)) if mm else 0
+
+    def _fmem(self, insn, op, kind):
+        a = self.addr_expr(insn, op); sz = op.size
+        if kind == "f":  return f"rdf32({a})" if sz == 4 else f"rdf64({a})"
+        return {2: f"rdi16({a})", 4: f"rdi32({a})", 8: f"rdi64({a})"}[sz]
+
+    def fpu(self, insn):
+        m = insn.mnemonic; ops = insn.operands
+        memop = ops[0] if ops and ops[0].type == X86_OP_MEM else None
+
+        if m in ("fld",):
+            if memop: return [f"fpush(c, {self._fmem(insn, memop, 'f')});"]
+            return [f"fpush(c, *fst(c, {self._st_idx(ops[0])}));"]
+        if m in ("fild",):
+            return [f"fpush(c, {self._fmem(insn, memop, 'i')});"]
+        if m in ("fldz",): return ["fpush(c, 0.0);"]
+        if m in ("fld1",): return ["fpush(c, 1.0);"]
+        if m in ("fst", "fstp"):
+            pop = "; fpop(c);" if m == "fstp" else ";"
+            if memop:
+                sz = memop.size; a = self.addr_expr(insn, memop)
+                st = "wrf32" if sz == 4 else "wrf64"
+                return [f"{st}({a}, *fst(c, 0)){pop}"]
+            return [f"*fst(c, {self._st_idx(ops[0])}) = *fst(c, 0){pop}"]
+        if m in ("fist", "fistp"):
+            pop = "; fpop(c);" if m == "fistp" else ";"
+            sz = memop.size; a = self.addr_expr(insn, memop)
+            st = {2: "wri16", 4: "wri32", 8: "wri64"}[sz]
+            return [f"{st}({a}, *fst(c, 0)){pop}"]
+        if m in ("fchs",): return ["*fst(c, 0) = -*fst(c, 0);"]
+        if m in ("fabs",): return ["*fst(c, 0) = fabs(*fst(c, 0));"]
+        if m in ("fxch",):
+            i = self._st_idx(ops[0]) if ops else 1
+            return [f"{{ double _t = *fst(c, 0); *fst(c, 0) = *fst(c, {i}); *fst(c, {i}) = _t; }}"]
+        if m in ("fadd","fsub","fsubr","fmul","fdiv","fdivr",
+                 "faddp","fsubp","fsubrp","fmulp","fdivp","fdivrp"):
+            pops = m.endswith("p"); base = m[:-1] if pops else m
+            rev = base in ("fsubr","fdivr"); core = base[:-1] if rev else base
+            opc = {"fadd":"+","fsub":"-","fmul":"*","fdiv":"/"}[core]
+            if memop:                              # st0 OP= mem  (no pop for mem form)
+                src = self._fmem(insn, memop, "f"); dst = "(*fst(c, 0))"
+                expr = f"{src} {opc} {dst}" if rev else f"{dst} {opc} {src}"
+                return [f"*fst(c, 0) = {expr};"]
+            # register form: default dst st(0) when single operand
+            if len(ops) == 2:
+                a = self._st_idx(ops[0]); b = self._st_idx(ops[1])
+            else:
+                a = 0; b = self._st_idx(ops[0]) if ops else 1
+            dst = f"(*fst(c, {a}))"; src = f"(*fst(c, {b}))"
+            expr = f"{src} {opc} {dst}" if rev else f"{dst} {opc} {src}"
+            line = f"*fst(c, {a}) = {expr};"
+            return [line + (" fpop(c);" if pops else "")]
+        if m in ("fcom","fcomp","fcompp"):
+            if memop: src = self._fmem(insn, memop, "f")
+            elif ops: src = f"*fst(c, {self._st_idx(ops[0])})"
+            else: src = "*fst(c, 1)"
+            out = [f"fcompare(c, *fst(c, 0), {src});"]
+            if m == "fcomp": out.append("fpop(c);")
+            if m == "fcompp": out += ["fpop(c);", "fpop(c);"]
+            return out
+        if m == "fnstsw":
+            if ops and ops[0].type == X86_OP_REG:   # ax
+                return ["SET16(c->eax, (uint16_t)c->fpu_sw);"]
+            return [self.wr(insn, ops[0], "(uint16_t)c->fpu_sw")]
+        if m == "fnstcw":
+            return [self.wr(insn, ops[0], "0x027Fu")]   # default control word
+        if m in ("fldcw", "fwait", "wait", "fnclex", "fclex", "fninit"):
+            return [f"/* {m} ignored */"]
+        if m in ("fldenv", "fnstenv"):
+            return [f"/* {m} ignored (no FP exceptions modelled) */"]
+        return [f"/* TODO fpu {m} {insn.op_str} */ abort();"]
 
     def _read_dst(self, insn, op):
         # read a dst operand (for read-modify-write)
