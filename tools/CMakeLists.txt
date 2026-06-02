@@ -1,6 +1,7 @@
 add_subdirectory(strdump)
 add_subdirectory(m20dump)
 add_subdirectory(fifdecode)
+add_subdirectory(decooracle)
 add_subdirectory(spamdump)
 add_subdirectory(datdump)
 add_subdirectory(ftcdecode)

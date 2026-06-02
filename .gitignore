@@ -26,3 +26,7 @@ spam_output/
 fif_test/*.bmp
 fif_test/*.png
 fif_test/picon_extract/
+
+# Oracle golden references: keep traces + crc snapshot, exclude regenerable images
+fif_test/oracle_out/*.png
+fif_test/oracle_out/*.bmp
