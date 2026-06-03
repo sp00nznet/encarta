@@ -182,6 +182,10 @@ class Lifter:
             return [f"{{ uint32_t _t = {self._read_dst(insn,d)}; " +
                     self.dst_write(insn, d, self.src(insn, s)).rstrip(';') + "; " +
                     self.dst_write(insn, s, "_t").rstrip(';') + "; }"]
+        if m.startswith("set") and m not in ("setssbsy",):   # setcc r/m8
+            cond = self._cond("j" + m[3:])
+            if cond is not None:
+                return [self.dst_write(insn, ops[0], f"(({cond}) ? 1 : 0)")]
         if m == "pushfd": return ["push32(c, eflags_pack(c));"]
         if m == "popfd":  return ["eflags_unpack(c, pop32(c));"]
         if m == "pushf":  return ["push32(c, eflags_pack(c) & 0xFFFFu);"]
@@ -344,6 +348,18 @@ class Lifter:
             expr = f"{src} {opc} {dst}" if rev else f"{dst} {opc} {src}"
             line = f"*fst(c, {a}) = {expr};"
             return [line + (" fpop(c);" if pops else "")]
+        if m in ("fiadd","fisub","fisubr","fimul","fidiv","fidivr"):
+            src = self._fmem(insn, memop, "i")          # (double) of an integer mem operand
+            core = "f" + m[2:]                          # fidiv -> fdiv, fiadd -> fadd, ...
+            rev = core in ("fsubr","fdivr"); base = core[:-1] if rev else core
+            opc = {"fadd":"+","fsub":"-","fmul":"*","fdiv":"/"}[base]
+            dst = "(*fst(c, 0))"
+            expr = f"{src} {opc} {dst}" if rev else f"{dst} {opc} {src}"
+            return [f"*fst(c, 0) = {expr};"]
+        if m in ("ficom","ficomp"):
+            out = [f"fcompare(c, *fst(c, 0), {self._fmem(insn, memop, 'i')});"]
+            if m == "ficomp": out.append("fpop(c);")
+            return out
         if m in ("fcom","fcomp","fcompp"):
             if memop: src = self._fmem(insn, memop, "f")
             elif ops: src = f"*fst(c, {self._st_idx(ops[0])})"
