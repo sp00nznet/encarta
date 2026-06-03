@@ -258,6 +258,7 @@ cmake --build build --config Release --target m20dump
 | `ftcdecode` | `tools/ftcdecode/` | Clean-room FTC/FTT/FIF image decoder | Working (FTC grayscale, FTT/FIF perfect) |
 | `m20dump` | `tools/m20dump/` | M20/MVB 2.0 container extractor | Working |
 | `mvbtext` | `tools/mvbtext/` | Encarta article title/text extractor (MVB 2.0) | Titles ✓; topic bodies partial ([details](tools/mvbtext/README.md)) |
+| `encextract` | `tools/encextract/` | End-to-end pipeline: disc → decoded image gallery + titles + HTML | Working ([details](tools/encextract/README.md)) |
 | `strdump` | `tools/strdump/` | STR string table dumper | Working |
 | `spamdump` | `tools/spamdump/` | SPAM multimedia format dumper | Working |
 | `datdump` | `tools/datdump/` | DAT configuration dumper | Working |
