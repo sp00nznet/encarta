@@ -60,10 +60,16 @@ function boundaries. Capstone supplies the per-instruction disassembly.
 
 ## Status / future
 
-- [x] Decode path lifted, pixel-exact
+- [x] Decode path lifted, pixel-exact (FTC mode `01 01 02 01`, self-contained)
 - [x] Setup path lifted (whole pipeline recompiled)
 - [x] Data-only standalone mode (no original code executed)
+- [x] FTC mode `04 03 04 01` (FTT-referenced) lifted — 110-function closure,
+      decodes real PICON content to clean full colour
 - [ ] Clean-room **regeneration** of the constant tables (lift the table
       builders) to remove the runtime dependency on the DLL data entirely
 - [ ] Non-full-resolution scaling paths and the `"FIFF"` FIF variant
 - [ ] Clean public C API + integration into a user-facing decoder
+
+The recomp decodes both FTC encoding modes found in PICON.M20. For mode-04 it is
+verified more robust than the DLL-bridge oracle (which exhibits a chroma-speckle
+divergence under standalone setup); the recomp produces the correct clean image.
