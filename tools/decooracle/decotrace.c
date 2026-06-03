@@ -197,6 +197,29 @@ int main(int argc, char **argv)
     int hd = 0, w = 0, hgt = 0, ex = 0;
     if (Open(&hd) || !hd) { fprintf(stderr, "open failed\n"); return 1; }
     if (SetFIF(hd, data, (int)fsz)) { fprintf(stderr, "setfif failed\n"); return 1; }
+    {   /* load referenced FTT (mode-04 images) from the input's directory */
+        typedef int (__cdecl *pfnGN)(int, char *);
+        typedef int (__cdecl *pfnSF)(int, const void *, int);
+        pfnGN GetFttName = (pfnGN)GetProcAddress(h, "GetFIFFTTFileName");
+        pfnSF SetFtt     = (pfnSF)GetProcAddress(h, "SetFTTBuffer");
+        char fttname[300] = {0};
+        if (GetFttName && SetFtt) {
+            GetFttName(hd, fttname);
+            if (fttname[0]) {
+                char *b1 = strrchr(fttname, '\\'), *b2 = strrchr(fttname, '/');
+                const char *bn = fttname;
+                if (b1 && b1 + 1 > bn) bn = b1 + 1;
+                if (b2 && b2 + 1 > bn) bn = b2 + 1;
+                char p[512]; const char *s1 = strrchr(in, '\\'), *s2 = strrchr(in, '/');
+                const char *sep = (s2 > s1) ? s2 : s1;
+                if (sep) snprintf(p, sizeof p, "%.*s%s", (int)(sep - in + 1), in, bn);
+                else snprintf(p, sizeof p, "%s", bn);
+                long ftsz = 0; uint8_t *ftt = read_file(p, &ftsz);
+                if (ftt) { fprintf(stderr, "FTT '%s' -> SetFTTBuffer %d\n", bn, SetFtt(hd, ftt, (int)ftsz)); }
+                else fprintf(stderr, "FTT '%s' not found at %s\n", bn, p);
+            }
+        }
+    }
     if (GetRes(hd, &w, &hgt, &ex) || w <= 0 || hgt <= 0) { fprintf(stderr, "getres failed\n"); return 1; }
     SetRes(hd, w, hgt);
     SetFmt(hd, 3, 2, 1, 4, 0);
