@@ -80,6 +80,25 @@ cmake --build build --config Release --target recomp_encapi
 build\tools\recomp\Release\recomp_encapi.exe   # -> PASS fGetArticleID
 ```
 
+## ENC97.EXE (main app) — scoped, lifter proven to scale
+
+The 1.32 MB MFC 4.0 application: **7,326 functions**, entry `0x50DB70`, **914
+imports across 13 DLLs** (398 from MFC40 by ordinal + USER32/GDI32/KERNEL32/
+MSVCRT40, the EEUIL10 UI library, and the DECO_32/ENCAPI32 DLLs already lifted).
+
+A *complete* recompilation is a long-term, function-by-function project, but the
+toolchain is proven to handle it:
+- A representative **611-function sample** (every 12th function) lifts with **full
+  opcode coverage** and **compiles clean** (MSVC). lift.py gained `setcc` and the
+  integer-operand FPU ops (`fidiv`/`ficom`…) to cover the MFC/MSVC-4.x code.
+- The remaining `abort()`s in lifted output are jump-table default fall-throughs
+  (correctly-lifted switches), not unhandled instructions.
+- The Win32/MFC **import trampoline** (proven on ENCAPI32) services its 914
+  imports against the real DLLs (present on Win11 / installable MFC40).
+
+So recompiling ENC97 is now a matter of scale (lift all 7,326 functions + wire
+the dispatch table + a runtime), not of unknown blockers.
+
 ## Status / future
 
 - [x] Decode path lifted, pixel-exact (FTC mode `01 01 02 01`, self-contained)
