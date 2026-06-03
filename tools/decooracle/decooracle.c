@@ -42,6 +42,8 @@ typedef int  (__cdecl *pfnOpen)(int *);
 typedef int  (__cdecl *pfnSetBuf)(int, const void *, int);
 typedef int  (__cdecl *pfnGetRes)(int, int *, int *, int *);
 typedef int  (__cdecl *pfnSetRes)(int, int, int);
+typedef int  (__cdecl *pfnGetFttName)(int, char *);
+typedef int  (__cdecl *pfnSetFtt)(int, const void *, int);
 typedef int  (__cdecl *pfnSetFmt)(int, int, int, int, int, int);
 typedef int  (__cdecl *pfnDecomp)(int, void *, int, int, int, int, int);
 typedef void (__cdecl *pfnClear)(int);
@@ -114,6 +116,8 @@ int main(int argc, char **argv)
     pfnGetRes GetRes = (pfnGetRes)GetProcAddress(h, "GetOriginalResolution");
     pfnSetRes SetRes = (pfnSetRes)GetProcAddress(h, "SetOutputResolution");
     pfnSetFmt SetFmt = (pfnSetFmt)GetProcAddress(h, "SetOutputFormat");
+    pfnGetFttName GetFttName = (pfnGetFttName)GetProcAddress(h, "GetFIFFTTFileName");
+    pfnSetFtt     SetFtt     = (pfnSetFtt)GetProcAddress(h, "SetFTTBuffer");
     pfnDecomp Decomp = (pfnDecomp)GetProcAddress(h, "DecompressToBuffer");
     pfnClear  Clear  = (pfnClear) GetProcAddress(h, "ClearFIFBuffer");
     pfnClose  Close  = (pfnClose) GetProcAddress(h, "CloseDecompressor");
@@ -135,6 +139,33 @@ int main(int argc, char **argv)
     rc = SetFIF(hd, data, (int)fsz);
     fprintf(stderr, "SetFIFBuffer -> %d\n", rc);
     if (rc != 0) { fprintf(stderr, "  (input rejected: not FTC\\0/FIF\\0 or too small)\n"); return 1; }
+
+    /* Many real FTC images reference a shared fractal transform table (FTT).
+     * Read the referenced name and load it from the input's directory. */
+    if (GetFttName && SetFtt) {
+        char fttname[300] = {0};
+        GetFttName(hd, fttname);
+        if (fttname[0]) {
+            char path[512];
+            /* the referenced name is a build-time absolute path; use its basename */
+            char *b1 = strrchr(fttname, '\\'); char *b2 = strrchr(fttname, '/');
+            const char *bn = fttname;
+            if (b1 && b1 + 1 > bn) bn = b1 + 1;
+            if (b2 && b2 + 1 > bn) bn = b2 + 1;
+            const char *sep = strrchr(in, '\\'); const char *s2 = strrchr(in, '/');
+            if (s2 > sep) sep = s2;
+            if (sep) snprintf(path, sizeof path, "%.*s%s", (int)(sep - in + 1), in, bn);
+            else     snprintf(path, sizeof path, "%s", bn);
+            long ftsz = 0; uint8_t *ftt = read_file(path, &ftsz);
+            if (ftt) {
+                int fr = SetFtt(hd, ftt, (int)ftsz);
+                fprintf(stderr, "FTT '%s' (%ld bytes) SetFTTBuffer -> %d\n", fttname, ftsz, fr);
+                free(ftt);
+            } else {
+                fprintf(stderr, "FTT '%s' referenced but not found at %s\n", fttname, path);
+            }
+        }
+    }
 
     int w = 0, hgt = 0, extra = 0;
     rc = GetRes(hd, &w, &hgt, &extra);
