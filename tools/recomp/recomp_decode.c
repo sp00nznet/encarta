@@ -114,6 +114,35 @@ static uint32_t call_lifted(lfn fn, const uint32_t *args, int n)
     return c.eax;
 }
 
+/* Map the DLL's sections as DATA only (no DllMain, no original code executed),
+ * at its preferred base 0x11000000. Returns base or 0. Fixes the GetVersion
+ * IAT slot so the lifted indirect call resolves. */
+static uint32_t map_dll_image(const char *path)
+{
+    long sz = 0; FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END); sz = ftell(f); fseek(f, 0, SEEK_SET);
+    uint8_t *file = malloc(sz);
+    if (fread(file, 1, sz, f) != (size_t)sz) { fclose(f); free(file); return 0; }
+    fclose(f);
+    PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)file;
+    PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)(file + dos->e_lfanew);
+    uint32_t imgsz = nt->OptionalHeader.SizeOfImage;
+    void *base = VirtualAlloc((void *)0x11000000u, imgsz, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (base != (void *)0x11000000u) { free(file); return 0; }   /* need preferred base (delta=0) */
+    memcpy(base, file, nt->OptionalHeader.SizeOfHeaders);
+    PIMAGE_SECTION_HEADER s = IMAGE_FIRST_SECTION(nt);
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++)
+        if (s[i].SizeOfRawData)
+            memcpy((uint8_t *)base + s[i].VirtualAddress, file + s[i].PointerToRawData, s[i].SizeOfRawData);
+    free(file);
+    /* fix the one imported indirect target the lifted code uses */
+    HMODULE k = GetModuleHandleA("kernel32.dll");
+    *(uint32_t *)0x110220DCu = (uint32_t)(uintptr_t)GetProcAddress(k, "GetVersion");
+    g_image_size = imgsz;
+    return 0x11000000u;
+}
+
 static uint8_t *read_file(const char *p, long *n) {
     FILE *f = fopen(p, "rb"); if (!f) return NULL;
     fseek(f, 0, SEEK_END); *n = ftell(f); fseek(f, 0, SEEK_SET);
@@ -129,13 +158,21 @@ int main(int argc, char **argv)
     const char *outpng = (argc >= 4) ? argv[3] : NULL;
     const char *dll = (argc >= 5) ? argv[4] : "C:\\encarta\\analysis\\DECO_32.DLL";
 
-    HMODULE h = LoadLibraryA(dll);
-    if (!h) { fprintf(stderr, "cannot load %s\n", dll); return 1; }
-    uint32_t base = (uint32_t)(uintptr_t)h;
-    g_image_delta = base - 0x11000000u;
-    PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)h;
-    PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)((uint8_t *)h + dos->e_lfanew);
-    g_image_size = nt->OptionalHeader.SizeOfImage;
+    int use_map = (getenv("RECOMP_MAP") != NULL);
+    if (use_map) {
+        uint32_t base = map_dll_image(dll);
+        if (!base) { fprintf(stderr, "manual map failed (need base 0x11000000 free)\n"); return 1; }
+        g_image_delta = 0;
+        fprintf(stderr, "data-only map at 0x11000000 (no DllMain, no original code)\n");
+    } else {
+        HMODULE h = LoadLibraryA(dll);
+        if (!h) { fprintf(stderr, "cannot load %s\n", dll); return 1; }
+        uint32_t base = (uint32_t)(uintptr_t)h;
+        g_image_delta = base - 0x11000000u;
+        PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)h;
+        PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)((uint8_t *)h + dos->e_lfanew);
+        g_image_size = nt->OptionalHeader.SizeOfImage;
+    }
 
     long fsz = 0; uint8_t *data = read_file(in, &fsz);
     if (!data) { fprintf(stderr, "cannot read %s\n", in); return 1; }
@@ -186,6 +223,5 @@ int main(int argc, char **argv)
     else        printf("pixcrc=%08X\n", crc);
     if (outpng) { write_png_bgr24(outpng, w, hgt, px, stride); fprintf(stderr, "wrote %s\n", outpng); }
 
-    FreeLibrary(h);
     return (expect && !ok) ? 1 : 0;
 }
