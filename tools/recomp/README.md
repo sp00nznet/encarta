@@ -86,18 +86,25 @@ The 1.32 MB MFC 4.0 application: **7,326 functions**, entry `0x50DB70`, **914
 imports across 13 DLLs** (398 from MFC40 by ordinal + USER32/GDI32/KERNEL32/
 MSVCRT40, the EEUIL10 UI library, and the DECO_32/ENCAPI32 DLLs already lifted).
 
-A *complete* recompilation is a long-term, function-by-function project, but the
-toolchain is proven to handle it:
-- A representative **611-function sample** (every 12th function) lifts with **full
-  opcode coverage** and **compiles clean** (MSVC). lift.py gained `setcc` and the
-  integer-operand FPU ops (`fidiv`/`ficom`…) to cover the MFC/MSVC-4.x code.
-- The remaining `abort()`s in lifted output are jump-table default fall-throughs
-  (correctly-lifted switches), not unhandled instructions.
-- The Win32/MFC **import trampoline** (proven on ENCAPI32) services its 914
-  imports against the real DLLs (present on Win11 / installable MFC40).
+**The entire binary lifts to compilable C.** All **7,326 functions** lift with
+**zero unhandled opcodes**, and the complete output (`enc97_full.c`, ~452,000
+lines) **compiles clean** under MSVC (a 6.3 MB object). lift.py gained the last
+MSVC-4.x/MFC opcodes for full coverage: `setcc`, integer-operand x87
+(`fidiv`/`ficom`…), transcendental x87 (`fsqrt`/`fsin`/`fcos`/`fpatan`/…),
+`loop`/`enter`/`lodsw`/`int3`/`cld`, cross-function conditional tail-calls, and
+mid-instruction jump targets routed through dispatch. The ~165 `abort()`s in the
+output are jump-table default fall-throughs (correctly-lifted switches).
 
-So recompiling ENC97 is now a matter of scale (lift all 7,326 functions + wire
-the dispatch table + a runtime), not of unknown blockers.
+Regenerate (no addrs ⇒ lift every function in the funcs file):
+```
+py lift.py ENC97.EXE funcs.txt enc97_full.c
+```
+
+What remains for a *running* recomp is scale + runtime, not unknown blockers:
+build the 7,326-entry dispatch table, wire the Win32/MFC import trampoline
+(proven on ENCAPI32) for its 914 imports, lift/stub EEUIL10, and stand up an
+MFC-integrated launcher. The hard question — "does the lifter handle a 1.3 MB
+MFC app?" — is answered: **yes, the whole thing lifts and compiles.**
 
 ## Status / future
 

@@ -192,7 +192,19 @@ class Lifter:
         if m == "popf":   return ["eflags_unpack(c, pop32(c) & 0xFFFFu);"]
         if m in ("cbw",):  return ["SET16(c->eax, (uint16_t)(int16_t)(int8_t)R8L(c->eax));"]
         if m in ("cwd",):  return ["SET16(c->edx, (R16(c->eax) & 0x8000u) ? 0xFFFFu : 0u);"]
-        if m in ("wait","fwait","nop"): return [f"/* {m} */"]
+        if m in ("wait","fwait","nop","int3","cld","fnop","hint_nop"): return [f"/* {m} */"]
+        if m == "std": return ["/* std (DF=1 unsupported; string ops assume forward) */"]
+        if m == "enter":
+            n = ops[0].imm if ops else 0
+            return [f"push32(c, c->ebp); c->ebp = c->esp; c->esp -= {n};"]
+        if m in ("loop","loope","loopz","loopne","loopnz"):
+            t = ops[0]
+            extra = ""
+            if m in ("loope","loopz"): extra = " && c->zf"
+            elif m in ("loopne","loopnz"): extra = " && !c->zf"
+            if t.type == X86_OP_IMM and t.imm in labels:
+                return [f"c->ecx--; if (c->ecx{extra}) goto L_{t.imm:08X};"]
+            return [f"c->ecx--; if (c->ecx{extra}) {{ dispatch(c, 0x{t.imm:08X}u); return; }}"]
 
         # multiply / divide (1-operand edx:eax forms + imul r,rm[,imm])
         if m == "mul":
@@ -224,7 +236,7 @@ class Lifter:
 
         # string ops (assume DF=0 / forward; rep prefix loops on ECX)
         parts = m.split()
-        if parts[0] in ("rep","repe","repz","repne","repnz") or parts[0] in ("movsb","movsd","movsw","stosb","stosd","stosw","scasb","scasd","lodsb","lodsd"):
+        if parts[0] in ("rep","repe","repz","repne","repnz") or parts[0] in ("movsb","movsd","movsw","stosb","stosd","stosw","scasb","scasd","scasw","lodsb","lodsd","lodsw","cmpsb","cmpsd","cmpsw"):
             rep = parts[0] if len(parts) > 1 else None
             base = parts[1] if rep else parts[0]
             esz = {"b":1,"w":2,"d":4}[base[-1]]
@@ -285,7 +297,9 @@ class Lifter:
             t = ops[0]
             if t.type == X86_OP_IMM and t.imm in labels:
                 return [f"if ({cond}) goto L_{t.imm:08X};"]
-            return [f"/* TODO jcc out-of-func {m} */ abort();"]
+            if t.type == X86_OP_IMM:        # conditional jump to another function (shared epilogue)
+                return [f"if ({cond}) {{ dispatch(c, 0x{t.imm:08X}u); return; }}"]
+            return [f"/* TODO jcc {m} {insn.op_str} */ abort();"]
         if m in ("nop","hint_nop"): return ["/* nop */"]
         if m == "leave":
             return ["c->esp = c->ebp; c->ebp = pop32(c);"]
@@ -327,6 +341,14 @@ class Lifter:
             return [f"{st}({a}, *fst(c, 0)){pop}"]
         if m in ("fchs",): return ["*fst(c, 0) = -*fst(c, 0);"]
         if m in ("fabs",): return ["*fst(c, 0) = fabs(*fst(c, 0));"]
+        if m in ("fsqrt",): return ["*fst(c, 0) = sqrt(*fst(c, 0));"]
+        if m in ("fsin",):  return ["*fst(c, 0) = sin(*fst(c, 0));"]
+        if m in ("fcos",):  return ["*fst(c, 0) = cos(*fst(c, 0));"]
+        if m in ("fptan",): return ["*fst(c, 0) = tan(*fst(c, 0)); fpush(c, 1.0);"]
+        if m in ("fpatan",):return ["*fst(c, 1) = atan2(*fst(c, 1), *fst(c, 0)); fpop(c);"]
+        if m in ("frndint",): return ["*fst(c, 0) = nearbyint(*fst(c, 0));"]
+        if m in ("fscale",): return ["*fst(c, 0) = ldexp(*fst(c, 0), (int)*fst(c, 1));"]
+        if m in ("fsincos",): return ["{ double _s=sin(*fst(c,0)), _c=cos(*fst(c,0)); *fst(c,0)=_s; fpush(c,_c); }"]
         if m in ("fxch",):
             i = self._st_idx(ops[0]) if ops else 1
             return [f"{{ double _t = *fst(c, 0); *fst(c, 0) = *fst(c, {i}); *fst(c, {i}) = _t; }}"]
@@ -416,16 +438,19 @@ class Lifter:
         # collect intra-function branch targets
         end = start + len(code)
         self.func_start, self.func_end = start, end
+        insn_addrs = set(ins.address for ins in insns)   # only these can be goto labels
         labels = set()
         for ins in insns:
-            if ins.mnemonic.startswith("j") or ins.mnemonic in ("loop","loopne","loope"):
+            if ins.mnemonic.startswith("j") or ins.mnemonic in ("loop","loopne","loope","loopz","loopnz","loope"):
                 for op in ins.operands:
-                    if op.type == X86_OP_IMM and start <= op.imm < end:
+                    # only label real instruction boundaries; targets that land
+                    # mid-instruction or outside the func are handled via dispatch
+                    if op.type == X86_OP_IMM and op.imm in insn_addrs:
                         labels.add(op.imm)
                     elif op.type == X86_OP_MEM and ins.mnemonic == "jmp":
                         d = op.mem.disp & 0xffffffff      # jump table base
                         if self.in_image(d):
-                            tgts = self.resolve_jumptable(d)
+                            tgts = [t for t in self.resolve_jumptable(d) if t in insn_addrs]
                             if tgts:
                                 self.jumptables[ins.address] = tgts
                                 labels.update(tgts)
@@ -453,7 +478,11 @@ def load_bounds(path):
 
 def main():
     dll, funcs_txt, out_c = sys.argv[1], sys.argv[2], sys.argv[3]
-    targets = [int(x, 16) for x in sys.argv[4:]]
+    # targets: explicit 0xADDR args, or "@file" of addrs, or (none) => ALL in funcs_txt
+    if len(sys.argv) >= 5 and sys.argv[4].startswith("@"):
+        targets = [int(x, 16) for x in open(sys.argv[4][1:]).read().split()]
+    else:
+        targets = [int(x, 16) for x in sys.argv[4:]]
     import pefile
     pe = pefile.PE(dll, fast_load=True)
     global IMAGE_BASE
@@ -465,6 +494,9 @@ def main():
         rva = va - IMAGE_BASE
         return pe.get_data(rva, n)
     bounds = load_bounds(funcs_txt)
+    if not targets:                       # no addrs given => lift every function
+        targets = sorted(bounds)
+        print(f"[*] no targets given; lifting ALL {len(targets)} functions", file=sys.stderr)
     lifter = Lifter(dll, image_size, read_va)
 
     chunks = ["/* AUTO-GENERATED by lift.py - do not edit */",
