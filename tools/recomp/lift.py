@@ -16,7 +16,7 @@ import sys, re
 from capstone import *
 from capstone.x86 import *
 
-IMAGE_BASE = 0x11000000
+IMAGE_BASE = 0x11000000   # overridden from the PE's ImageBase in main()
 
 # ---- register field mapping ----
 R32 = {"eax","ecx","edx","ebx","esp","ebp","esi","edi"}
@@ -440,7 +440,10 @@ def main():
     targets = [int(x, 16) for x in sys.argv[4:]]
     import pefile
     pe = pefile.PE(dll, fast_load=True)
+    global IMAGE_BASE
+    IMAGE_BASE = pe.OPTIONAL_HEADER.ImageBase
     image_size = pe.OPTIONAL_HEADER.SizeOfImage
+    print(f"[*] image base {IMAGE_BASE:#x}, size {image_size:#x}", file=sys.stderr)
     # flat reader: VA -> bytes
     def read_va(va, n):
         rva = va - IMAGE_BASE
