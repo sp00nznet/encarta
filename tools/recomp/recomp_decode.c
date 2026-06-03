@@ -20,18 +20,10 @@
 #include "cpu.h"
 #include "png_write.h"
 
-/* ---- lifted functions (lifted_codec.c + lifted_setup.c) ---- */
+/* ---- lifted functions (auto-generated list keeps the table in sync) ---- */
+#include "lifted_codec_list.h"
 #define DECL(a) void L_##a(CPU *);
-#define CODEC(X) X(11001000) X(11004AA0) X(11004BE0) X(11004D60) X(110053E0) \
-  X(11006FD0) X(11008030) X(110080F0) X(1100C320) X(11012020) X(110121D0) \
-  X(11012330) X(110124C0) X(11012990) X(11012A90) X(11013280) X(11013630) \
-  X(110138B0) X(110141D0) X(11014650) X(11015FA0) X(11016750) X(11016840) \
-  X(11016E00) X(11018C30) X(110191D0) X(11019780) X(11019800)
-#define SETUP(X) X(110050C0) X(11005140) X(11005450) X(110054C0) X(110055C0) \
-  X(11005C70) X(11006760) X(11006B50) X(11006D70) X(11006DC0) X(11007300) \
-  X(110078A0) X(11008010) X(1100B250) X(1100B630) X(1100B7D0) X(1100BBF0) \
-  X(1100BCD0) X(1100C170) X(1100EEB0) X(11011220) X(110116E0) X(11011AA0) X(1101A094)
-CODEC(DECL) SETUP(DECL)
+LIFTED_FUNCS(DECL)
 #undef DECL
 
 /* ---- CRT stubs (read args off the emulated stack, set eax, pop the ret) ---- */
@@ -65,7 +57,7 @@ typedef struct { uint32_t rva; lfn fn; } entry_t;
 
 static entry_t g_lifted[] = {
 #define E(a) { 0x##a, L_##a },
-    CODEC(E) SETUP(E)
+    LIFTED_FUNCS(E)
 #undef E
 };
 static entry_t g_stubs[] = {
@@ -191,6 +183,29 @@ int main(int argc, char **argv)
     rc = (int)call_lifted(L_1100B7D0, a_fif, 3);
     fprintf(stderr, "L_SetFIFBuffer rc=%d\n", rc);
     if (rc) { fprintf(stderr, "setfif failed (rc=%d)\n", rc); return 1; }
+
+    /* mode-04 images reference a shared FTT: lifted GetFIFFTTFileName + SetFTTBuffer */
+    {
+        char fttname[300] = {0};
+        uint32_t a_gn[] = { (uint32_t)hd, (uint32_t)(uintptr_t)fttname };
+        call_lifted(L_1100D690, a_gn, 2);   /* GetFIFFTTFileName */
+        if (fttname[0]) {
+            char *b1 = strrchr(fttname, '\\'), *b2 = strrchr(fttname, '/');
+            const char *bn = fttname;
+            if (b1 && b1 + 1 > bn) bn = b1 + 1;
+            if (b2 && b2 + 1 > bn) bn = b2 + 1;
+            char p[512]; const char *s1 = strrchr(in, '\\'), *s2 = strrchr(in, '/');
+            const char *sep = (s2 > s1) ? s2 : s1;
+            if (sep) snprintf(p, sizeof p, "%.*s%s", (int)(sep - in + 1), in, bn);
+            else snprintf(p, sizeof p, "%s", bn);
+            long ftsz = 0; uint8_t *ftt = read_file(p, &ftsz);
+            if (ftt) {
+                uint32_t a_sf[] = { (uint32_t)hd, (uint32_t)(uintptr_t)ftt, (uint32_t)ftsz };
+                int fr = (int)call_lifted(L_1100BA20, a_sf, 3);  /* SetFTTBuffer */
+                fprintf(stderr, "FTT '%s' (%ld) lifted SetFTTBuffer rc=%d\n", bn, ftsz, fr);
+            } else fprintf(stderr, "FTT '%s' not found at %s\n", bn, p);
+        }
+    }
 
     uint32_t w = 0, hgt = 0, ex = 0;
     uint32_t a_res[] = { (uint32_t)hd, (uint32_t)(uintptr_t)&w, (uint32_t)(uintptr_t)&hgt, (uint32_t)(uintptr_t)&ex };
