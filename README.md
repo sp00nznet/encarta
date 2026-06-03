@@ -248,12 +248,22 @@ cmake --build build --config Release --target m20dump
 
 | Tool | Directory | Description | Status |
 |------|-----------|-------------|--------|
-| `ftcdecode` | `tools/ftcdecode/` | FTC/FTT/FIF image decoder | **Working** (FTC grayscale, FTT/FIF perfect) |
+| `recomp` | `tools/recomp/` | **Static recompilation of the DECO_32 FTC codec** (x86→C) | **Working — pixel-exact** ([details](tools/recomp/README.md)) |
+| `decooracle` | `tools/decooracle/` | Faithful DECO_32.DLL bridge → full-colour FTC; ground-truth oracle | **Working — perfect colour** |
+| `ftcdecode` | `tools/ftcdecode/` | Clean-room FTC/FTT/FIF image decoder | Working (FTC grayscale, FTT/FIF perfect) |
 | `m20dump` | `tools/m20dump/` | M20/MVB 2.0 container extractor | Working |
-| `fifdecode` | `tools/fifdecode/` | DLL bridge to DECO_32.DLL | Broken on Win11 (DEP) |
 | `strdump` | `tools/strdump/` | STR string table dumper | Working |
 | `spamdump` | `tools/spamdump/` | SPAM multimedia format dumper | Working |
 | `datdump` | `tools/datdump/` | DAT configuration dumper | Working |
+| `fifdecode` | `tools/fifdecode/` | Old DLL bridge (wrong export signatures) | Superseded by `decooracle` |
+
+### Static Recompilation of DECO_32.DLL (`tools/recomp`)
+
+The proprietary FTC image codec has been **statically recompiled** — its decode
+pipeline mechanically translated from x86 to native C (`lift.py`) and validated
+byte-identical to the original on all test images, with no original code
+executed. This both unblocked full-colour FTC output and produced a recompilable
+reference implementation. See [`tools/recomp/README.md`](tools/recomp/README.md).
 
 ### FTC Decoder (`ftcdecode`)
 
@@ -314,6 +324,9 @@ This project contains no copyrighted Microsoft code or content. It is a clean-ro
 - [x] M20 container extraction tool
 - [x] FTT image decoder — **perfect quality** raw pixel decode
 - [x] FIF container decoder — **perfect quality** extract embedded FTT/FTC sub-images
-- [x] FTC image decoder — **luma channel producing recognizable images** (flat-fill mode)
-- [ ] FTC decoder — color output (pixel transform uses LUT + arithmetic coder, needs deeper RE)
-- [ ] Begin Ghidra/IDA disassembly of ENC97.EXE
+- [x] FTC image decoder (clean-room) — luma/grayscale recognizable
+- [x] **FTC full-colour decode — SOLVED** via `decooracle` (faithful DLL bridge)
+- [x] **DECO_32 FTC codec statically recompiled (x86→C) — pixel-exact**, no
+      original code executed (`tools/recomp`)
+- [ ] Clean-room regeneration of the codec's constant tables (lift the builders)
+- [ ] Begin Ghidra/IDA disassembly of ENC97.EXE (main application)
