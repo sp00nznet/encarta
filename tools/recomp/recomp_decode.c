@@ -158,12 +158,12 @@ int main(int argc, char **argv)
     const char *outpng = (argc >= 4) ? argv[3] : NULL;
     const char *dll = (argc >= 5) ? argv[4] : "C:\\encarta\\analysis\\DECO_32.DLL";
 
-    int use_map = (getenv("RECOMP_MAP") != NULL);
-    if (use_map) {
-        uint32_t base = map_dll_image(dll);
-        if (!base) { fprintf(stderr, "manual map failed (need base 0x11000000 free)\n"); return 1; }
+    /* Default: map the DLL as DATA only (no DllMain, no original code runs).
+     * Falls back to LoadLibrary if the preferred base 0x11000000 is taken, or
+     * if RECOMP_NOMAP is set. */
+    if (!getenv("RECOMP_NOMAP") && map_dll_image(dll)) {
         g_image_delta = 0;
-        fprintf(stderr, "data-only map at 0x11000000 (no DllMain, no original code)\n");
+        fprintf(stderr, "[data-only map @0x11000000 — no DllMain, no original code]\n");
     } else {
         HMODULE h = LoadLibraryA(dll);
         if (!h) { fprintf(stderr, "cannot load %s\n", dll); return 1; }
@@ -172,6 +172,7 @@ int main(int argc, char **argv)
         PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)h;
         PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)((uint8_t *)h + dos->e_lfanew);
         g_image_size = nt->OptionalHeader.SizeOfImage;
+        fprintf(stderr, "[LoadLibrary fallback @%08X]\n", base);
     }
 
     long fsz = 0; uint8_t *data = read_file(in, &fsz);
