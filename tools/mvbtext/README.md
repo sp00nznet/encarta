@@ -39,6 +39,20 @@ reverse-engineering the packed phrase index by inference. Then parse the
 topic-block / paragraph structure (formatting, links, fonts) for full rendered
 articles. Ref: helpdeco / Winterhoff `helpfile.txt`.
 
+## Inline images are plain BMPs
+
+The `.RLE` entries in ENCARTA.M20 are **standard uncompressed 24-bit Windows
+BMPs** (`BM` magic, `biCompression=0`) despite the name — article inline
+graphics, fact-box art, and text-as-image tables (e.g. grammar/conjugation
+charts). Just rename `<name>.RLE` → `.bmp` to view; no decoding needed. The
+encyclopedia's photographs live in `PICON.M20` as FTC (decode via
+[`../recomp`](../recomp)); article topics reference both.
+
+So a near-complete article view is already assemblable: **title** (`_TTLBTREE`) +
+**literal text / captions / media refs** (topic entries) + **inline BMP graphics**
+(`.RLE`) + **linked FTC photos** (PICON.M20). Only the connective prose (the
+phrase-compressed common words) is still missing — see above.
+
 ## MVB internal files (m20dump sanitizes `|` → `_`)
 `_SYSTEM` (config + DLL/keyword registrations), `_Phrases` (phrase dictionary),
 `_TTLBTREE` (titles), `_CONTEXT` (topic-ID → offset), `_FONT`, `_STOP0`
