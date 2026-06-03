@@ -172,15 +172,6 @@ int main(int argc, char **argv)
     fprintf(stderr, "GetOriginalResolution -> %d  (%d x %d, extra=%d)\n", rc, w, hgt, extra);
     if (rc != 0 || w <= 0 || hgt <= 0) return 1;
 
-    {   /* experimental: SetOutputFilter / SetOutputDither via env */
-        typedef int (__cdecl *pfnB)(int, int);
-        const char *ef = getenv("DECO_FILTER"), *ed = getenv("DECO_DITHER");
-        if (ef) { pfnB f = (pfnB)GetProcAddress(h, "SetOutputFilter");
-                  if (f) fprintf(stderr, "SetOutputFilter(%d) -> %d\n", atoi(ef), f(hd, atoi(ef))); }
-        if (ed) { pfnB f = (pfnB)GetProcAddress(h, "SetOutputDither");
-                  if (f) fprintf(stderr, "SetOutputDither(%d) -> %d\n", atoi(ed), f(hd, atoi(ed))); }
-    }
-
     if (SetRes) {
         rc = SetRes(hd, w, hgt);      /* populate instance output w/h (offset 0x15/0x17) */
         fprintf(stderr, "SetOutputResolution(%d,%d) -> %d\n", w, hgt, rc);
