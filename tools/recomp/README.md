@@ -58,6 +58,28 @@ py -3.11 lift.py <DECO_32.DLL> <ida_funcs.txt> lifted_codec.c 0xADDR 0xADDR ...
 `ida_funcs.txt` (function `addr  size  name`) comes from IDA/Ghidra; it supplies
 function boundaries. Capstone supplies the per-instruction disassembly.
 
+## Second binary: ENCAPI32.DLL + Win32 import trampoline
+
+`lift.py` now reads the PE's ImageBase, so it lifts any module. **ENCAPI32.DLL**
+(base `0x10000000`, 36 functions, imports KERNEL32/USER32/ADVAPI32/MSVCRT40) is
+lifted (`encapi_lifted.c`), and `recomp_encapi.c` runs it with a new
+**import trampoline**: where the lifted code calls an imported API (`call
+[IAT]`), `dispatch` detects the out-of-image target and invokes the **real
+Win32 API** on the emulated stack (switch `esp` to the lifted arg area, call,
+capture the API's resulting `esp` — which auto-handles stdcall cleanup). A
+vectored handler continues the benign `DBG_PRINTEXCEPTION_C` from
+`OutputDebugStringA`.
+
+Validated: lifted `fGetArticleID` == the real export (string round-trip through
+real `lstrcpyA`/`OutputDebugStringA`), plus the NULL-arg path. This proves the
+lifted↔Win32 boundary — the prerequisite for recompiling the much larger
+`ENC97.EXE` (which leans heavily on Win32/MFC).
+
+```
+cmake --build build --config Release --target recomp_encapi
+build\tools\recomp\Release\recomp_encapi.exe   # -> PASS fGetArticleID
+```
+
 ## Status / future
 
 - [x] Decode path lifted, pixel-exact (FTC mode `01 01 02 01`, self-contained)
