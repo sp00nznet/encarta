@@ -13308,6 +13308,70 @@ L_1100B6D7:
     c->esp += 4; return;                                         /* 1100B734: ret  */
 }
 
+void L_1100B740(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100B740: mov eax, dword ptr [esp + 4] */
+    push32(c, c->ebx);                                           /* 1100B744: push ebx */
+    push32(c, c->esi);                                           /* 1100B745: push esi */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100B746: test eax, eax */
+    push32(c, c->edi);                                           /* 1100B748: push edi */
+    if (c->zf) goto L_1100B7BC;                                  /* 1100B749: je 0x1100b7bc */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100B74B: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100B7B3;           /* 1100B750: jg 0x1100b7b3 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100B752: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100B7B3;            /* 1100B754: jle 0x1100b7b3 */
+    c->edi = (uint32_t)((c->eax*4 + GVA(0x1101E000)));           /* 1100B756: lea edi, [eax*4 + 0x1101e000] */
+    c->ebx = (uint32_t)(rd32((c->edi)));                         /* 1100B75D: mov ebx, dword ptr [edi] */
+    flags_logicz(c, c->ebx & c->ebx, 4);                         /* 1100B75F: test ebx, ebx */
+    if (!c->zf) goto L_1100B76C;                                 /* 1100B761: jne 0x1100b76c */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100B763: mov eax, 0xffffffce */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100B768: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100B769: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100B76A: pop ebx */
+    c->esp += 4; return;                                         /* 1100B76B: ret  */
+L_1100B76C:
+    c->esi = (uint32_t)(rd32((c->ebx + 0x00000004u)));           /* 1100B76C: mov esi, dword ptr [ebx + 4] */
+    flags_logicz(c, c->esi & c->esi, 4);                         /* 1100B76F: test esi, esi */
+    if (c->zf) goto L_1100B783;                                  /* 1100B771: je 0x1100b783 */
+    c->ecx = (uint32_t)(c->esi);                                 /* 1100B773: mov ecx, esi */
+    push32(c, 0x1100B77Au); dispatch(c, 0x110110A0u);            /* 1100B775: call 0x110110a0 */
+    push32(c, c->esi);                                           /* 1100B77A: push esi */
+    push32(c, 0x1100B780u); dispatch(c, 0x1101AA4Bu);            /* 1100B77B: call 0x1101aa4b */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100B780: add esp, 4 */
+L_1100B783:
+    c->esi = (uint32_t)(rd32((c->ebx)));                         /* 1100B783: mov esi, dword ptr [ebx] */
+    flags_logicz(c, c->esi & c->esi, 4);                         /* 1100B785: test esi, esi */
+    if (c->zf) goto L_1100B799;                                  /* 1100B787: je 0x1100b799 */
+    c->ecx = (uint32_t)(c->esi);                                 /* 1100B789: mov ecx, esi */
+    push32(c, 0x1100B790u); dispatch(c, 0x11005140u);            /* 1100B78B: call 0x11005140 */
+    push32(c, c->esi);                                           /* 1100B790: push esi */
+    push32(c, 0x1100B796u); dispatch(c, 0x1101AA4Bu);            /* 1100B791: call 0x1101aa4b */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100B796: add esp, 4 */
+L_1100B799:
+    push32(c, c->ebx);                                           /* 1100B799: push ebx */
+    push32(c, 0x1100B79Fu); dispatch(c, 0x11019830u);            /* 1100B79A: call 0x11019830 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100B79F: add esp, 4 */
+    wr32((c->edi), 0x0u);                                        /* 1100B7A2: mov dword ptr [edi], 0 */
+    push32(c, 0x1100B7ADu); dispatch(c, 0x1101A844u);            /* 1100B7A8: call 0x1101a844 */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100B7AD: xor eax, eax */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100B7AF: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100B7B0: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100B7B1: pop ebx */
+    c->esp += 4; return;                                         /* 1100B7B2: ret  */
+L_1100B7B3:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100B7B3: mov eax, 0xffffffcc */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100B7B8: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100B7B9: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100B7BA: pop ebx */
+    c->esp += 4; return;                                         /* 1100B7BB: ret  */
+L_1100B7BC:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100B7BC: mov eax, 0xffffffd8 */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100B7C1: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100B7C2: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100B7C3: pop ebx */
+    c->esp += 4; return;                                         /* 1100B7C4: ret  */
+}
+
 void L_1100B7D0(CPU *c)
 {
     c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100B7D0: mov eax, dword ptr [esp + 4] */
@@ -13497,6 +13561,56 @@ L_1100B9A3:
     c->esp += 4; return;                                         /* 1100B9AD: ret  */
 }
 
+void L_1100B9B0(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100B9B0: mov eax, dword ptr [esp + 4] */
+    push32(c, c->esi);                                           /* 1100B9B4: push esi */
+    push32(c, c->edi);                                           /* 1100B9B5: push edi */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100B9B6: test eax, eax */
+    if (c->zf) goto L_1100BA13;                                  /* 1100B9B8: je 0x1100ba13 */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100B9BA: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100BA0B;           /* 1100B9BF: jg 0x1100ba0b */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100B9C1: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100BA0B;            /* 1100B9C3: jle 0x1100ba0b */
+    c->esi = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100B9C5: mov esi, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->esi & c->esi, 4);                         /* 1100B9CC: test esi, esi */
+    if (!c->zf) goto L_1100B9D8;                                 /* 1100B9CE: jne 0x1100b9d8 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100B9D0: mov eax, 0xffffffce */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100B9D5: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100B9D6: pop esi */
+    c->esp += 4; return;                                         /* 1100B9D7: ret  */
+L_1100B9D8:
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100B9D8: xor eax, eax */
+    c->edi = (uint32_t)(rd32((c->esi)));                         /* 1100B9DA: mov edi, dword ptr [esi] */
+    wr16((c->esi + 0x00000010u), R16(c->eax));                   /* 1100B9DC: mov word ptr [esi + 0x10], ax */
+    wr8((c->esi + 0x00000014u), R8L(c->eax));                    /* 1100B9E0: mov byte ptr [esi + 0x14], al */
+    wr16((c->esi + 0x00000012u), R16(c->eax));                   /* 1100B9E3: mov word ptr [esi + 0x12], ax */
+    flags_logicz(c, c->edi & c->edi, 4);                         /* 1100B9E7: test edi, edi */
+    if (c->zf) goto L_1100B9FB;                                  /* 1100B9E9: je 0x1100b9fb */
+    c->ecx = (uint32_t)(c->edi);                                 /* 1100B9EB: mov ecx, edi */
+    push32(c, 0x1100B9F2u); dispatch(c, 0x11005140u);            /* 1100B9ED: call 0x11005140 */
+    push32(c, c->edi);                                           /* 1100B9F2: push edi */
+    push32(c, 0x1100B9F8u); dispatch(c, 0x1101AA4Bu);            /* 1100B9F3: call 0x1101aa4b */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100B9F8: add esp, 4 */
+L_1100B9FB:
+    wr32((c->esi), 0x0u);                                        /* 1100B9FB: mov dword ptr [esi], 0 */
+    push32(c, 0x1100BA06u); dispatch(c, 0x1101A844u);            /* 1100BA01: call 0x1101a844 */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100BA06: xor eax, eax */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100BA08: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100BA09: pop esi */
+    c->esp += 4; return;                                         /* 1100BA0A: ret  */
+L_1100BA0B:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100BA0B: mov eax, 0xffffffcc */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100BA10: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100BA11: pop esi */
+    c->esp += 4; return;                                         /* 1100BA12: ret  */
+L_1100BA13:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100BA13: mov eax, 0xffffffd8 */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100BA18: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100BA19: pop esi */
+    c->esp += 4; return;                                         /* 1100BA1A: ret  */
+}
+
 void L_1100BA20(CPU *c)
 {
     c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100BA20: mov eax, dword ptr [esp + 4] */
@@ -13615,6 +13729,88 @@ L_1100BB21:
     c->esp += 4; return;                                         /* 1100BB2A: ret  */
 }
 
+void L_1100BB30(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100BB30: mov eax, dword ptr [esp + 4] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100BB34: test eax, eax */
+    if (c->zf) goto L_1100BB64;                                  /* 1100BB36: je 0x1100bb64 */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100BB38: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100BB5E;           /* 1100BB3D: jg 0x1100bb5e */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100BB3F: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100BB5E;            /* 1100BB41: jle 0x1100bb5e */
+    c->eax = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100BB43: mov eax, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100BB4A: test eax, eax */
+    if (!c->zf) goto L_1100BB54;                                 /* 1100BB4C: jne 0x1100bb54 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100BB4E: mov eax, 0xffffffce */
+    c->esp += 4; return;                                         /* 1100BB53: ret  */
+L_1100BB54:
+    wr32((c->eax + 0x0000003Bu), 0x0u);                          /* 1100BB54: mov dword ptr [eax + 0x3b], 0 */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100BB5B: xor eax, eax */
+    c->esp += 4; return;                                         /* 1100BB5D: ret  */
+L_1100BB5E:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100BB5E: mov eax, 0xffffffcc */
+    c->esp += 4; return;                                         /* 1100BB63: ret  */
+L_1100BB64:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100BB64: mov eax, 0xffffffd8 */
+    c->esp += 4; return;                                         /* 1100BB69: ret  */
+}
+
+void L_1100BB70(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100BB70: mov eax, dword ptr [esp + 4] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100BB74: test eax, eax */
+    if (c->zf) goto L_1100BBA6;                                  /* 1100BB76: je 0x1100bba6 */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100BB78: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100BBA0;           /* 1100BB7D: jg 0x1100bba0 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100BB7F: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100BBA0;            /* 1100BB81: jle 0x1100bba0 */
+    c->eax = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100BB83: mov eax, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100BB8A: test eax, eax */
+    if (!c->zf) goto L_1100BB94;                                 /* 1100BB8C: jne 0x1100bb94 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100BB8E: mov eax, 0xffffffce */
+    c->esp += 4; return;                                         /* 1100BB93: ret  */
+L_1100BB94:
+    SET8L(c->ecx, rd8((c->eax + 0x0000000Cu)));                  /* 1100BB94: mov cl, byte ptr [eax + 0xc] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000008u)));           /* 1100BB97: mov eax, dword ptr [esp + 8] */
+    wr8((c->eax), R8L(c->ecx));                                  /* 1100BB9B: mov byte ptr [eax], cl */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100BB9D: xor eax, eax */
+    c->esp += 4; return;                                         /* 1100BB9F: ret  */
+L_1100BBA0:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100BBA0: mov eax, 0xffffffcc */
+    c->esp += 4; return;                                         /* 1100BBA5: ret  */
+L_1100BBA6:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100BBA6: mov eax, 0xffffffd8 */
+    c->esp += 4; return;                                         /* 1100BBAB: ret  */
+}
+
+void L_1100BBB0(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100BBB0: mov eax, dword ptr [esp + 4] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100BBB4: test eax, eax */
+    if (c->zf) goto L_1100BBE6;                                  /* 1100BBB6: je 0x1100bbe6 */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100BBB8: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100BBE0;           /* 1100BBBD: jg 0x1100bbe0 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100BBBF: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100BBE0;            /* 1100BBC1: jle 0x1100bbe0 */
+    c->eax = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100BBC3: mov eax, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100BBCA: test eax, eax */
+    if (!c->zf) goto L_1100BBD4;                                 /* 1100BBCC: jne 0x1100bbd4 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100BBCE: mov eax, 0xffffffce */
+    c->esp += 4; return;                                         /* 1100BBD3: ret  */
+L_1100BBD4:
+    c->ecx = (uint32_t)(flags_logicz(c, c->ecx ^ c->ecx, 4));    /* 1100BBD4: xor ecx, ecx */
+    SET8L(c->ecx, rd8((c->esp + 0x00000008u)));                  /* 1100BBD6: mov cl, byte ptr [esp + 8] */
+    wr32((c->eax + 0x0000000Cu), c->ecx);                        /* 1100BBDA: mov dword ptr [eax + 0xc], ecx */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100BBDD: xor eax, eax */
+    c->esp += 4; return;                                         /* 1100BBDF: ret  */
+L_1100BBE0:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100BBE0: mov eax, 0xffffffcc */
+    c->esp += 4; return;                                         /* 1100BBE5: ret  */
+L_1100BBE6:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100BBE6: mov eax, 0xffffffd8 */
+    c->esp += 4; return;                                         /* 1100BBEB: ret  */
+}
+
 void L_1100BBF0(CPU *c)
 {
     c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100BBF0: mov eax, dword ptr [esp + 4] */
@@ -13663,6 +13859,39 @@ L_1100BC69:
 L_1100BC6F:
     c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100BC6F: mov eax, 0xffffffd8 */
     c->esp += 4; return;                                         /* 1100BC74: ret  */
+}
+
+void L_1100BC80(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100BC80: mov eax, dword ptr [esp + 4] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100BC84: test eax, eax */
+    if (c->zf) goto L_1100BCC5;                                  /* 1100BC86: je 0x1100bcc5 */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100BC88: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100BCBF;           /* 1100BC8D: jg 0x1100bcbf */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100BC8F: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100BCBF;            /* 1100BC91: jle 0x1100bcbf */
+    c->edx = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100BC93: mov edx, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->edx & c->edx, 4);                         /* 1100BC9A: test edx, edx */
+    if (!c->zf) goto L_1100BCA4;                                 /* 1100BC9C: jne 0x1100bca4 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100BC9E: mov eax, 0xffffffce */
+    c->esp += 4; return;                                         /* 1100BCA3: ret  */
+L_1100BCA4:
+    c->ecx = (uint32_t)(flags_logicz(c, c->ecx ^ c->ecx, 4));    /* 1100BCA4: xor ecx, ecx */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000008u)));           /* 1100BCA6: mov eax, dword ptr [esp + 8] */
+    SET16(c->ecx, rd16((c->edx + 0x00000015u)));                 /* 1100BCAA: mov cx, word ptr [edx + 0x15] */
+    wr32((c->eax), c->ecx);                                      /* 1100BCAE: mov dword ptr [eax], ecx */
+    c->ecx = (uint32_t)(flags_logicz(c, c->ecx ^ c->ecx, 4));    /* 1100BCB0: xor ecx, ecx */
+    SET16(c->ecx, rd16((c->edx + 0x00000017u)));                 /* 1100BCB2: mov cx, word ptr [edx + 0x17] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x0000000Cu)));           /* 1100BCB6: mov eax, dword ptr [esp + 0xc] */
+    wr32((c->eax), c->ecx);                                      /* 1100BCBA: mov dword ptr [eax], ecx */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100BCBC: xor eax, eax */
+    c->esp += 4; return;                                         /* 1100BCBE: ret  */
+L_1100BCBF:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100BCBF: mov eax, 0xffffffcc */
+    c->esp += 4; return;                                         /* 1100BCC4: ret  */
+L_1100BCC5:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100BCC5: mov eax, 0xffffffd8 */
+    c->esp += 4; return;                                         /* 1100BCCA: ret  */
 }
 
 void L_1100BCD0(CPU *c)
@@ -13925,6 +14154,186 @@ L_1100BF80:
     c->ebx = (uint32_t)(pop32(c));                               /* 1100BF88: pop ebx */
     c->esp = (uint32_t)(flags_add(c, c->esp, 0x10u, 4));         /* 1100BF89: add esp, 0x10 */
     c->esp += 4; return;                                         /* 1100BF8C: ret  */
+}
+
+void L_1100BF90(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100BF90: mov eax, dword ptr [esp + 4] */
+    push32(c, c->ebx);                                           /* 1100BF94: push ebx */
+    push32(c, c->esi);                                           /* 1100BF95: push esi */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100BF96: test eax, eax */
+    push32(c, c->edi);                                           /* 1100BF98: push edi */
+    if (c->zf) goto L_1100C12D;                                  /* 1100BF99: je 0x1100c12d */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100BF9F: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100C124;           /* 1100BFA4: jg 0x1100c124 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100BFAA: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100C124;            /* 1100BFAC: jle 0x1100c124 */
+    c->ebx = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100BFB2: mov ebx, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->ebx & c->ebx, 4);                         /* 1100BFB9: test ebx, ebx */
+    if (!c->zf) goto L_1100BFC6;                                 /* 1100BFBB: jne 0x1100bfc6 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100BFBD: mov eax, 0xffffffce */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100BFC2: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100BFC3: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100BFC4: pop ebx */
+    c->esp += 4; return;                                         /* 1100BFC5: ret  */
+L_1100BFC6:
+    SET16(c->eax, rd16((c->ebx + 0x00000045u)));                 /* 1100BFC6: mov ax, word ptr [ebx + 0x45] */
+    flags_sub(c, R16(c->eax), 0x1u, 2);                          /* 1100BFCA: cmp ax, 1 */
+    if (!c->zf) goto L_1100BFFA;                                 /* 1100BFCE: jne 0x1100bffa */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 1100BFD0: mov ecx, dword ptr [esp + 0x14] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000018u)));           /* 1100BFD4: mov edx, dword ptr [esp + 0x18] */
+    c->esi = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100BFD8: mov esi, dword ptr [esp + 0x1c] */
+    c->edi = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 1100BFDC: mov edi, dword ptr [esp + 0x20] */
+    wr32((c->ecx), 0x64u);                                       /* 1100BFE0: mov dword ptr [ecx], 0x64 */
+    wr32((c->edx), 0x4u);                                        /* 1100BFE6: mov dword ptr [edx], 4 */
+    wr32((c->esi), 0x4u);                                        /* 1100BFEC: mov dword ptr [esi], 4 */
+    wr32((c->edi), 0x4u);                                        /* 1100BFF2: mov dword ptr [edi], 4 */
+    goto L_1100C05C;                                             /* 1100BFF8: jmp 0x1100c05c */
+L_1100BFFA:
+    flags_sub(c, R16(c->eax), 0x3u, 2);                          /* 1100BFFA: cmp ax, 3 */
+    if (!c->zf) goto L_1100C02A;                                 /* 1100BFFE: jne 0x1100c02a */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 1100C000: mov ecx, dword ptr [esp + 0x14] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000018u)));           /* 1100C004: mov edx, dword ptr [esp + 0x18] */
+    c->esi = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100C008: mov esi, dword ptr [esp + 0x1c] */
+    c->edi = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 1100C00C: mov edi, dword ptr [esp + 0x20] */
+    wr32((c->ecx), 0x5u);                                        /* 1100C010: mov dword ptr [ecx], 5 */
+    wr32((c->edx), 0x5u);                                        /* 1100C016: mov dword ptr [edx], 5 */
+    wr32((c->esi), 0x5u);                                        /* 1100C01C: mov dword ptr [esi], 5 */
+    wr32((c->edi), 0x4u);                                        /* 1100C022: mov dword ptr [edi], 4 */
+    goto L_1100C05C;                                             /* 1100C028: jmp 0x1100c05c */
+L_1100C02A:
+    flags_sub(c, R16(c->eax), 0x4u, 2);                          /* 1100C02A: cmp ax, 4 */
+    if (!c->zf) goto L_1100C11B;                                 /* 1100C02E: jne 0x1100c11b */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 1100C034: mov ecx, dword ptr [esp + 0x14] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000018u)));           /* 1100C038: mov edx, dword ptr [esp + 0x18] */
+    c->esi = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100C03C: mov esi, dword ptr [esp + 0x1c] */
+    c->edi = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 1100C040: mov edi, dword ptr [esp + 0x20] */
+    wr32((c->ecx), 0x5u);                                        /* 1100C044: mov dword ptr [ecx], 5 */
+    wr32((c->edx), 0x5u);                                        /* 1100C04A: mov dword ptr [edx], 5 */
+    wr32((c->esi), 0x5u);                                        /* 1100C050: mov dword ptr [esi], 5 */
+    wr32((c->edi), 0x5u);                                        /* 1100C056: mov dword ptr [edi], 5 */
+L_1100C05C:
+    flags_sub(c, R16(c->eax), 0x1u, 2);                          /* 1100C05C: cmp ax, 1 */
+    if (c->zf) goto L_1100C10B;                                  /* 1100C060: je 0x1100c10b */
+    c->eax = (uint32_t)((uint32_t)(int32_t)(int16_t)(rd16((c->ebx + 0x0000003Fu)))); /* 1100C066: movsx eax, word ptr [ebx + 0x3f] */
+    flags_sub(c, c->eax, 0x3u, 4);                               /* 1100C06A: cmp eax, 3 */
+    if ((!c->cf && !c->zf)) goto L_1100C076;                     /* 1100C06D: ja 0x1100c076 */
+    { uint32_t _jt = rd32((c->eax*4 + GVA(0x1100C138)));         /* 1100C06F: jmp dword ptr [eax*4 + 0x1100c138] */
+      if (_jt == GVA(0x1100C07F)) goto L_1100C07F;               /* 1100C06F: jmp dword ptr [eax*4 + 0x1100c138] */
+      if (_jt == GVA(0x1100C087)) goto L_1100C087;               /* 1100C06F: jmp dword ptr [eax*4 + 0x1100c138] */
+      if (_jt == GVA(0x1100C08F)) goto L_1100C08F;               /* 1100C06F: jmp dword ptr [eax*4 + 0x1100c138] */
+      if (_jt == GVA(0x1100C097)) goto L_1100C097;               /* 1100C06F: jmp dword ptr [eax*4 + 0x1100c138] */
+      if (_jt == GVA(0x1100C0B6)) goto L_1100C0B6;               /* 1100C06F: jmp dword ptr [eax*4 + 0x1100c138] */
+      if (_jt == GVA(0x1100C0BE)) goto L_1100C0BE;               /* 1100C06F: jmp dword ptr [eax*4 + 0x1100c138] */
+      if (_jt == GVA(0x1100C0C6)) goto L_1100C0C6;               /* 1100C06F: jmp dword ptr [eax*4 + 0x1100c138] */
+      if (_jt == GVA(0x1100C0CE)) goto L_1100C0CE;               /* 1100C06F: jmp dword ptr [eax*4 + 0x1100c138] */
+      if (_jt == GVA(0x1100C0ED)) goto L_1100C0ED;               /* 1100C06F: jmp dword ptr [eax*4 + 0x1100c138] */
+      if (_jt == GVA(0x1100C0F5)) goto L_1100C0F5;               /* 1100C06F: jmp dword ptr [eax*4 + 0x1100c138] */
+      if (_jt == GVA(0x1100C0FD)) goto L_1100C0FD;               /* 1100C06F: jmp dword ptr [eax*4 + 0x1100c138] */
+      if (_jt == GVA(0x1100C105)) goto L_1100C105;               /* 1100C06F: jmp dword ptr [eax*4 + 0x1100c138] */
+      abort(); }                                                 /* 1100C06F: jmp dword ptr [eax*4 + 0x1100c138] */
+L_1100C076:
+    c->eax = (uint32_t)(0xFFFFFFC7u);                            /* 1100C076: mov eax, 0xffffffc7 */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100C07B: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100C07C: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100C07D: pop ebx */
+    c->esp += 4; return;                                         /* 1100C07E: ret  */
+L_1100C07F:
+    wr32((c->ecx), 0x1u);                                        /* 1100C07F: mov dword ptr [ecx], 1 */
+    goto L_1100C09D;                                             /* 1100C085: jmp 0x1100c09d */
+L_1100C087:
+    wr32((c->edx), 0x1u);                                        /* 1100C087: mov dword ptr [edx], 1 */
+    goto L_1100C09D;                                             /* 1100C08D: jmp 0x1100c09d */
+L_1100C08F:
+    wr32((c->esi), 0x1u);                                        /* 1100C08F: mov dword ptr [esi], 1 */
+    goto L_1100C09D;                                             /* 1100C095: jmp 0x1100c09d */
+L_1100C097:
+    wr32((c->edi), 0x1u);                                        /* 1100C097: mov dword ptr [edi], 1 */
+L_1100C09D:
+    c->eax = (uint32_t)((uint32_t)(int32_t)(int16_t)(rd16((c->ebx + 0x00000041u)))); /* 1100C09D: movsx eax, word ptr [ebx + 0x41] */
+    flags_sub(c, c->eax, 0x3u, 4);                               /* 1100C0A1: cmp eax, 3 */
+    if ((!c->cf && !c->zf)) goto L_1100C0AD;                     /* 1100C0A4: ja 0x1100c0ad */
+    { uint32_t _jt = rd32((c->eax*4 + GVA(0x1100C148)));         /* 1100C0A6: jmp dword ptr [eax*4 + 0x1100c148] */
+      if (_jt == GVA(0x1100C0B6)) goto L_1100C0B6;               /* 1100C0A6: jmp dword ptr [eax*4 + 0x1100c148] */
+      if (_jt == GVA(0x1100C0BE)) goto L_1100C0BE;               /* 1100C0A6: jmp dword ptr [eax*4 + 0x1100c148] */
+      if (_jt == GVA(0x1100C0C6)) goto L_1100C0C6;               /* 1100C0A6: jmp dword ptr [eax*4 + 0x1100c148] */
+      if (_jt == GVA(0x1100C0CE)) goto L_1100C0CE;               /* 1100C0A6: jmp dword ptr [eax*4 + 0x1100c148] */
+      if (_jt == GVA(0x1100C0ED)) goto L_1100C0ED;               /* 1100C0A6: jmp dword ptr [eax*4 + 0x1100c148] */
+      if (_jt == GVA(0x1100C0F5)) goto L_1100C0F5;               /* 1100C0A6: jmp dword ptr [eax*4 + 0x1100c148] */
+      if (_jt == GVA(0x1100C0FD)) goto L_1100C0FD;               /* 1100C0A6: jmp dword ptr [eax*4 + 0x1100c148] */
+      if (_jt == GVA(0x1100C105)) goto L_1100C105;               /* 1100C0A6: jmp dword ptr [eax*4 + 0x1100c148] */
+      abort(); }                                                 /* 1100C0A6: jmp dword ptr [eax*4 + 0x1100c148] */
+L_1100C0AD:
+    c->eax = (uint32_t)(0xFFFFFFC7u);                            /* 1100C0AD: mov eax, 0xffffffc7 */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100C0B2: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100C0B3: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100C0B4: pop ebx */
+    c->esp += 4; return;                                         /* 1100C0B5: ret  */
+L_1100C0B6:
+    wr32((c->ecx), 0x2u);                                        /* 1100C0B6: mov dword ptr [ecx], 2 */
+    goto L_1100C0D4;                                             /* 1100C0BC: jmp 0x1100c0d4 */
+L_1100C0BE:
+    wr32((c->edx), 0x2u);                                        /* 1100C0BE: mov dword ptr [edx], 2 */
+    goto L_1100C0D4;                                             /* 1100C0C4: jmp 0x1100c0d4 */
+L_1100C0C6:
+    wr32((c->esi), 0x2u);                                        /* 1100C0C6: mov dword ptr [esi], 2 */
+    goto L_1100C0D4;                                             /* 1100C0CC: jmp 0x1100c0d4 */
+L_1100C0CE:
+    wr32((c->edi), 0x2u);                                        /* 1100C0CE: mov dword ptr [edi], 2 */
+L_1100C0D4:
+    c->eax = (uint32_t)((uint32_t)(int32_t)(int16_t)(rd16((c->ebx + 0x00000043u)))); /* 1100C0D4: movsx eax, word ptr [ebx + 0x43] */
+    flags_sub(c, c->eax, 0x3u, 4);                               /* 1100C0D8: cmp eax, 3 */
+    if ((!c->cf && !c->zf)) goto L_1100C0E4;                     /* 1100C0DB: ja 0x1100c0e4 */
+    { uint32_t _jt = rd32((c->eax*4 + GVA(0x1100C158)));         /* 1100C0DD: jmp dword ptr [eax*4 + 0x1100c158] */
+      if (_jt == GVA(0x1100C0ED)) goto L_1100C0ED;               /* 1100C0DD: jmp dword ptr [eax*4 + 0x1100c158] */
+      if (_jt == GVA(0x1100C0F5)) goto L_1100C0F5;               /* 1100C0DD: jmp dword ptr [eax*4 + 0x1100c158] */
+      if (_jt == GVA(0x1100C0FD)) goto L_1100C0FD;               /* 1100C0DD: jmp dword ptr [eax*4 + 0x1100c158] */
+      if (_jt == GVA(0x1100C105)) goto L_1100C105;               /* 1100C0DD: jmp dword ptr [eax*4 + 0x1100c158] */
+      abort(); }                                                 /* 1100C0DD: jmp dword ptr [eax*4 + 0x1100c158] */
+L_1100C0E4:
+    c->eax = (uint32_t)(0xFFFFFFC7u);                            /* 1100C0E4: mov eax, 0xffffffc7 */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100C0E9: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100C0EA: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100C0EB: pop ebx */
+    c->esp += 4; return;                                         /* 1100C0EC: ret  */
+L_1100C0ED:
+    wr32((c->ecx), 0x3u);                                        /* 1100C0ED: mov dword ptr [ecx], 3 */
+    goto L_1100C10B;                                             /* 1100C0F3: jmp 0x1100c10b */
+L_1100C0F5:
+    wr32((c->edx), 0x3u);                                        /* 1100C0F5: mov dword ptr [edx], 3 */
+    goto L_1100C10B;                                             /* 1100C0FB: jmp 0x1100c10b */
+L_1100C0FD:
+    wr32((c->esi), 0x3u);                                        /* 1100C0FD: mov dword ptr [esi], 3 */
+    goto L_1100C10B;                                             /* 1100C103: jmp 0x1100c10b */
+L_1100C105:
+    wr32((c->edi), 0x3u);                                        /* 1100C105: mov dword ptr [edi], 3 */
+L_1100C10B:
+    c->ecx = (uint32_t)((uint32_t)(int32_t)(int16_t)(rd16((c->ebx + 0x00000048u)))); /* 1100C10B: movsx ecx, word ptr [ebx + 0x48] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000024u)));           /* 1100C10F: mov eax, dword ptr [esp + 0x24] */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100C113: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100C114: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100C115: pop ebx */
+    wr32((c->eax), c->ecx);                                      /* 1100C116: mov dword ptr [eax], ecx */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100C118: xor eax, eax */
+    c->esp += 4; return;                                         /* 1100C11A: ret  */
+L_1100C11B:
+    c->eax = (uint32_t)(0xFFFFFFC7u);                            /* 1100C11B: mov eax, 0xffffffc7 */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100C120: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100C121: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100C122: pop ebx */
+    c->esp += 4; return;                                         /* 1100C123: ret  */
+L_1100C124:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100C124: mov eax, 0xffffffcc */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100C129: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100C12A: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100C12B: pop ebx */
+    c->esp += 4; return;                                         /* 1100C12C: ret  */
+L_1100C12D:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100C12D: mov eax, 0xffffffd8 */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100C132: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100C133: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100C134: pop ebx */
+    c->esp += 4; return;                                         /* 1100C135: ret  */
 }
 
 void L_1100C170(CPU *c)
@@ -15883,6 +16292,985 @@ L_1100D72A:
     c->edi = (uint32_t)(pop32(c));                               /* 1100D72F: pop edi */
     c->esi = (uint32_t)(pop32(c));                               /* 1100D730: pop esi */
     c->esp += 4; return;                                         /* 1100D731: ret  */
+}
+
+void L_1100D740(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100D740: mov eax, dword ptr [esp + 4] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100D744: test eax, eax */
+    if (c->zf) goto L_1100D7D1;                                  /* 1100D746: je 0x1100d7d1 */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100D74C: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100D7CB;           /* 1100D751: jg 0x1100d7cb */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100D753: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100D7CB;            /* 1100D755: jle 0x1100d7cb */
+    c->eax = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100D757: mov eax, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100D75E: test eax, eax */
+    if (!c->zf) goto L_1100D768;                                 /* 1100D760: jne 0x1100d768 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100D762: mov eax, 0xffffffce */
+    c->esp += 4; return;                                         /* 1100D767: ret  */
+L_1100D768:
+    c->eax = (uint32_t)(rd32((c->eax)));                         /* 1100D768: mov eax, dword ptr [eax] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100D76A: test eax, eax */
+    if (c->zf) goto L_1100D7A0;                                  /* 1100D76C: je 0x1100d7a0 */
+    c->edx = (uint32_t)(rd32((c->eax + 0x000008B9u)));           /* 1100D76E: mov edx, dword ptr [eax + 0x8b9] */
+    flags_logicz(c, c->edx & c->edx, 4);                         /* 1100D774: test edx, edx */
+    if (c->zf) goto L_1100D7A0;                                  /* 1100D776: je 0x1100d7a0 */
+    c->ecx = (uint32_t)(rd32((c->edx + 0x00000030u)));           /* 1100D778: mov ecx, dword ptr [edx + 0x30] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000008u)));           /* 1100D77B: mov eax, dword ptr [esp + 8] */
+    wr32((c->eax), c->ecx);                                      /* 1100D77F: mov dword ptr [eax], ecx */
+    c->ecx = (uint32_t)(rd32((c->edx + 0x00000034u)));           /* 1100D781: mov ecx, dword ptr [edx + 0x34] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x0000000Cu)));           /* 1100D784: mov eax, dword ptr [esp + 0xc] */
+    wr32((c->eax), c->ecx);                                      /* 1100D788: mov dword ptr [eax], ecx */
+    SET8L(c->ecx, rd8((c->edx + 0x0000005Fu)));                  /* 1100D78A: mov cl, byte ptr [edx + 0x5f] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000010u)));           /* 1100D78D: mov eax, dword ptr [esp + 0x10] */
+    c->edx = (uint32_t)((uint32_t)(int32_t)(int8_t)(rd8((c->edx + 0x00000060u)))); /* 1100D791: movsx edx, byte ptr [edx + 0x60] */
+    wr8((c->eax), R8L(c->ecx));                                  /* 1100D795: mov byte ptr [eax], cl */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 1100D797: mov ecx, dword ptr [esp + 0x14] */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100D79B: xor eax, eax */
+    wr32((c->ecx), c->edx);                                      /* 1100D79D: mov dword ptr [ecx], edx */
+    c->esp += 4; return;                                         /* 1100D79F: ret  */
+L_1100D7A0:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000008u)));           /* 1100D7A0: mov eax, dword ptr [esp + 8] */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x0000000Cu)));           /* 1100D7A4: mov ecx, dword ptr [esp + 0xc] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000010u)));           /* 1100D7A8: mov edx, dword ptr [esp + 0x10] */
+    wr32((c->eax), 0x0u);                                        /* 1100D7AC: mov dword ptr [eax], 0 */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 1100D7B2: mov eax, dword ptr [esp + 0x14] */
+    wr32((c->ecx), 0x0u);                                        /* 1100D7B6: mov dword ptr [ecx], 0 */
+    wr8((c->edx), 0x0u);                                         /* 1100D7BC: mov byte ptr [edx], 0 */
+    wr32((c->eax), 0x0u);                                        /* 1100D7BF: mov dword ptr [eax], 0 */
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100D7C5: mov eax, 0xffffffd8 */
+    c->esp += 4; return;                                         /* 1100D7CA: ret  */
+L_1100D7CB:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100D7CB: mov eax, 0xffffffcc */
+    c->esp += 4; return;                                         /* 1100D7D0: ret  */
+L_1100D7D1:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100D7D1: mov eax, 0xffffffd8 */
+    c->esp += 4; return;                                         /* 1100D7D6: ret  */
+}
+
+void L_1100D7E0(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100D7E0: mov eax, dword ptr [esp + 4] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100D7E4: test eax, eax */
+    if (c->zf) goto L_1100D82B;                                  /* 1100D7E6: je 0x1100d82b */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100D7E8: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100D825;           /* 1100D7ED: jg 0x1100d825 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100D7EF: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100D825;            /* 1100D7F1: jle 0x1100d825 */
+    c->edx = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100D7F3: mov edx, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->edx & c->edx, 4);                         /* 1100D7FA: test edx, edx */
+    if (!c->zf) goto L_1100D804;                                 /* 1100D7FC: jne 0x1100d804 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100D7FE: mov eax, 0xffffffce */
+    c->esp += 4; return;                                         /* 1100D803: ret  */
+L_1100D804:
+    c->ecx = (uint32_t)(rd32((c->esp + 0x0000000Cu)));           /* 1100D804: mov ecx, dword ptr [esp + 0xc] */
+    flags_logicz(c, c->ecx & c->ecx, 4);                         /* 1100D808: test ecx, ecx */
+    if ((c->sf != c->of)) goto L_1100D811;                       /* 1100D80A: jl 0x1100d811 */
+    flags_sub(c, c->ecx, 0x2u, 4);                               /* 1100D80C: cmp ecx, 2 */
+    if ((c->zf || (c->sf != c->of))) goto L_1100D817;            /* 1100D80F: jle 0x1100d817 */
+L_1100D811:
+    c->eax = (uint32_t)(0xFFFFFFC0u);                            /* 1100D811: mov eax, 0xffffffc0 */
+    c->esp += 4; return;                                         /* 1100D816: ret  */
+L_1100D817:
+    wr16((c->edx + 0x0000004Eu), R16(c->ecx));                   /* 1100D817: mov word ptr [edx + 0x4e], cx */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000008u)));           /* 1100D81B: mov eax, dword ptr [esp + 8] */
+    wr32((c->edx + 0x0000004Au), c->eax);                        /* 1100D81F: mov dword ptr [edx + 0x4a], eax */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100D822: xor eax, eax */
+    c->esp += 4; return;                                         /* 1100D824: ret  */
+L_1100D825:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100D825: mov eax, 0xffffffcc */
+    c->esp += 4; return;                                         /* 1100D82A: ret  */
+L_1100D82B:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100D82B: mov eax, 0xffffffd8 */
+    c->esp += 4; return;                                         /* 1100D830: ret  */
+}
+
+void L_1100D840(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100D840: mov eax, dword ptr [esp + 4] */
+    c->esp = (uint32_t)(flags_sub(c, c->esp, 0x4u, 4));          /* 1100D844: sub esp, 4 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100D847: test eax, eax */
+    push32(c, c->ebx);                                           /* 1100D849: push ebx */
+    push32(c, c->esi);                                           /* 1100D84A: push esi */
+    push32(c, c->edi);                                           /* 1100D84B: push edi */
+    push32(c, c->ebp);                                           /* 1100D84C: push ebp */
+    if (c->zf) goto L_1100D946;                                  /* 1100D84D: je 0x1100d946 */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100D853: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100D939;           /* 1100D858: jg 0x1100d939 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100D85E: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100D939;            /* 1100D860: jle 0x1100d939 */
+    c->esi = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100D866: mov esi, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->esi & c->esi, 4);                         /* 1100D86D: test esi, esi */
+    if (!c->zf) goto L_1100D87E;                                 /* 1100D86F: jne 0x1100d87e */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100D871: mov eax, 0xffffffce */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100D876: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100D877: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100D878: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100D879: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100D87A: add esp, 4 */
+    c->esp += 4; return;                                         /* 1100D87D: ret  */
+L_1100D87E:
+    c->eax = (uint32_t)(rd32((c->esi)));                         /* 1100D87E: mov eax, dword ptr [esi] */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100D880: mov ecx, dword ptr [esp + 0x1c] */
+    c->eax = (uint32_t)(rd32((c->eax + 0x000008B9u)));           /* 1100D884: mov eax, dword ptr [eax + 0x8b9] */
+    c->ebp = (uint32_t)(rd32((c->eax + 0x00000018u)));           /* 1100D88A: mov ebp, dword ptr [eax + 0x18] */
+    c->eax = (uint32_t)(rd32((c->eax + 0x0000001Cu)));           /* 1100D88D: mov eax, dword ptr [eax + 0x1c] */
+    c->ebx = (uint32_t)(c->ebp);                                 /* 1100D890: mov ebx, ebp */
+    c->edx = (uint32_t)(c->eax);                                 /* 1100D892: mov edx, eax */
+    c->ebx = (uint32_t)(op_shr(c, c->ebx, 0x1u, 4));             /* 1100D894: shr ebx, 1 */
+    c->edx = (uint32_t)(op_shr(c, c->edx, 0x1u, 4));             /* 1100D897: shr edx, 1 */
+    wr32((c->ecx), c->ebx);                                      /* 1100D89A: mov dword ptr [ecx], ebx */
+    wr32((c->esp + 0x00000010u), c->edx);                        /* 1100D89C: mov dword ptr [esp + 0x10], edx */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 1100D8A0: mov edx, dword ptr [esp + 0x20] */
+    c->edi = (uint32_t)(rd32((c->esp + 0x00000010u)));           /* 1100D8A4: mov edi, dword ptr [esp + 0x10] */
+    wr32((c->edx), c->edi);                                      /* 1100D8A8: mov dword ptr [edx], edi */
+    c->edi = (uint32_t)(flags_logicz(c, c->edi ^ c->edi, 4));    /* 1100D8AA: xor edi, edi */
+    SET16(c->edi, rd16((c->esi + 0x00000015u)));                 /* 1100D8AC: mov di, word ptr [esi + 0x15] */
+    flags_sub(c, c->edi, c->ebx, 4);                             /* 1100D8B0: cmp edi, ebx */
+    if ((c->zf || (c->sf != c->of))) goto L_1100D915;            /* 1100D8B2: jle 0x1100d915 */
+    c->ebx = (uint32_t)(flags_logicz(c, c->ebx ^ c->ebx, 4));    /* 1100D8B4: xor ebx, ebx */
+    SET16(c->ebx, rd16((c->esi + 0x00000017u)));                 /* 1100D8B6: mov bx, word ptr [esi + 0x17] */
+    flags_sub(c, c->ebx, rd32((c->esp + 0x00000010u)), 4);       /* 1100D8BA: cmp ebx, dword ptr [esp + 0x10] */
+    if ((c->zf || (c->sf != c->of))) goto L_1100D915;            /* 1100D8BE: jle 0x1100d915 */
+    wr32((c->ecx), c->ebp);                                      /* 1100D8C0: mov dword ptr [ecx], ebp */
+    wr32((c->edx), c->eax);                                      /* 1100D8C2: mov dword ptr [edx], eax */
+    flags_sub(c, c->edi, c->ebp, 4);                             /* 1100D8C4: cmp edi, ebp */
+    if ((c->sf != c->of)) goto L_1100D901;                       /* 1100D8C6: jl 0x1100d901 */
+    flags_sub(c, c->ebx, c->eax, 4);                             /* 1100D8C8: cmp ebx, eax */
+    if ((c->sf != c->of)) goto L_1100D901;                       /* 1100D8CA: jl 0x1100d901 */
+    c->esi = (uint32_t)((c->ebp*2 + 0x00000000u));               /* 1100D8CC: lea esi, [ebp*2] */
+    c->eax = (uint32_t)(flags_add(c, c->eax, c->eax, 4));        /* 1100D8D3: add eax, eax */
+    wr32((c->ecx), c->esi);                                      /* 1100D8D5: mov dword ptr [ecx], esi */
+    wr32((c->edx), c->eax);                                      /* 1100D8D7: mov dword ptr [edx], eax */
+    flags_sub(c, c->edi, c->esi, 4);                             /* 1100D8D9: cmp edi, esi */
+    if ((c->sf != c->of)) goto L_1100D8F1;                       /* 1100D8DB: jl 0x1100d8f1 */
+L_1100D8DD:
+    c->esi = (uint32_t)(rd32((c->edx)));                         /* 1100D8DD: mov esi, dword ptr [edx] */
+    flags_sub(c, c->ebx, c->esi, 4);                             /* 1100D8DF: cmp ebx, esi */
+    if ((c->sf != c->of)) goto L_1100D8F1;                       /* 1100D8E1: jl 0x1100d8f1 */
+    c->eax = (uint32_t)(rd32((c->ecx)));                         /* 1100D8E3: mov eax, dword ptr [ecx] */
+    c->esi = (uint32_t)(flags_add(c, c->esi, c->esi, 4));        /* 1100D8E5: add esi, esi */
+    c->eax = (uint32_t)(flags_add(c, c->eax, c->eax, 4));        /* 1100D8E7: add eax, eax */
+    wr32((c->edx), c->esi);                                      /* 1100D8E9: mov dword ptr [edx], esi */
+    wr32((c->ecx), c->eax);                                      /* 1100D8EB: mov dword ptr [ecx], eax */
+    flags_sub(c, c->edi, c->eax, 4);                             /* 1100D8ED: cmp edi, eax */
+    if ((c->sf == c->of)) goto L_1100D8DD;                       /* 1100D8EF: jge 0x1100d8dd */
+L_1100D8F1:
+    wr32((c->ecx), op_sar(c, rd32((c->ecx)), 0x1u, 4));          /* 1100D8F1: sar dword ptr [ecx], 1 */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100D8F4: xor eax, eax */
+    wr32((c->edx), op_sar(c, rd32((c->edx)), 0x1u, 4));          /* 1100D8F6: sar dword ptr [edx], 1 */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100D8F9: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100D8FA: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100D8FB: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100D8FC: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100D8FD: add esp, 4 */
+    c->esp += 4; return;                                         /* 1100D900: ret  */
+L_1100D901:
+    c->ebp = (uint32_t)(op_sar(c, c->ebp, 0x1u, 4));             /* 1100D901: sar ebp, 1 */
+    c->eax = (uint32_t)(op_sar(c, c->eax, 0x1u, 4));             /* 1100D904: sar eax, 1 */
+    wr32((c->ecx), c->ebp);                                      /* 1100D907: mov dword ptr [ecx], ebp */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100D909: pop ebp */
+    wr32((c->edx), c->eax);                                      /* 1100D90A: mov dword ptr [edx], eax */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100D90C: xor eax, eax */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100D90E: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100D90F: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100D910: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100D911: add esp, 4 */
+    c->esp += 4; return;                                         /* 1100D914: ret  */
+L_1100D915:
+    c->eax = (uint32_t)(rd32((c->ecx)));                         /* 1100D915: mov eax, dword ptr [ecx] */
+    flags_sub(c, c->edi, c->eax, 4);                             /* 1100D917: cmp edi, eax */
+    if ((c->sf != c->of)) goto L_1100D925;                       /* 1100D919: jl 0x1100d925 */
+    c->ebx = (uint32_t)(flags_logicz(c, c->ebx ^ c->ebx, 4));    /* 1100D91B: xor ebx, ebx */
+    SET16(c->ebx, rd16((c->esi + 0x00000017u)));                 /* 1100D91D: mov bx, word ptr [esi + 0x17] */
+    flags_sub(c, c->ebx, rd32((c->edx)), 4);                     /* 1100D921: cmp ebx, dword ptr [edx] */
+    if ((c->sf == c->of)) goto L_1100D92F;                       /* 1100D923: jge 0x1100d92f */
+L_1100D925:
+    c->eax = (uint32_t)(op_sar(c, c->eax, 0x1u, 4));             /* 1100D925: sar eax, 1 */
+    wr32((c->edx), op_sar(c, rd32((c->edx)), 0x1u, 4));          /* 1100D928: sar dword ptr [edx], 1 */
+    wr32((c->ecx), c->eax);                                      /* 1100D92B: mov dword ptr [ecx], eax */
+    goto L_1100D915;                                             /* 1100D92D: jmp 0x1100d915 */
+L_1100D92F:
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100D92F: xor eax, eax */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100D931: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100D932: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100D933: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100D934: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100D935: add esp, 4 */
+    c->esp += 4; return;                                         /* 1100D938: ret  */
+L_1100D939:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100D939: mov eax, 0xffffffcc */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100D93E: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100D93F: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100D940: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100D941: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100D942: add esp, 4 */
+    c->esp += 4; return;                                         /* 1100D945: ret  */
+L_1100D946:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100D946: mov eax, 0xffffffd8 */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100D94B: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100D94C: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100D94D: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100D94E: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100D94F: add esp, 4 */
+    c->esp += 4; return;                                         /* 1100D952: ret  */
+}
+
+void L_1100D960(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100D960: mov eax, dword ptr [esp + 4] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100D964: test eax, eax */
+    if (c->zf) goto L_1100D9DB;                                  /* 1100D966: je 0x1100d9db */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100D968: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100D9D5;           /* 1100D96D: jg 0x1100d9d5 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100D96F: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100D9D5;            /* 1100D971: jle 0x1100d9d5 */
+    c->eax = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100D973: mov eax, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100D97A: test eax, eax */
+    if (!c->zf) goto L_1100D984;                                 /* 1100D97C: jne 0x1100d984 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100D97E: mov eax, 0xffffffce */
+    c->esp += 4; return;                                         /* 1100D983: ret  */
+L_1100D984:
+    c->ecx = (uint32_t)(rd32((c->eax + 0x00000004u)));           /* 1100D984: mov ecx, dword ptr [eax + 4] */
+    flags_logicz(c, c->ecx & c->ecx, 4);                         /* 1100D987: test ecx, ecx */
+    if (!c->zf) goto L_1100D9B9;                                 /* 1100D989: jne 0x1100d9b9 */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000008u)));           /* 1100D98B: mov eax, dword ptr [esp + 8] */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x0000000Cu)));           /* 1100D98F: mov ecx, dword ptr [esp + 0xc] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000010u)));           /* 1100D993: mov edx, dword ptr [esp + 0x10] */
+    wr32((c->eax), 0x0u);                                        /* 1100D997: mov dword ptr [eax], 0 */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 1100D99D: mov eax, dword ptr [esp + 0x14] */
+    wr32((c->ecx), 0x0u);                                        /* 1100D9A1: mov dword ptr [ecx], 0 */
+    wr32((c->edx), 0x0u);                                        /* 1100D9A7: mov dword ptr [edx], 0 */
+    wr32((c->eax), 0x0u);                                        /* 1100D9AD: mov dword ptr [eax], 0 */
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100D9B3: mov eax, 0xffffffd8 */
+    c->esp += 4; return;                                         /* 1100D9B8: ret  */
+L_1100D9B9:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 1100D9B9: mov eax, dword ptr [esp + 0x14] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000010u)));           /* 1100D9BD: mov edx, dword ptr [esp + 0x10] */
+    push32(c, c->eax);                                           /* 1100D9C1: push eax */
+    push32(c, c->edx);                                           /* 1100D9C2: push edx */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 1100D9C3: mov eax, dword ptr [esp + 0x14] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000010u)));           /* 1100D9C7: mov edx, dword ptr [esp + 0x10] */
+    push32(c, c->eax);                                           /* 1100D9CB: push eax */
+    push32(c, c->edx);                                           /* 1100D9CC: push edx */
+    push32(c, 0x1100D9D2u); dispatch(c, 0x110114C0u);            /* 1100D9CD: call 0x110114c0 */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100D9D2: xor eax, eax */
+    c->esp += 4; return;                                         /* 1100D9D4: ret  */
+L_1100D9D5:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100D9D5: mov eax, 0xffffffcc */
+    c->esp += 4; return;                                         /* 1100D9DA: ret  */
+L_1100D9DB:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100D9DB: mov eax, 0xffffffd8 */
+    c->esp += 4; return;                                         /* 1100D9E0: ret  */
+}
+
+void L_1100D9F0(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100D9F0: mov eax, dword ptr [esp + 4] */
+    c->esp = (uint32_t)(flags_sub(c, c->esp, 0x4u, 4));          /* 1100D9F4: sub esp, 4 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100D9F7: test eax, eax */
+    push32(c, c->esi);                                           /* 1100D9F9: push esi */
+    push32(c, c->edi);                                           /* 1100D9FA: push edi */
+    if (c->zf) goto L_1100DAD0;                                  /* 1100D9FB: je 0x1100dad0 */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100DA01: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100DAC5;           /* 1100DA06: jg 0x1100dac5 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DA0C: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100DAC5;            /* 1100DA0E: jle 0x1100dac5 */
+    c->esi = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100DA14: mov esi, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->esi & c->esi, 4);                         /* 1100DA1B: test esi, esi */
+    if (!c->zf) goto L_1100DA2A;                                 /* 1100DA1D: jne 0x1100da2a */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100DA1F: mov eax, 0xffffffce */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DA24: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DA25: pop esi */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100DA26: add esp, 4 */
+    c->esp += 4; return;                                         /* 1100DA29: ret  */
+L_1100DA2A:
+    flags_sub(c, rd32((c->esi + 0x00000004u)), 0x0u, 4);         /* 1100DA2A: cmp dword ptr [esi + 4], 0 */
+    if (!c->zf) goto L_1100DAA1;                                 /* 1100DA2E: jne 0x1100daa1 */
+    push32(c, 0xC2u);                                            /* 1100DA30: push 0xc2 */
+    push32(c, 0x1100DA3Au); dispatch(c, 0x1101AA58u);            /* 1100DA35: call 0x1101aa58 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100DA3A: add esp, 4 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DA3D: test eax, eax */
+    if (c->zf) goto L_1100DA52;                                  /* 1100DA3F: je 0x1100da52 */
+    c->ecx = (uint32_t)((c->esp + 0x00000008u));                 /* 1100DA41: lea ecx, [esp + 8] */
+    push32(c, c->ecx);                                           /* 1100DA45: push ecx */
+    c->ecx = (uint32_t)(c->eax);                                 /* 1100DA46: mov ecx, eax */
+    push32(c, 0x1100DA4Du); dispatch(c, 0x11010FD0u);            /* 1100DA48: call 0x11010fd0 */
+    wr32((c->esi + 0x00000004u), c->eax);                        /* 1100DA4D: mov dword ptr [esi + 4], eax */
+    goto L_1100DA59;                                             /* 1100DA50: jmp 0x1100da59 */
+L_1100DA52:
+    wr32((c->esi + 0x00000004u), 0x0u);                          /* 1100DA52: mov dword ptr [esi + 4], 0 */
+L_1100DA59:
+    c->edi = (uint32_t)(rd32((c->esi + 0x00000004u)));           /* 1100DA59: mov edi, dword ptr [esi + 4] */
+    flags_logicz(c, c->edi & c->edi, 4);                         /* 1100DA5C: test edi, edi */
+    if (!c->zf) goto L_1100DA70;                                 /* 1100DA5E: jne 0x1100da70 */
+    push32(c, 0x1100DA65u); dispatch(c, 0x1101A844u);            /* 1100DA60: call 0x1101a844 */
+    c->eax = (uint32_t)(0xFFFFFFECu);                            /* 1100DA65: mov eax, 0xffffffec */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DA6A: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DA6B: pop esi */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100DA6C: add esp, 4 */
+    c->esp += 4; return;                                         /* 1100DA6F: ret  */
+L_1100DA70:
+    flags_sub(c, rd32((c->esp + 0x00000008u)), 0x0u, 4);         /* 1100DA70: cmp dword ptr [esp + 8], 0 */
+    if (c->zf) goto L_1100DAA1;                                  /* 1100DA75: je 0x1100daa1 */
+    flags_logicz(c, c->edi & c->edi, 4);                         /* 1100DA77: test edi, edi */
+    if (c->zf) goto L_1100DA8B;                                  /* 1100DA79: je 0x1100da8b */
+    c->ecx = (uint32_t)(c->edi);                                 /* 1100DA7B: mov ecx, edi */
+    push32(c, 0x1100DA82u); dispatch(c, 0x110110A0u);            /* 1100DA7D: call 0x110110a0 */
+    push32(c, c->edi);                                           /* 1100DA82: push edi */
+    push32(c, 0x1100DA88u); dispatch(c, 0x1101AA4Bu);            /* 1100DA83: call 0x1101aa4b */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100DA88: add esp, 4 */
+L_1100DA8B:
+    wr32((c->esi + 0x00000004u), 0x0u);                          /* 1100DA8B: mov dword ptr [esi + 4], 0 */
+    push32(c, 0x1100DA97u); dispatch(c, 0x1101A844u);            /* 1100DA92: call 0x1101a844 */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000008u)));           /* 1100DA97: mov eax, dword ptr [esp + 8] */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DA9B: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DA9C: pop esi */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100DA9D: add esp, 4 */
+    c->esp += 4; return;                                         /* 1100DAA0: ret  */
+L_1100DAA1:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 1100DAA1: mov eax, dword ptr [esp + 0x20] */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100DAA5: mov ecx, dword ptr [esp + 0x1c] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000018u)));           /* 1100DAA9: mov edx, dword ptr [esp + 0x18] */
+    push32(c, c->eax);                                           /* 1100DAAD: push eax */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000018u)));           /* 1100DAAE: mov eax, dword ptr [esp + 0x18] */
+    push32(c, c->ecx);                                           /* 1100DAB2: push ecx */
+    push32(c, c->edx);                                           /* 1100DAB3: push edx */
+    c->ecx = (uint32_t)(rd32((c->esi + 0x00000004u)));           /* 1100DAB4: mov ecx, dword ptr [esi + 4] */
+    push32(c, c->eax);                                           /* 1100DAB7: push eax */
+    push32(c, 0x1100DABDu); dispatch(c, 0x11011490u);            /* 1100DAB8: call 0x11011490 */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100DABD: xor eax, eax */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DABF: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DAC0: pop esi */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100DAC1: add esp, 4 */
+    c->esp += 4; return;                                         /* 1100DAC4: ret  */
+L_1100DAC5:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100DAC5: mov eax, 0xffffffcc */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DACA: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DACB: pop esi */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100DACC: add esp, 4 */
+    c->esp += 4; return;                                         /* 1100DACF: ret  */
+L_1100DAD0:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100DAD0: mov eax, 0xffffffd8 */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DAD5: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DAD6: pop esi */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100DAD7: add esp, 4 */
+    c->esp += 4; return;                                         /* 1100DADA: ret  */
+}
+
+void L_1100DAE0(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100DAE0: mov eax, dword ptr [esp + 4] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DAE4: test eax, eax */
+    if (c->zf) goto L_1100DB24;                                  /* 1100DAE6: je 0x1100db24 */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100DAE8: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100DB1E;           /* 1100DAED: jg 0x1100db1e */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DAEF: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100DB1E;            /* 1100DAF1: jle 0x1100db1e */
+    c->eax = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100DAF3: mov eax, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DAFA: test eax, eax */
+    if (!c->zf) goto L_1100DB04;                                 /* 1100DAFC: jne 0x1100db04 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100DAFE: mov eax, 0xffffffce */
+    c->esp += 4; return;                                         /* 1100DB03: ret  */
+L_1100DB04:
+    c->ecx = (uint32_t)(rd32((c->eax + 0x00000004u)));           /* 1100DB04: mov ecx, dword ptr [eax + 4] */
+    flags_logicz(c, c->ecx & c->ecx, 4);                         /* 1100DB07: test ecx, ecx */
+    if (!c->zf) goto L_1100DB11;                                 /* 1100DB09: jne 0x1100db11 */
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100DB0B: mov eax, 0xffffffd8 */
+    c->esp += 4; return;                                         /* 1100DB10: ret  */
+L_1100DB11:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000008u)));           /* 1100DB11: mov eax, dword ptr [esp + 8] */
+    push32(c, c->eax);                                           /* 1100DB15: push eax */
+    push32(c, 0x1100DB1Bu); dispatch(c, 0x11011690u);            /* 1100DB16: call 0x11011690 */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100DB1B: xor eax, eax */
+    c->esp += 4; return;                                         /* 1100DB1D: ret  */
+L_1100DB1E:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100DB1E: mov eax, 0xffffffcc */
+    c->esp += 4; return;                                         /* 1100DB23: ret  */
+L_1100DB24:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100DB24: mov eax, 0xffffffd8 */
+    c->esp += 4; return;                                         /* 1100DB29: ret  */
+}
+
+void L_1100DB30(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100DB30: mov eax, dword ptr [esp + 4] */
+    push32(c, c->esi);                                           /* 1100DB34: push esi */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DB35: test eax, eax */
+    if (c->zf) goto L_1100DBB0;                                  /* 1100DB37: je 0x1100dbb0 */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100DB39: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100DBA9;           /* 1100DB3E: jg 0x1100dba9 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DB40: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100DBA9;            /* 1100DB42: jle 0x1100dba9 */
+    c->esi = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100DB44: mov esi, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->esi & c->esi, 4);                         /* 1100DB4B: test esi, esi */
+    if (!c->zf) goto L_1100DB56;                                 /* 1100DB4D: jne 0x1100db56 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100DB4F: mov eax, 0xffffffce */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DB54: pop esi */
+    c->esp += 4; return;                                         /* 1100DB55: ret  */
+L_1100DB56:
+    c->ecx = (uint32_t)(rd32((c->esi + 0x00000004u)));           /* 1100DB56: mov ecx, dword ptr [esi + 4] */
+    flags_logicz(c, c->ecx & c->ecx, 4);                         /* 1100DB59: test ecx, ecx */
+    if (!c->zf) goto L_1100DB64;                                 /* 1100DB5B: jne 0x1100db64 */
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100DB5D: mov eax, 0xffffffd8 */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DB62: pop esi */
+    c->esp += 4; return;                                         /* 1100DB63: ret  */
+L_1100DB64:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000010u)));           /* 1100DB64: mov eax, dword ptr [esp + 0x10] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x0000000Cu)));           /* 1100DB68: mov edx, dword ptr [esp + 0xc] */
+    push32(c, c->eax);                                           /* 1100DB6C: push eax */
+    push32(c, c->edx);                                           /* 1100DB6D: push edx */
+    c->eax = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100DB6E: mov eax, dword ptr [esp + 0x1c] */
+    push32(c, c->eax);                                           /* 1100DB72: push eax */
+    push32(c, 0x1100DB78u); dispatch(c, 0x11011500u);            /* 1100DB73: call 0x11011500 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DB78: test eax, eax */
+    if (!c->zf) goto L_1100DBB5;                                 /* 1100DB7A: jne 0x1100dbb5 */
+    c->ecx = (uint32_t)(rd32((c->esi)));                         /* 1100DB7C: mov ecx, dword ptr [esi] */
+    flags_logicz(c, c->ecx & c->ecx, 4);                         /* 1100DB7E: test ecx, ecx */
+    if (c->zf) goto L_1100DBB5;                                  /* 1100DB80: je 0x1100dbb5 */
+    c->eax = (uint32_t)(rd32((c->ecx + 0x000008B9u)));           /* 1100DB82: mov eax, dword ptr [ecx + 0x8b9] */
+    SET16(c->eax, rd16((c->eax + 0x00000004u)));                 /* 1100DB88: mov ax, word ptr [eax + 4] */
+    flags_sub(c, R16(c->eax), 0x2u, 2);                          /* 1100DB8C: cmp ax, 2 */
+    if (!c->zf) goto L_1100DB9E;                                 /* 1100DB90: jne 0x1100db9e */
+    push32(c, 0x10u);                                            /* 1100DB92: push 0x10 */
+    c->ecx = (uint32_t)(rd32((c->esi + 0x00000004u)));           /* 1100DB94: mov ecx, dword ptr [esi + 4] */
+    push32(c, 0x1100DB9Cu); dispatch(c, 0x11011AA0u);            /* 1100DB97: call 0x11011aa0 */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DB9C: pop esi */
+    c->esp += 4; return;                                         /* 1100DB9D: ret  */
+L_1100DB9E:
+    push32(c, c->eax);                                           /* 1100DB9E: push eax */
+    c->ecx = (uint32_t)(rd32((c->esi + 0x00000004u)));           /* 1100DB9F: mov ecx, dword ptr [esi + 4] */
+    push32(c, 0x1100DBA7u); dispatch(c, 0x11011AA0u);            /* 1100DBA2: call 0x11011aa0 */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DBA7: pop esi */
+    c->esp += 4; return;                                         /* 1100DBA8: ret  */
+L_1100DBA9:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100DBA9: mov eax, 0xffffffcc */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DBAE: pop esi */
+    c->esp += 4; return;                                         /* 1100DBAF: ret  */
+L_1100DBB0:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100DBB0: mov eax, 0xffffffd8 */
+L_1100DBB5:
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DBB5: pop esi */
+    c->esp += 4; return;                                         /* 1100DBB6: ret  */
+}
+
+void L_1100DBC0(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100DBC0: mov eax, dword ptr [esp + 4] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DBC4: test eax, eax */
+    if (c->zf) goto L_1100DC12;                                  /* 1100DBC6: je 0x1100dc12 */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100DBC8: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100DC0C;           /* 1100DBCD: jg 0x1100dc0c */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DBCF: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100DC0C;            /* 1100DBD1: jle 0x1100dc0c */
+    c->eax = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100DBD3: mov eax, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DBDA: test eax, eax */
+    if (!c->zf) goto L_1100DBE4;                                 /* 1100DBDC: jne 0x1100dbe4 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100DBDE: mov eax, 0xffffffce */
+    c->esp += 4; return;                                         /* 1100DBE3: ret  */
+L_1100DBE4:
+    c->eax = (uint32_t)(rd32((c->eax)));                         /* 1100DBE4: mov eax, dword ptr [eax] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DBE6: test eax, eax */
+    if (!c->zf) goto L_1100DBF7;                                 /* 1100DBE8: jne 0x1100dbf7 */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000008u)));           /* 1100DBEA: mov eax, dword ptr [esp + 8] */
+    wr32((c->eax), 0x0u);                                        /* 1100DBEE: mov dword ptr [eax], 0 */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100DBF4: xor eax, eax */
+    c->esp += 4; return;                                         /* 1100DBF6: ret  */
+L_1100DBF7:
+    c->eax = (uint32_t)(rd32((c->eax + 0x000008B9u)));           /* 1100DBF7: mov eax, dword ptr [eax + 0x8b9] */
+    c->ecx = (uint32_t)(flags_logicz(c, c->ecx ^ c->ecx, 4));    /* 1100DBFD: xor ecx, ecx */
+    SET16(c->ecx, rd16((c->eax + 0x00000055u)));                 /* 1100DBFF: mov cx, word ptr [eax + 0x55] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000008u)));           /* 1100DC03: mov eax, dword ptr [esp + 8] */
+    wr32((c->eax), c->ecx);                                      /* 1100DC07: mov dword ptr [eax], ecx */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100DC09: xor eax, eax */
+    c->esp += 4; return;                                         /* 1100DC0B: ret  */
+L_1100DC0C:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100DC0C: mov eax, 0xffffffcc */
+    c->esp += 4; return;                                         /* 1100DC11: ret  */
+L_1100DC12:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100DC12: mov eax, 0xffffffd8 */
+    c->esp += 4; return;                                         /* 1100DC17: ret  */
+}
+
+void L_1100DC20(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100DC20: mov eax, dword ptr [esp + 4] */
+    push32(c, c->esi);                                           /* 1100DC24: push esi */
+    push32(c, c->edi);                                           /* 1100DC25: push edi */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DC26: test eax, eax */
+    if (c->zf) goto L_1100DCA4;                                  /* 1100DC28: je 0x1100dca4 */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100DC2A: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100DC9C;           /* 1100DC2F: jg 0x1100dc9c */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DC31: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100DC9C;            /* 1100DC33: jle 0x1100dc9c */
+    c->edx = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100DC35: mov edx, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->edx & c->edx, 4);                         /* 1100DC3C: test edx, edx */
+    if (!c->zf) goto L_1100DC48;                                 /* 1100DC3E: jne 0x1100dc48 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100DC40: mov eax, 0xffffffce */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DC45: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DC46: pop esi */
+    c->esp += 4; return;                                         /* 1100DC47: ret  */
+L_1100DC48:
+    c->eax = (uint32_t)(rd32((c->edx)));                         /* 1100DC48: mov eax, dword ptr [edx] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DC4A: test eax, eax */
+    if (c->zf) goto L_1100DC94;                                  /* 1100DC4C: je 0x1100dc94 */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x00000010u)));           /* 1100DC4E: mov ecx, dword ptr [esp + 0x10] */
+    flags_logicz(c, c->ecx & c->ecx, 4);                         /* 1100DC52: test ecx, ecx */
+    if (c->zf) goto L_1100DC94;                                  /* 1100DC54: je 0x1100dc94 */
+    c->esi = (uint32_t)(rd32((c->eax + 0x000008B9u)));           /* 1100DC56: mov esi, dword ptr [eax + 0x8b9] */
+    SET16(c->edi, rd16((c->esi + 0x00000055u)));                 /* 1100DC5C: mov di, word ptr [esi + 0x55] */
+    flags_logicz(c, R16(c->edi) & R16(c->edi), 2);               /* 1100DC60: test di, di */
+    if (!c->zf) goto L_1100DC6D;                                 /* 1100DC63: jne 0x1100dc6d */
+    c->eax = (uint32_t)(0xFFFFFFC1u);                            /* 1100DC65: mov eax, 0xffffffc1 */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DC6A: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DC6B: pop esi */
+    c->esp += 4; return;                                         /* 1100DC6C: ret  */
+L_1100DC6D:
+    c->eax = (uint32_t)(rd32((c->esi + 0x0000005Bu)));           /* 1100DC6D: mov eax, dword ptr [esi + 0x5b] */
+    push32(c, c->eax);                                           /* 1100DC70: push eax */
+    push32(c, c->ecx);                                           /* 1100DC71: push ecx */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100DC72: xor eax, eax */
+    c->ecx = (uint32_t)(rd32((c->esi + 0x00000057u)));           /* 1100DC74: mov ecx, dword ptr [esi + 0x57] */
+    SET16(c->eax, rd16((c->esi + 0x00000004u)));                 /* 1100DC77: mov ax, word ptr [esi + 4] */
+    push32(c, c->eax);                                           /* 1100DC7B: push eax */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100DC7C: xor eax, eax */
+    SET8L(c->eax, rd8((c->esi + 0x00000065u)));                  /* 1100DC7E: mov al, byte ptr [esi + 0x65] */
+    c->esi = (uint32_t)((R16(c->edi)));                          /* 1100DC81: movzx esi, di */
+    push32(c, c->eax);                                           /* 1100DC84: push eax */
+    push32(c, c->ecx);                                           /* 1100DC85: push ecx */
+    push32(c, c->esi);                                           /* 1100DC86: push esi */
+    c->ecx = (uint32_t)(rd32((c->edx + 0x00000004u)));           /* 1100DC87: mov ecx, dword ptr [edx + 4] */
+    push32(c, 0x1100DC8Fu); dispatch(c, 0x11011DE0u);            /* 1100DC8A: call 0x11011de0 */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100DC8F: xor eax, eax */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DC91: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DC92: pop esi */
+    c->esp += 4; return;                                         /* 1100DC93: ret  */
+L_1100DC94:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100DC94: mov eax, 0xffffffd8 */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DC99: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DC9A: pop esi */
+    c->esp += 4; return;                                         /* 1100DC9B: ret  */
+L_1100DC9C:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100DC9C: mov eax, 0xffffffcc */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DCA1: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DCA2: pop esi */
+    c->esp += 4; return;                                         /* 1100DCA3: ret  */
+L_1100DCA4:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100DCA4: mov eax, 0xffffffd8 */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DCA9: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DCAA: pop esi */
+    c->esp += 4; return;                                         /* 1100DCAB: ret  */
+}
+
+void L_1100DCB0(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100DCB0: mov eax, dword ptr [esp + 4] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DCB4: test eax, eax */
+    if (c->zf) goto L_1100DCE6;                                  /* 1100DCB6: je 0x1100dce6 */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100DCB8: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100DCE0;           /* 1100DCBD: jg 0x1100dce0 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DCBF: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100DCE0;            /* 1100DCC1: jle 0x1100dce0 */
+    c->eax = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100DCC3: mov eax, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DCCA: test eax, eax */
+    if (!c->zf) goto L_1100DCD4;                                 /* 1100DCCC: jne 0x1100dcd4 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100DCCE: mov eax, 0xffffffce */
+    c->esp += 4; return;                                         /* 1100DCD3: ret  */
+L_1100DCD4:
+    SET8L(c->ecx, rd8((c->eax + 0x00000008u)));                  /* 1100DCD4: mov cl, byte ptr [eax + 8] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000008u)));           /* 1100DCD7: mov eax, dword ptr [esp + 8] */
+    wr8((c->eax), R8L(c->ecx));                                  /* 1100DCDB: mov byte ptr [eax], cl */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100DCDD: xor eax, eax */
+    c->esp += 4; return;                                         /* 1100DCDF: ret  */
+L_1100DCE0:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100DCE0: mov eax, 0xffffffcc */
+    c->esp += 4; return;                                         /* 1100DCE5: ret  */
+L_1100DCE6:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100DCE6: mov eax, 0xffffffd8 */
+    c->esp += 4; return;                                         /* 1100DCEB: ret  */
+}
+
+void L_1100DCF0(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100DCF0: mov eax, dword ptr [esp + 4] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DCF4: test eax, eax */
+    if (c->zf) goto L_1100DD26;                                  /* 1100DCF6: je 0x1100dd26 */
+    flags_sub(c, c->eax, 0x100u, 4);                             /* 1100DCF8: cmp eax, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100DD20;           /* 1100DCFD: jg 0x1100dd20 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DCFF: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1100DD20;            /* 1100DD01: jle 0x1100dd20 */
+    c->eax = (uint32_t)(rd32((c->eax*4 + GVA(0x1101E000))));     /* 1100DD03: mov eax, dword ptr [eax*4 + 0x1101e000] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100DD0A: test eax, eax */
+    if (!c->zf) goto L_1100DD14;                                 /* 1100DD0C: jne 0x1100dd14 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100DD0E: mov eax, 0xffffffce */
+    c->esp += 4; return;                                         /* 1100DD13: ret  */
+L_1100DD14:
+    c->ecx = (uint32_t)(flags_logicz(c, c->ecx ^ c->ecx, 4));    /* 1100DD14: xor ecx, ecx */
+    SET8L(c->ecx, rd8((c->esp + 0x00000008u)));                  /* 1100DD16: mov cl, byte ptr [esp + 8] */
+    wr32((c->eax + 0x00000008u), c->ecx);                        /* 1100DD1A: mov dword ptr [eax + 8], ecx */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100DD1D: xor eax, eax */
+    c->esp += 4; return;                                         /* 1100DD1F: ret  */
+L_1100DD20:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100DD20: mov eax, 0xffffffcc */
+    c->esp += 4; return;                                         /* 1100DD25: ret  */
+L_1100DD26:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100DD26: mov eax, 0xffffffd8 */
+    c->esp += 4; return;                                         /* 1100DD2B: ret  */
+}
+
+void L_1100DD30(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100DD30: mov eax, dword ptr [esp + 4] */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x00000008u)));           /* 1100DD34: mov ecx, dword ptr [esp + 8] */
+    wr32((c->eax), 0x5u);                                        /* 1100DD38: mov dword ptr [eax], 5 */
+    wr32((c->ecx), 0x0u);                                        /* 1100DD3E: mov dword ptr [ecx], 0 */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100DD44: xor eax, eax */
+    c->esp += 4; return;                                         /* 1100DD46: ret  */
+}
+
+void L_1100DD50(CPU *c)
+{
+    c->ecx = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 1100DD50: mov ecx, dword ptr [esp + 4] */
+    c->esp = (uint32_t)(flags_sub(c, c->esp, 0x2Cu, 4));         /* 1100DD54: sub esp, 0x2c */
+    flags_logicz(c, c->ecx & c->ecx, 4);                         /* 1100DD57: test ecx, ecx */
+    push32(c, c->ebx);                                           /* 1100DD59: push ebx */
+    push32(c, c->esi);                                           /* 1100DD5A: push esi */
+    push32(c, c->edi);                                           /* 1100DD5B: push edi */
+    push32(c, c->ebp);                                           /* 1100DD5C: push ebp */
+    if (c->zf) goto L_1100E0EE;                                  /* 1100DD5D: je 0x1100e0ee */
+    flags_sub(c, c->ecx, 0x100u, 4);                             /* 1100DD63: cmp ecx, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100E0E1;           /* 1100DD69: jg 0x1100e0e1 */
+    flags_logicz(c, c->ecx & c->ecx, 4);                         /* 1100DD6F: test ecx, ecx */
+    if ((c->zf || (c->sf != c->of))) goto L_1100E0E1;            /* 1100DD71: jle 0x1100e0e1 */
+    c->edx = (uint32_t)(rd32((c->ecx*4 + GVA(0x1101E000))));     /* 1100DD77: mov edx, dword ptr [ecx*4 + 0x1101e000] */
+    wr32((c->esp + 0x00000020u), c->edx);                        /* 1100DD7E: mov dword ptr [esp + 0x20], edx */
+    flags_logicz(c, c->edx & c->edx, 4);                         /* 1100DD82: test edx, edx */
+    if (!c->zf) goto L_1100DD93;                                 /* 1100DD84: jne 0x1100dd93 */
+    c->eax = (uint32_t)(0xFFFFFFCEu);                            /* 1100DD86: mov eax, 0xffffffce */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100DD8B: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DD8C: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DD8D: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100DD8E: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x2Cu, 4));         /* 1100DD8F: add esp, 0x2c */
+    c->esp += 4; return;                                         /* 1100DD92: ret  */
+L_1100DD93:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 1100DD93: mov eax, dword ptr [esp + 0x20] */
+    c->eax = (uint32_t)(rd32((c->eax)));                         /* 1100DD97: mov eax, dword ptr [eax] */
+    flags_sub(c, rd32((c->eax + 0x0000089Cu)), 0x0u, 4);         /* 1100DD99: cmp dword ptr [eax + 0x89c], 0 */
+    c->edi = (uint32_t)(rd32((c->eax + 0x000008A0u)));           /* 1100DDA0: mov edi, dword ptr [eax + 0x8a0] */
+    wr32((c->esp + 0x00000024u), c->edi);                        /* 1100DDA6: mov dword ptr [esp + 0x24], edi */
+    if (c->zf) goto L_1100DE37;                                  /* 1100DDAA: je 0x1100de37 */
+    flags_logicz(c, c->ecx & c->ecx, 4);                         /* 1100DDB0: test ecx, ecx */
+    if (c->zf) goto L_1100DE1F;                                  /* 1100DDB2: je 0x1100de1f */
+    flags_sub(c, c->ecx, 0x100u, 4);                             /* 1100DDB4: cmp ecx, 0x100 */
+    if ((!c->zf && (c->sf == c->of))) goto L_1100DE18;           /* 1100DDBA: jg 0x1100de18 */
+    flags_logicz(c, c->ecx & c->ecx, 4);                         /* 1100DDBC: test ecx, ecx */
+    if ((c->zf || (c->sf != c->of))) goto L_1100DE18;            /* 1100DDBE: jle 0x1100de18 */
+    flags_logicz(c, c->edx & c->edx, 4);                         /* 1100DDC0: test edx, edx */
+    if (!c->zf) goto L_1100DDCB;                                 /* 1100DDC2: jne 0x1100ddcb */
+    c->esi = (uint32_t)(0xFFFFFFCEu);                            /* 1100DDC4: mov esi, 0xffffffce */
+    goto L_1100DE24;                                             /* 1100DDC9: jmp 0x1100de24 */
+L_1100DDCB:
+    flags_sub(c, rd32((c->edx + 0x0000003Bu)), 0x0u, 4);         /* 1100DDCB: cmp dword ptr [edx + 0x3b], 0 */
+    if (!c->zf) goto L_1100DDD8;                                 /* 1100DDCF: jne 0x1100ddd8 */
+    c->esi = (uint32_t)(0xFFFFFFC4u);                            /* 1100DDD1: mov esi, 0xffffffc4 */
+    goto L_1100DE24;                                             /* 1100DDD6: jmp 0x1100de24 */
+L_1100DDD8:
+    c->eax = (uint32_t)(rd32((c->eax + 0x000008B9u)));           /* 1100DDD8: mov eax, dword ptr [eax + 0x8b9] */
+    c->ecx = (uint32_t)(rd32((c->eax + 0x00000041u)));           /* 1100DDDE: mov ecx, dword ptr [eax + 0x41] */
+    SET16(c->ebx, rd16((c->ecx)));                               /* 1100DDE1: mov bx, word ptr [ecx] */
+    flags_sub(c, rd16((c->edx + 0x00000029u)), R16(c->ebx), 2);  /* 1100DDE4: cmp word ptr [edx + 0x29], bx */
+    if (c->zf) goto L_1100DDF1;                                  /* 1100DDE8: je 0x1100ddf1 */
+    c->esi = (uint32_t)(0xFFFFFFC3u);                            /* 1100DDEA: mov esi, 0xffffffc3 */
+    goto L_1100DE24;                                             /* 1100DDEF: jmp 0x1100de24 */
+L_1100DDF1:
+    SET16(c->eax, rd16((c->edx + 0x0000002Bu)));                 /* 1100DDF1: mov ax, word ptr [edx + 0x2b] */
+    flags_sub(c, rd16((c->ecx + 0x00000002u)), R16(c->eax), 2);  /* 1100DDF5: cmp word ptr [ecx + 2], ax */
+    if (c->zf) goto L_1100DE02;                                  /* 1100DDF9: je 0x1100de02 */
+    c->esi = (uint32_t)(0xFFFFFFC3u);                            /* 1100DDFB: mov esi, 0xffffffc3 */
+    goto L_1100DE24;                                             /* 1100DE00: jmp 0x1100de24 */
+L_1100DE02:
+    c->eax = (uint32_t)(rd32((c->ecx + 0x00000004u)));           /* 1100DE02: mov eax, dword ptr [ecx + 4] */
+    c->esi = (uint32_t)(0x0u);                                   /* 1100DE05: mov esi, 0 */
+    c->eax = (uint32_t)(flags_sub(c, c->eax, rd32((c->edx + 0x00000037u)), 4)); /* 1100DE0A: sub eax, dword ptr [edx + 0x37] */
+    flags_sub(c, c->eax, 0x1u, 4);                               /* 1100DE0D: cmp eax, 1 */
+    c->esi = (uint32_t)(flags_adc(c, c->esi, 0xFFFFFFFFu, 4));   /* 1100DE10: adc esi, -1 */
+    c->esi = (uint32_t)(flags_logicz(c, c->esi & 0xFFFFFFC3u, 4)); /* 1100DE13: and esi, 0xffffffc3 */
+    goto L_1100DE24;                                             /* 1100DE16: jmp 0x1100de24 */
+L_1100DE18:
+    c->esi = (uint32_t)(0xFFFFFFCCu);                            /* 1100DE18: mov esi, 0xffffffcc */
+    goto L_1100DE24;                                             /* 1100DE1D: jmp 0x1100de24 */
+L_1100DE1F:
+    c->esi = (uint32_t)(0xFFFFFFD8u);                            /* 1100DE1F: mov esi, 0xffffffd8 */
+L_1100DE24:
+    flags_logicz(c, c->esi & c->esi, 4);                         /* 1100DE24: test esi, esi */
+    if (c->zf) goto L_1100DE37;                                  /* 1100DE26: je 0x1100de37 */
+    push32(c, 0x1100DE2Du); dispatch(c, 0x1101A844u);            /* 1100DE28: call 0x1101a844 */
+    c->eax = (uint32_t)(c->esi);                                 /* 1100DE2D: mov eax, esi */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100DE2F: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DE30: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DE31: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100DE32: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x2Cu, 4));         /* 1100DE33: add esp, 0x2c */
+    c->esp += 4; return;                                         /* 1100DE36: ret  */
+L_1100DE37:
+    push32(c, 0x8F3u);                                           /* 1100DE37: push 0x8f3 */
+    push32(c, 0x1100DE41u); dispatch(c, 0x1101AA58u);            /* 1100DE3C: call 0x1101aa58 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100DE41: add esp, 4 */
+    c->ecx = (uint32_t)(c->eax);                                 /* 1100DE44: mov ecx, eax */
+    flags_logicz(c, c->ecx & c->ecx, 4);                         /* 1100DE46: test ecx, ecx */
+    if (c->zf) goto L_1100DEAE;                                  /* 1100DE48: je 0x1100deae */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 1100DE4A: mov eax, dword ptr [esp + 0x20] */
+    c->edi = (uint32_t)(rd32((c->esp + 0x00000024u)));           /* 1100DE4E: mov edi, dword ptr [esp + 0x24] */
+    c->ebx = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 1100DE52: mov ebx, dword ptr [esp + 0x20] */
+    c->esi = (uint32_t)(rd32((c->eax)));                         /* 1100DE56: mov esi, dword ptr [eax] */
+    SET16(c->ebp, rd16((c->ebx + 0x0000002Bu)));                 /* 1100DE58: mov bp, word ptr [ebx + 0x2b] */
+    c->eax = (uint32_t)((c->esp + 0x00000038u));                 /* 1100DE5C: lea eax, [esp + 0x38] */
+    c->edx = (uint32_t)(rd32((c->esi + 0x000008B9u)));           /* 1100DE60: mov edx, dword ptr [esi + 0x8b9] */
+    push32(c, c->eax);                                           /* 1100DE66: push eax */
+    push32(c, c->edi);                                           /* 1100DE67: push edi */
+    c->eax = (uint32_t)(rd32((c->ebx + 0x0000003Bu)));           /* 1100DE68: mov eax, dword ptr [ebx + 0x3b] */
+    push32(c, c->eax);                                           /* 1100DE6B: push eax */
+    push32(c, c->ebp);                                           /* 1100DE6C: push ebp */
+    SET16(c->eax, rd16((c->ebx + 0x00000029u)));                 /* 1100DE6D: mov ax, word ptr [ebx + 0x29] */
+    c->ebp = (uint32_t)(rd32((c->esi + 0x0000089Cu)));           /* 1100DE71: mov ebp, dword ptr [esi + 0x89c] */
+    SET16(c->ebx, rd16((c->edx + 0x00000047u)));                 /* 1100DE77: mov bx, word ptr [edx + 0x47] */
+    push32(c, c->eax);                                           /* 1100DE7B: push eax */
+    SET16(c->eax, rd16((c->edx + 0x00000045u)));                 /* 1100DE7C: mov ax, word ptr [edx + 0x45] */
+    push32(c, c->ebp);                                           /* 1100DE80: push ebp */
+    push32(c, c->ebx);                                           /* 1100DE81: push ebx */
+    c->ebp = (uint32_t)(rd32((c->esi + 0x000008B0u)));           /* 1100DE82: mov ebp, dword ptr [esi + 0x8b0] */
+    SET16(c->ebx, rd16((c->edx + 0x0000000Eu)));                 /* 1100DE88: mov bx, word ptr [edx + 0xe] */
+    push32(c, c->eax);                                           /* 1100DE8C: push eax */
+    push32(c, c->ebp);                                           /* 1100DE8D: push ebp */
+    c->eax = (uint32_t)(rd32((c->esi + 0x000008ACu)));           /* 1100DE8E: mov eax, dword ptr [esi + 0x8ac] */
+    push32(c, c->ebx);                                           /* 1100DE94: push ebx */
+    SET8L(c->edx, rd8((c->edx + 0x00000065u)));                  /* 1100DE95: mov dl, byte ptr [edx + 0x65] */
+    push32(c, c->eax);                                           /* 1100DE98: push eax */
+    SET8L(c->ebx, rd8((c->esi + 0x000008B8u)));                  /* 1100DE99: mov bl, byte ptr [esi + 0x8b8] */
+    push32(c, 0x1u);                                             /* 1100DE9F: push 1 */
+    push32(c, c->edx);                                           /* 1100DEA1: push edx */
+    push32(c, c->ebx);                                           /* 1100DEA2: push ebx */
+    push32(c, 0x1100DEA8u); dispatch(c, 0x11012020u);            /* 1100DEA3: call 0x11012020 */
+    wr32((c->esp + 0x0000001Cu), c->eax);                        /* 1100DEA8: mov dword ptr [esp + 0x1c], eax */
+    goto L_1100DEB6;                                             /* 1100DEAC: jmp 0x1100deb6 */
+L_1100DEAE:
+    wr32((c->esp + 0x0000001Cu), 0x0u);                          /* 1100DEAE: mov dword ptr [esp + 0x1c], 0 */
+L_1100DEB6:
+    flags_sub(c, rd32((c->esp + 0x0000001Cu)), 0x0u, 4);         /* 1100DEB6: cmp dword ptr [esp + 0x1c], 0 */
+    if (!c->zf) goto L_1100DECF;                                 /* 1100DEBB: jne 0x1100decf */
+    push32(c, 0x1100DEC2u); dispatch(c, 0x1101A844u);            /* 1100DEBD: call 0x1101a844 */
+    c->eax = (uint32_t)(0xFFFFFFECu);                            /* 1100DEC2: mov eax, 0xffffffec */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100DEC7: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DEC8: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DEC9: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100DECA: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x2Cu, 4));         /* 1100DECB: add esp, 0x2c */
+    c->esp += 4; return;                                         /* 1100DECE: ret  */
+L_1100DECF:
+    flags_sub(c, rd32((c->esp + 0x00000038u)), 0x0u, 4);         /* 1100DECF: cmp dword ptr [esp + 0x38], 0 */
+    if (c->zf) goto L_1100DF04;                                  /* 1100DED4: je 0x1100df04 */
+    flags_sub(c, rd32((c->esp + 0x0000001Cu)), 0x0u, 4);         /* 1100DED6: cmp dword ptr [esp + 0x1c], 0 */
+    if (c->zf) goto L_1100DEF3;                                  /* 1100DEDB: je 0x1100def3 */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100DEDD: mov ecx, dword ptr [esp + 0x1c] */
+    push32(c, 0x1100DEE6u); dispatch(c, 0x110121D0u);            /* 1100DEE1: call 0x110121d0 */
+    c->eax = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100DEE6: mov eax, dword ptr [esp + 0x1c] */
+    push32(c, c->eax);                                           /* 1100DEEA: push eax */
+    push32(c, 0x1100DEF0u); dispatch(c, 0x1101AA4Bu);            /* 1100DEEB: call 0x1101aa4b */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100DEF0: add esp, 4 */
+L_1100DEF3:
+    push32(c, 0x1100DEF8u); dispatch(c, 0x1101A844u);            /* 1100DEF3: call 0x1101a844 */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000038u)));           /* 1100DEF8: mov eax, dword ptr [esp + 0x38] */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100DEFC: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DEFD: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DEFE: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100DEFF: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x2Cu, 4));         /* 1100DF00: add esp, 0x2c */
+    c->esp += 4; return;                                         /* 1100DF03: ret  */
+L_1100DF04:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 1100DF04: mov eax, dword ptr [esp + 0x20] */
+    c->edi = (uint32_t)(rd32((c->esp + 0x00000024u)));           /* 1100DF08: mov edi, dword ptr [esp + 0x24] */
+    push32(c, c->edi);                                           /* 1100DF0C: push edi */
+    c->ecx = (uint32_t)(rd32((c->eax)));                         /* 1100DF0D: mov ecx, dword ptr [eax] */
+    c->edx = (uint32_t)(rd32((c->ecx + 0x000008B9u)));           /* 1100DF0F: mov edx, dword ptr [ecx + 0x8b9] */
+    c->eax = (uint32_t)(rd32((c->edx + 0x0000003Cu)));           /* 1100DF15: mov eax, dword ptr [edx + 0x3c] */
+    wr32((c->esp + 0x00000018u), c->eax);                        /* 1100DF18: mov dword ptr [esp + 0x18], eax */
+    c->edx = (uint32_t)(rd32((c->eax + 0x0000000Cu)));           /* 1100DF1C: mov edx, dword ptr [eax + 0xc] */
+    push32(c, c->edx);                                           /* 1100DF1F: push edx */
+    c->ebx = (uint32_t)(rd32((c->eax + 0x00000008u)));           /* 1100DF20: mov ebx, dword ptr [eax + 8] */
+    push32(c, c->ebx);                                           /* 1100DF23: push ebx */
+    push32(c, 0x0u);                                             /* 1100DF24: push 0 */
+    push32(c, 0x1100DF2Bu); dispatch(c, 0x110080F0u);            /* 1100DF26: call 0x110080f0 */
+    c->esi = (uint32_t)(c->eax);                                 /* 1100DF2B: mov esi, eax */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 1100DF2D: mov eax, dword ptr [esp + 0x20] */
+    flags_logicz(c, c->esi & c->esi, 4);                         /* 1100DF31: test esi, esi */
+    if (c->zf) goto L_1100DF68;                                  /* 1100DF33: je 0x1100df68 */
+    c->ecx = (uint32_t)(rd32((c->eax)));                         /* 1100DF35: mov ecx, dword ptr [eax] */
+    push32(c, 0x1100DF3Cu); dispatch(c, 0x110053E0u);            /* 1100DF37: call 0x110053e0 */
+    flags_sub(c, rd32((c->esp + 0x0000001Cu)), 0x0u, 4);         /* 1100DF3C: cmp dword ptr [esp + 0x1c], 0 */
+    if (c->zf) goto L_1100DF59;                                  /* 1100DF41: je 0x1100df59 */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100DF43: mov ecx, dword ptr [esp + 0x1c] */
+    push32(c, 0x1100DF4Cu); dispatch(c, 0x110121D0u);            /* 1100DF47: call 0x110121d0 */
+    c->eax = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100DF4C: mov eax, dword ptr [esp + 0x1c] */
+    push32(c, c->eax);                                           /* 1100DF50: push eax */
+    push32(c, 0x1100DF56u); dispatch(c, 0x1101AA4Bu);            /* 1100DF51: call 0x1101aa4b */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100DF56: add esp, 4 */
+L_1100DF59:
+    push32(c, 0x1100DF5Eu); dispatch(c, 0x1101A844u);            /* 1100DF59: call 0x1101a844 */
+    c->eax = (uint32_t)(c->esi);                                 /* 1100DF5E: mov eax, esi */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100DF60: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DF61: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DF62: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100DF63: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x2Cu, 4));         /* 1100DF64: add esp, 0x2c */
+    c->esp += 4; return;                                         /* 1100DF67: ret  */
+L_1100DF68:
+    c->eax = (uint32_t)(rd32((c->eax)));                         /* 1100DF68: mov eax, dword ptr [eax] */
+    push32(c, 0x1u);                                             /* 1100DF6A: push 1 */
+    c->ecx = (uint32_t)(rd32((c->eax + 0x000008A4u)));           /* 1100DF6C: mov ecx, dword ptr [eax + 0x8a4] */
+    c->edx = (uint32_t)(rd32((c->eax + 0x000008A8u)));           /* 1100DF72: mov edx, dword ptr [eax + 0x8a8] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000018u)));           /* 1100DF78: mov eax, dword ptr [esp + 0x18] */
+    push32(c, c->ecx);                                           /* 1100DF7C: push ecx */
+    push32(c, c->edx);                                           /* 1100DF7D: push edx */
+    c->ecx = (uint32_t)(rd32((c->eax + 0x0000000Cu)));           /* 1100DF7E: mov ecx, dword ptr [eax + 0xc] */
+    push32(c, c->ecx);                                           /* 1100DF81: push ecx */
+    c->edx = (uint32_t)(rd32((c->eax + 0x00000008u)));           /* 1100DF82: mov edx, dword ptr [eax + 8] */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x0000002Cu)));           /* 1100DF85: mov ecx, dword ptr [esp + 0x2c] */
+    push32(c, c->edx);                                           /* 1100DF89: push edx */
+    push32(c, 0x1100DF8Fu); dispatch(c, 0x11013630u);            /* 1100DF8A: call 0x11013630 */
+    c->esi = (uint32_t)((uint32_t)(int32_t)(int16_t)(R16(c->eax))); /* 1100DF8F: movsx esi, ax */
+    flags_logicz(c, c->esi & c->esi, 4);                         /* 1100DF92: test esi, esi */
+    if (c->zf) goto L_1100DFCD;                                  /* 1100DF94: je 0x1100dfcd */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 1100DF96: mov eax, dword ptr [esp + 0x20] */
+    c->ecx = (uint32_t)(rd32((c->eax)));                         /* 1100DF9A: mov ecx, dword ptr [eax] */
+    push32(c, 0x1100DFA1u); dispatch(c, 0x110053E0u);            /* 1100DF9C: call 0x110053e0 */
+    flags_sub(c, rd32((c->esp + 0x0000001Cu)), 0x0u, 4);         /* 1100DFA1: cmp dword ptr [esp + 0x1c], 0 */
+    if (c->zf) goto L_1100DFBE;                                  /* 1100DFA6: je 0x1100dfbe */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100DFA8: mov ecx, dword ptr [esp + 0x1c] */
+    push32(c, 0x1100DFB1u); dispatch(c, 0x110121D0u);            /* 1100DFAC: call 0x110121d0 */
+    c->eax = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100DFB1: mov eax, dword ptr [esp + 0x1c] */
+    push32(c, c->eax);                                           /* 1100DFB5: push eax */
+    push32(c, 0x1100DFBBu); dispatch(c, 0x1101AA4Bu);            /* 1100DFB6: call 0x1101aa4b */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100DFBB: add esp, 4 */
+L_1100DFBE:
+    push32(c, 0x1100DFC3u); dispatch(c, 0x1101A844u);            /* 1100DFBE: call 0x1101a844 */
+    c->eax = (uint32_t)(c->esi);                                 /* 1100DFC3: mov eax, esi */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100DFC5: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100DFC6: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100DFC7: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100DFC8: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x2Cu, 4));         /* 1100DFC9: add esp, 0x2c */
+    c->esp += 4; return;                                         /* 1100DFCC: ret  */
+L_1100DFCD:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 1100DFCD: mov eax, dword ptr [esp + 0x20] */
+    wr32((c->esp + 0x00000018u), 0x0u);                          /* 1100DFD1: mov dword ptr [esp + 0x18], 0 */
+    c->ecx = (uint32_t)(rd32((c->eax)));                         /* 1100DFD9: mov ecx, dword ptr [eax] */
+    c->edx = (uint32_t)(rd32((c->ecx + 0x000008B9u)));           /* 1100DFDB: mov edx, dword ptr [ecx + 0x8b9] */
+    SET8L(c->ecx, rd8((c->edx + 0x00000065u)));                  /* 1100DFE1: mov cl, byte ptr [edx + 0x65] */
+    flags_logicz(c, R8L(c->ecx) & R8L(c->ecx), 1);               /* 1100DFE4: test cl, cl */
+    if (c->zf) goto L_1100E0AA;                                  /* 1100DFE6: je 0x1100e0aa */
+    c->esi = (uint32_t)(rd32((c->esp + 0x00000048u)));           /* 1100DFEC: mov esi, dword ptr [esp + 0x48] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100DFF0: mov eax, dword ptr [esp + 0x1c] */
+    c->ebx = (uint32_t)(rd32((c->esp + 0x00000044u)));           /* 1100DFF4: mov ebx, dword ptr [esp + 0x44] */
+    wr32((c->esp + 0x00000030u), c->esi);                        /* 1100DFF8: mov dword ptr [esp + 0x30], esi */
+    c->edx = (uint32_t)(rd32((c->eax + 0x000008EFu)));           /* 1100DFFC: mov edx, dword ptr [eax + 0x8ef] */
+    wr32((c->esp + 0x00000028u), c->ebx);                        /* 1100E002: mov dword ptr [esp + 0x28], ebx */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100E006: xor eax, eax */
+    wr32((c->esp + 0x0000002Cu), c->edx);                        /* 1100E008: mov dword ptr [esp + 0x2c], edx */
+    SET8L(c->eax, R8L(c->ecx));                                  /* 1100E00C: mov al, cl */
+    wr32((c->esp + 0x00000034u), c->eax);                        /* 1100E00E: mov dword ptr [esp + 0x34], eax */
+L_1100E012:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000028u)));           /* 1100E012: mov eax, dword ptr [esp + 0x28] */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x0000002Cu)));           /* 1100E016: mov ecx, dword ptr [esp + 0x2c] */
+    flags_sub(c, rd32((c->esp + 0x00000018u)), 0x0u, 4);         /* 1100E01A: cmp dword ptr [esp + 0x18], 0 */
+    c->ebx = (uint32_t)(rd32((c->eax)));                         /* 1100E01F: mov ebx, dword ptr [eax] */
+    c->edx = (uint32_t)(rd32((c->ecx)));                         /* 1100E021: mov edx, dword ptr [ecx] */
+    if ((c->zf || (c->sf != c->of))) goto L_1100E038;            /* 1100E023: jle 0x1100e038 */
+    flags_sub(c, rd32((c->esp + 0x00000024u)), 0x0u, 4);         /* 1100E025: cmp dword ptr [esp + 0x24], 0 */
+    if (c->zf) goto L_1100E038;                                  /* 1100E02A: je 0x1100e038 */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 1100E02C: mov eax, dword ptr [esp + 0x14] */
+    c->ebp = (uint32_t)(rd32((c->eax + 0x00000008u)));           /* 1100E030: mov ebp, dword ptr [eax + 8] */
+    c->ebp = (uint32_t)(op_shr(c, c->ebp, 0x1u, 4));             /* 1100E033: shr ebp, 1 */
+    goto L_1100E03F;                                             /* 1100E036: jmp 0x1100e03f */
+L_1100E038:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 1100E038: mov eax, dword ptr [esp + 0x14] */
+    c->ebp = (uint32_t)(rd32((c->eax + 0x00000008u)));           /* 1100E03C: mov ebp, dword ptr [eax + 8] */
+L_1100E03F:
+    flags_sub(c, rd32((c->esp + 0x00000018u)), 0x0u, 4);         /* 1100E03F: cmp dword ptr [esp + 0x18], 0 */
+    if ((c->zf || (c->sf != c->of))) goto L_1100E059;            /* 1100E044: jle 0x1100e059 */
+    flags_sub(c, rd32((c->esp + 0x00000024u)), 0x0u, 4);         /* 1100E046: cmp dword ptr [esp + 0x24], 0 */
+    if (c->zf) goto L_1100E059;                                  /* 1100E04B: je 0x1100e059 */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 1100E04D: mov eax, dword ptr [esp + 0x14] */
+    c->eax = (uint32_t)(rd32((c->eax + 0x0000000Cu)));           /* 1100E051: mov eax, dword ptr [eax + 0xc] */
+    c->eax = (uint32_t)(op_shr(c, c->eax, 0x1u, 4));             /* 1100E054: shr eax, 1 */
+    goto L_1100E060;                                             /* 1100E057: jmp 0x1100e060 */
+L_1100E059:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 1100E059: mov eax, dword ptr [esp + 0x14] */
+    c->eax = (uint32_t)(rd32((c->eax + 0x0000000Cu)));           /* 1100E05D: mov eax, dword ptr [eax + 0xc] */
+L_1100E060:
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1100E060: test eax, eax */
+    if (c->zf) goto L_1100E089;                                  /* 1100E062: je 0x1100e089 */
+    c->esi = (uint32_t)(rd32((c->esp + 0x00000030u)));           /* 1100E064: mov esi, dword ptr [esp + 0x30] */
+    c->ecx = (uint32_t)(rd32((c->esi)));                         /* 1100E068: mov ecx, dword ptr [esi] */
+    wr32((c->esp + 0x00000010u), c->ecx);                        /* 1100E06A: mov dword ptr [esp + 0x10], ecx */
+L_1100E06E:
+    c->edi = (uint32_t)(c->ebx);                                 /* 1100E06E: mov edi, ebx */
+    c->esi = (uint32_t)(c->edx);                                 /* 1100E070: mov esi, edx */
+    c->ecx = (uint32_t)(c->ebp);                                 /* 1100E072: mov ecx, ebp */
+    c->edx = (uint32_t)(flags_add(c, c->edx, c->ebp, 4));        /* 1100E074: add edx, ebp */
+    c->ecx = (uint32_t)(op_shr(c, c->ecx, 0x2u, 4));             /* 1100E076: shr ecx, 2 */
+    while (c->ecx) { wr32(c->edi, rd32(c->esi)); c->esi += 4; c->edi += 4; c->ecx--; } /* 1100E079: rep movsd dword ptr es:[edi], dword ptr [esi] */
+    c->ecx = (uint32_t)(c->ebp);                                 /* 1100E07B: mov ecx, ebp */
+    c->ecx = (uint32_t)(flags_logicz(c, c->ecx & 0x3u, 4));      /* 1100E07D: and ecx, 3 */
+    while (c->ecx) { wr8(c->edi, rd8(c->esi)); c->esi += 1; c->edi += 1; c->ecx--; } /* 1100E080: rep movsb byte ptr es:[edi], byte ptr [esi] */
+    c->ebx = (uint32_t)(flags_add(c, c->ebx, rd32((c->esp + 0x00000010u)), 4)); /* 1100E082: add ebx, dword ptr [esp + 0x10] */
+    c->eax = (uint32_t)(flags_decs(c, c->eax, 4));               /* 1100E086: dec eax */
+    if (!c->zf) goto L_1100E06E;                                 /* 1100E087: jne 0x1100e06e */
+L_1100E089:
+    wr32((c->esp + 0x00000030u), flags_add(c, rd32((c->esp + 0x00000030u)), 0x4u, 4)); /* 1100E089: add dword ptr [esp + 0x30], 4 */
+    wr32((c->esp + 0x0000002Cu), flags_add(c, rd32((c->esp + 0x0000002Cu)), 0x4u, 4)); /* 1100E08E: add dword ptr [esp + 0x2c], 4 */
+    wr32((c->esp + 0x00000028u), flags_add(c, rd32((c->esp + 0x00000028u)), 0x4u, 4)); /* 1100E093: add dword ptr [esp + 0x28], 4 */
+    wr32((c->esp + 0x00000018u), flags_incs(c, rd32((c->esp + 0x00000018u)), 4)); /* 1100E098: inc dword ptr [esp + 0x18] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000018u)));           /* 1100E09C: mov eax, dword ptr [esp + 0x18] */
+    flags_sub(c, c->eax, rd32((c->esp + 0x00000034u)), 4);       /* 1100E0A0: cmp eax, dword ptr [esp + 0x34] */
+    if ((c->sf != c->of)) goto L_1100E012;                       /* 1100E0A4: jl 0x1100e012 */
+L_1100E0AA:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 1100E0AA: mov eax, dword ptr [esp + 0x20] */
+    c->ecx = (uint32_t)(rd32((c->eax)));                         /* 1100E0AE: mov ecx, dword ptr [eax] */
+    push32(c, 0x1100E0B5u); dispatch(c, 0x110053E0u);            /* 1100E0B0: call 0x110053e0 */
+    flags_sub(c, rd32((c->esp + 0x0000001Cu)), 0x0u, 4);         /* 1100E0B5: cmp dword ptr [esp + 0x1c], 0 */
+    if (c->zf) goto L_1100E0D2;                                  /* 1100E0BA: je 0x1100e0d2 */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100E0BC: mov ecx, dword ptr [esp + 0x1c] */
+    push32(c, 0x1100E0C5u); dispatch(c, 0x110121D0u);            /* 1100E0C0: call 0x110121d0 */
+    c->eax = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 1100E0C5: mov eax, dword ptr [esp + 0x1c] */
+    push32(c, c->eax);                                           /* 1100E0C9: push eax */
+    push32(c, 0x1100E0CFu); dispatch(c, 0x1101AA4Bu);            /* 1100E0CA: call 0x1101aa4b */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1100E0CF: add esp, 4 */
+L_1100E0D2:
+    push32(c, 0x1100E0D7u); dispatch(c, 0x1101A844u);            /* 1100E0D2: call 0x1101a844 */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 1100E0D7: xor eax, eax */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100E0D9: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100E0DA: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100E0DB: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100E0DC: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x2Cu, 4));         /* 1100E0DD: add esp, 0x2c */
+    c->esp += 4; return;                                         /* 1100E0E0: ret  */
+L_1100E0E1:
+    c->eax = (uint32_t)(0xFFFFFFCCu);                            /* 1100E0E1: mov eax, 0xffffffcc */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100E0E6: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100E0E7: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100E0E8: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100E0E9: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x2Cu, 4));         /* 1100E0EA: add esp, 0x2c */
+    c->esp += 4; return;                                         /* 1100E0ED: ret  */
+L_1100E0EE:
+    c->eax = (uint32_t)(0xFFFFFFD8u);                            /* 1100E0EE: mov eax, 0xffffffd8 */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1100E0F3: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1100E0F4: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1100E0F5: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1100E0F6: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x2Cu, 4));         /* 1100E0F7: add esp, 0x2c */
+    c->esp += 4; return;                                         /* 1100E0FA: ret  */
 }
 
 void L_1100E180(CPU *c)
@@ -19377,6 +20765,174 @@ L_11010F2A:
     c->esp += 28; return;                                        /* 11010F34: ret 0x18 */
 }
 
+void L_11010FD0(CPU *c)
+{
+    push32(c, c->ebx);                                           /* 11010FD0: push ebx */
+    push32(c, c->esi);                                           /* 11010FD1: push esi */
+    c->esi = (uint32_t)(rd32((c->esp + 0x0000000Cu)));           /* 11010FD2: mov esi, dword ptr [esp + 0xc] */
+    push32(c, c->edi);                                           /* 11010FD6: push edi */
+    push32(c, c->ebp);                                           /* 11010FD7: push ebp */
+    c->ebx = (uint32_t)(flags_logicz(c, c->ebx ^ c->ebx, 4));    /* 11010FD8: xor ebx, ebx */
+    wr16((c->ecx + 0x000000B8u), R16(c->ebx));                   /* 11010FDA: mov word ptr [ecx + 0xb8], bx */
+    wr32((c->ecx + 0x00000090u), c->ebx);                        /* 11010FE1: mov dword ptr [ecx + 0x90], ebx */
+    wr16((c->ecx + 0x00000098u), R16(c->ebx));                   /* 11010FE7: mov word ptr [ecx + 0x98], bx */
+    wr32((c->ecx + 0x00000094u), c->ebx);                        /* 11010FEE: mov dword ptr [ecx + 0x94], ebx */
+    wr32((c->ecx + 0x000000A8u), c->ebx);                        /* 11010FF4: mov dword ptr [ecx + 0xa8], ebx */
+    wr32((c->ecx + 0x000000ACu), c->ebx);                        /* 11010FFA: mov dword ptr [ecx + 0xac], ebx */
+    wr32((c->ecx + 0x000000B0u), c->ebx);                        /* 11011000: mov dword ptr [ecx + 0xb0], ebx */
+    wr32((c->ecx + 0x000000B4u), c->ebx);                        /* 11011006: mov dword ptr [ecx + 0xb4], ebx */
+    wr32((c->ecx + 0x000000A4u), c->ebx);                        /* 1101100C: mov dword ptr [ecx + 0xa4], ebx */
+    wr32((c->ecx + 0x000000BEu), c->ebx);                        /* 11011012: mov dword ptr [ecx + 0xbe], ebx */
+    c->ebp = (uint32_t)(c->ecx);                                 /* 11011018: mov ebp, ecx */
+    push32(c, 0x400u);                                           /* 1101101A: push 0x400 */
+    wr32((c->esi), c->ebx);                                      /* 1101101F: mov dword ptr [esi], ebx */
+    push32(c, 0x11011026u); dispatch(c, 0x11019909u);            /* 11011021: call 0x11019909 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 11011026: add esp, 4 */
+    c->edx = (uint32_t)(c->eax);                                 /* 11011029: mov edx, eax */
+    wr32((c->ebp + 0x0000008Cu), c->eax);                        /* 1101102B: mov dword ptr [ebp + 0x8c], eax */
+    flags_logicz(c, c->edx & c->edx, 4);                         /* 11011031: test edx, edx */
+    if (c->zf) goto L_11011064;                                  /* 11011033: je 0x11011064 */
+L_11011035:
+    wr8((c->edx + c->ebx*1), R8L(c->ebx));                       /* 11011035: mov byte ptr [edx + ebx], bl */
+    c->ebx = (uint32_t)(flags_incs(c, c->ebx, 4));               /* 11011038: inc ebx */
+    flags_sub(c, c->ebx, 0x100u, 4);                             /* 11011039: cmp ebx, 0x100 */
+    if ((c->sf != c->of)) goto L_11011035;                       /* 1101103F: jl 0x11011035 */
+    c->edi = (uint32_t)((c->edx + 0x00000100u));                 /* 11011041: lea edi, [edx + 0x100] */
+    c->eax = (uint32_t)(0xFFFFFFFFu);                            /* 11011047: mov eax, 0xffffffff */
+    c->ecx = (uint32_t)(0x40u);                                  /* 1101104C: mov ecx, 0x40 */
+    while (c->ecx) { wr32(c->edi, c->eax); c->edi += 4; c->ecx--; } /* 11011051: rep stosd dword ptr es:[edi], eax */
+    c->edi = (uint32_t)((c->edx + 0x00000200u));                 /* 11011053: lea edi, [edx + 0x200] */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 11011059: xor eax, eax */
+    c->ecx = (uint32_t)(0x80u);                                  /* 1101105B: mov ecx, 0x80 */
+    while (c->ecx) { wr32(c->edi, c->eax); c->edi += 4; c->ecx--; } /* 11011060: rep stosd dword ptr es:[edi], eax */
+    goto L_1101106A;                                             /* 11011062: jmp 0x1101106a */
+L_11011064:
+    wr32((c->esi), 0xFFFFFFECu);                                 /* 11011064: mov dword ptr [esi], 0xffffffec */
+L_1101106A:
+    push32(c, 0x1u);                                             /* 1101106A: push 1 */
+    push32(c, 0x8000u);                                          /* 1101106C: push 0x8000 */
+    push32(c, 0x11011076u); dispatch(c, 0x110198B9u);            /* 11011071: call 0x110198b9 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x8u, 4));          /* 11011076: add esp, 8 */
+    wr32((c->ebp + 0x000000BAu), c->eax);                        /* 11011079: mov dword ptr [ebp + 0xba], eax */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1101107F: test eax, eax */
+    if (!c->zf) goto L_11011089;                                 /* 11011081: jne 0x11011089 */
+    wr32((c->esi), 0xFFFFFFECu);                                 /* 11011083: mov dword ptr [esi], 0xffffffec */
+L_11011089:
+    c->eax = (uint32_t)(c->ebp);                                 /* 11011089: mov eax, ebp */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1101108B: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1101108C: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1101108D: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1101108E: pop ebx */
+    c->esp += 8; return;                                         /* 1101108F: ret 4 */
+}
+
+void L_110110A0(CPU *c)
+{
+    push32(c, c->ebx);                                           /* 110110A0: push ebx */
+    push32(c, c->esi);                                           /* 110110A1: push esi */
+    c->eax = (uint32_t)(rd32((c->ecx + 0x0000008Cu)));           /* 110110A2: mov eax, dword ptr [ecx + 0x8c] */
+    push32(c, c->edi);                                           /* 110110A8: push edi */
+    c->esi = (uint32_t)(c->ecx);                                 /* 110110A9: mov esi, ecx */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 110110AB: test eax, eax */
+    if (c->zf) goto L_110110B8;                                  /* 110110AD: je 0x110110b8 */
+    push32(c, c->eax);                                           /* 110110AF: push eax */
+    push32(c, 0x110110B5u); dispatch(c, 0x11019830u);            /* 110110B0: call 0x11019830 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 110110B5: add esp, 4 */
+L_110110B8:
+    c->eax = (uint32_t)(rd32((c->esi + 0x000000BAu)));           /* 110110B8: mov eax, dword ptr [esi + 0xba] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 110110BE: test eax, eax */
+    if (c->zf) goto L_110110CB;                                  /* 110110C0: je 0x110110cb */
+    push32(c, c->eax);                                           /* 110110C2: push eax */
+    push32(c, 0x110110C8u); dispatch(c, 0x11019830u);            /* 110110C3: call 0x11019830 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 110110C8: add esp, 4 */
+L_110110CB:
+    c->eax = (uint32_t)(rd32((c->esi + 0x00000090u)));           /* 110110CB: mov eax, dword ptr [esi + 0x90] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 110110D1: test eax, eax */
+    if (c->zf) goto L_110110DE;                                  /* 110110D3: je 0x110110de */
+    push32(c, c->eax);                                           /* 110110D5: push eax */
+    push32(c, 0x110110DBu); dispatch(c, 0x11019830u);            /* 110110D6: call 0x11019830 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 110110DB: add esp, 4 */
+L_110110DE:
+    c->eax = (uint32_t)(rd32((c->esi + 0x00000094u)));           /* 110110DE: mov eax, dword ptr [esi + 0x94] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 110110E4: test eax, eax */
+    if (c->zf) goto L_110110F1;                                  /* 110110E6: je 0x110110f1 */
+    push32(c, c->eax);                                           /* 110110E8: push eax */
+    push32(c, 0x110110EEu); dispatch(c, 0x11019830u);            /* 110110E9: call 0x11019830 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 110110EE: add esp, 4 */
+L_110110F1:
+    c->eax = (uint32_t)(rd32((c->esi + 0x000000BEu)));           /* 110110F1: mov eax, dword ptr [esi + 0xbe] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 110110F7: test eax, eax */
+    if (c->zf) goto L_11011104;                                  /* 110110F9: je 0x11011104 */
+    push32(c, c->eax);                                           /* 110110FB: push eax */
+    push32(c, 0x11011101u); dispatch(c, 0x11019830u);            /* 110110FC: call 0x11019830 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 11011101: add esp, 4 */
+L_11011104:
+    c->eax = (uint32_t)(rd32((c->esi + 0x000000A4u)));           /* 11011104: mov eax, dword ptr [esi + 0xa4] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1101110A: test eax, eax */
+    if (c->zf) goto L_11011117;                                  /* 1101110C: je 0x11011117 */
+    push32(c, c->eax);                                           /* 1101110E: push eax */
+    push32(c, 0x11011114u); dispatch(c, 0x11019830u);            /* 1101110F: call 0x11019830 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 11011114: add esp, 4 */
+L_11011117:
+    c->eax = (uint32_t)(rd32((c->esi + 0x000000A8u)));           /* 11011117: mov eax, dword ptr [esi + 0xa8] */
+    c->edi = (uint32_t)(flags_logicz(c, c->edi ^ c->edi, 4));    /* 1101111D: xor edi, edi */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1101111F: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_110111AB;            /* 11011121: jle 0x110111ab */
+    flags_sub(c, rd32((c->esi + 0x000000ACu)), c->edi, 4);       /* 11011127: cmp dword ptr [esi + 0xac], edi */
+    if (c->zf) goto L_11011166;                                  /* 1101112D: je 0x11011166 */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1101112F: test eax, eax */
+    if ((c->zf || (c->sf != c->of))) goto L_11011157;            /* 11011131: jle 0x11011157 */
+    c->ebx = (uint32_t)(flags_logicz(c, c->ebx ^ c->ebx, 4));    /* 11011133: xor ebx, ebx */
+L_11011135:
+    c->eax = (uint32_t)(rd32((c->esi + 0x000000ACu)));           /* 11011135: mov eax, dword ptr [esi + 0xac] */
+    c->eax = (uint32_t)(rd32((c->eax + c->ebx*1)));              /* 1101113B: mov eax, dword ptr [eax + ebx] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1101113E: test eax, eax */
+    if (c->zf) goto L_1101114B;                                  /* 11011140: je 0x1101114b */
+    push32(c, c->eax);                                           /* 11011142: push eax */
+    push32(c, 0x11011148u); dispatch(c, 0x11019830u);            /* 11011143: call 0x11019830 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 11011148: add esp, 4 */
+L_1101114B:
+    c->ebx = (uint32_t)(flags_add(c, c->ebx, 0x4u, 4));          /* 1101114B: add ebx, 4 */
+    c->edi = (uint32_t)(flags_incs(c, c->edi, 4));               /* 1101114E: inc edi */
+    flags_sub(c, rd32((c->esi + 0x000000A8u)), c->edi, 4);       /* 1101114F: cmp dword ptr [esi + 0xa8], edi */
+    if ((!c->zf && (c->sf == c->of))) goto L_11011135;           /* 11011155: jg 0x11011135 */
+L_11011157:
+    c->eax = (uint32_t)(rd32((c->esi + 0x000000ACu)));           /* 11011157: mov eax, dword ptr [esi + 0xac] */
+    push32(c, c->eax);                                           /* 1101115D: push eax */
+    push32(c, 0x11011163u); dispatch(c, 0x11019830u);            /* 1101115E: call 0x11019830 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 11011163: add esp, 4 */
+L_11011166:
+    c->ebx = (uint32_t)(flags_logicz(c, c->ebx ^ c->ebx, 4));    /* 11011166: xor ebx, ebx */
+    flags_sub(c, rd32((c->esi + 0x000000B0u)), c->ebx, 4);       /* 11011168: cmp dword ptr [esi + 0xb0], ebx */
+    if (c->zf) goto L_110111AB;                                  /* 1101116E: je 0x110111ab */
+    c->edi = (uint32_t)(flags_logicz(c, c->edi ^ c->edi, 4));    /* 11011170: xor edi, edi */
+    flags_sub(c, rd32((c->esi + 0x000000A8u)), c->ebx, 4);       /* 11011172: cmp dword ptr [esi + 0xa8], ebx */
+    if ((c->zf || (c->sf != c->of))) goto L_1101119C;            /* 11011178: jle 0x1101119c */
+L_1101117A:
+    c->eax = (uint32_t)(rd32((c->esi + 0x000000B0u)));           /* 1101117A: mov eax, dword ptr [esi + 0xb0] */
+    c->eax = (uint32_t)(rd32((c->eax + c->ebx*1)));              /* 11011180: mov eax, dword ptr [eax + ebx] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 11011183: test eax, eax */
+    if (c->zf) goto L_11011190;                                  /* 11011185: je 0x11011190 */
+    push32(c, c->eax);                                           /* 11011187: push eax */
+    push32(c, 0x1101118Du); dispatch(c, 0x11019830u);            /* 11011188: call 0x11019830 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1101118D: add esp, 4 */
+L_11011190:
+    c->ebx = (uint32_t)(flags_add(c, c->ebx, 0x4u, 4));          /* 11011190: add ebx, 4 */
+    c->edi = (uint32_t)(flags_incs(c, c->edi, 4));               /* 11011193: inc edi */
+    flags_sub(c, rd32((c->esi + 0x000000A8u)), c->edi, 4);       /* 11011194: cmp dword ptr [esi + 0xa8], edi */
+    if ((!c->zf && (c->sf == c->of))) goto L_1101117A;           /* 1101119A: jg 0x1101117a */
+L_1101119C:
+    c->eax = (uint32_t)(rd32((c->esi + 0x000000B0u)));           /* 1101119C: mov eax, dword ptr [esi + 0xb0] */
+    push32(c, c->eax);                                           /* 110111A2: push eax */
+    push32(c, 0x110111A8u); dispatch(c, 0x11019830u);            /* 110111A3: call 0x11019830 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 110111A8: add esp, 4 */
+L_110111AB:
+    c->edi = (uint32_t)(pop32(c));                               /* 110111AB: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 110111AC: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 110111AD: pop ebx */
+    c->esp += 4; return;                                         /* 110111AE: ret  */
+}
+
 void L_110111B0(CPU *c)
 {
     push32(c, c->esi);                                           /* 110111B0: push esi */
@@ -19638,6 +21194,227 @@ L_1101144E:
     c->ebx = (uint32_t)(pop32(c));                               /* 11011487: pop ebx */
     c->esp = (uint32_t)(flags_add(c, c->esp, 0x18u, 4));         /* 11011488: add esp, 0x18 */
     c->esp += 20; return;                                        /* 1101148B: ret 0x10 */
+}
+
+void L_11011490(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 11011490: mov eax, dword ptr [esp + 4] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000008u)));           /* 11011494: mov edx, dword ptr [esp + 8] */
+    wr16((c->ecx + 0x0000009Cu), R16(c->eax));                   /* 11011498: mov word ptr [ecx + 0x9c], ax */
+    c->eax = (uint32_t)(rd32((c->esp + 0x0000000Cu)));           /* 1101149F: mov eax, dword ptr [esp + 0xc] */
+    wr16((c->ecx + 0x0000009Eu), R16(c->edx));                   /* 110114A3: mov word ptr [ecx + 0x9e], dx */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000010u)));           /* 110114AA: mov edx, dword ptr [esp + 0x10] */
+    wr16((c->ecx + 0x000000A0u), R16(c->eax));                   /* 110114AE: mov word ptr [ecx + 0xa0], ax */
+    wr16((c->ecx + 0x000000A2u), R16(c->edx));                   /* 110114B5: mov word ptr [ecx + 0xa2], dx */
+    c->esp += 20; return;                                        /* 110114BC: ret 0x10 */
+}
+
+void L_110114C0(CPU *c)
+{
+    c->edx = (uint32_t)(flags_logicz(c, c->edx ^ c->edx, 4));    /* 110114C0: xor edx, edx */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 110114C2: mov eax, dword ptr [esp + 4] */
+    SET16(c->edx, rd16((c->ecx + 0x0000009Cu)));                 /* 110114C6: mov dx, word ptr [ecx + 0x9c] */
+    wr32((c->eax), c->edx);                                      /* 110114CD: mov dword ptr [eax], edx */
+    c->edx = (uint32_t)(flags_logicz(c, c->edx ^ c->edx, 4));    /* 110114CF: xor edx, edx */
+    SET16(c->edx, rd16((c->ecx + 0x0000009Eu)));                 /* 110114D1: mov dx, word ptr [ecx + 0x9e] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000008u)));           /* 110114D8: mov eax, dword ptr [esp + 8] */
+    wr32((c->eax), c->edx);                                      /* 110114DC: mov dword ptr [eax], edx */
+    c->edx = (uint32_t)(flags_logicz(c, c->edx ^ c->edx, 4));    /* 110114DE: xor edx, edx */
+    SET16(c->edx, rd16((c->ecx + 0x000000A0u)));                 /* 110114E0: mov dx, word ptr [ecx + 0xa0] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x0000000Cu)));           /* 110114E7: mov eax, dword ptr [esp + 0xc] */
+    wr32((c->eax), c->edx);                                      /* 110114EB: mov dword ptr [eax], edx */
+    c->edx = (uint32_t)(flags_logicz(c, c->edx ^ c->edx, 4));    /* 110114ED: xor edx, edx */
+    SET16(c->edx, rd16((c->ecx + 0x000000A2u)));                 /* 110114EF: mov dx, word ptr [ecx + 0xa2] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000010u)));           /* 110114F6: mov eax, dword ptr [esp + 0x10] */
+    wr32((c->eax), c->edx);                                      /* 110114FA: mov dword ptr [eax], edx */
+    c->esp += 20; return;                                        /* 110114FC: ret 0x10 */
+}
+
+void L_11011500(CPU *c)
+{
+    SET16(c->eax, rd16((c->esp + 0x00000004u)));                 /* 11011500: mov ax, word ptr [esp + 4] */
+    push32(c, c->ebx);                                           /* 11011505: push ebx */
+    wr16((c->ecx + 0x00000098u), R16(c->eax));                   /* 11011506: mov word ptr [ecx + 0x98], ax */
+    push32(c, c->esi);                                           /* 1101150D: push esi */
+    push32(c, c->edi);                                           /* 1101150E: push edi */
+    c->ebx = (uint32_t)(c->ecx);                                 /* 1101150F: mov ebx, ecx */
+    push32(c, c->ebp);                                           /* 11011511: push ebp */
+    c->eax = (uint32_t)(0x4u);                                   /* 11011512: mov eax, 4 */
+    c->ebp = (uint32_t)(flags_logicz(c, c->ebp ^ c->ebp, 4));    /* 11011517: xor ebp, ebp */
+    c->ecx = (uint32_t)((c->ebx + 0x0000009Cu));                 /* 11011519: lea ecx, [ebx + 0x9c] */
+L_1101151F:
+    flags_sub(c, rd16((c->ecx)), 0x4u, 2);                       /* 1101151F: cmp word ptr [ecx], 4 */
+    if (c->zf) goto L_11011526;                                  /* 11011523: je 0x11011526 */
+    c->ebp = (uint32_t)(flags_incs(c, c->ebp, 4));               /* 11011525: inc ebp */
+L_11011526:
+    c->ecx = (uint32_t)(flags_add(c, c->ecx, 0x2u, 4));          /* 11011526: add ecx, 2 */
+    c->eax = (uint32_t)(flags_decs(c, c->eax, 4));               /* 11011529: dec eax */
+    if (!c->zf) goto L_1101151F;                                 /* 1101152A: jne 0x1101151f */
+    { int64_t _p=(int64_t)(int32_t)(c->ebp)*(int32_t)(rd32((c->esp + 0x00000014u))); c->ebp = (uint32_t)((uint32_t)_p); c->cf=c->of=((int32_t)_p!=_p); } /* 1101152C: imul ebp, dword ptr [esp + 0x14] */
+    c->eax = (uint32_t)(rd32((c->ebx + 0x00000090u)));           /* 11011531: mov eax, dword ptr [ebx + 0x90] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 11011537: test eax, eax */
+    if (c->zf) goto L_11011544;                                  /* 11011539: je 0x11011544 */
+    push32(c, c->eax);                                           /* 1101153B: push eax */
+    push32(c, 0x11011541u); dispatch(c, 0x11019830u);            /* 1101153C: call 0x11019830 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 11011541: add esp, 4 */
+L_11011544:
+    push32(c, c->ebp);                                           /* 11011544: push ebp */
+    push32(c, 0x1101154Au); dispatch(c, 0x11019909u);            /* 11011545: call 0x11019909 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1101154A: add esp, 4 */
+    c->edi = (uint32_t)(c->eax);                                 /* 1101154D: mov edi, eax */
+    wr32((c->ebx + 0x00000090u), c->eax);                        /* 1101154F: mov dword ptr [ebx + 0x90], eax */
+    flags_logicz(c, c->edi & c->edi, 4);                         /* 11011555: test edi, edi */
+    if (!c->zf) goto L_11011565;                                 /* 11011557: jne 0x11011565 */
+    c->eax = (uint32_t)(0xFFFFFFECu);                            /* 11011559: mov eax, 0xffffffec */
+    c->ebp = (uint32_t)(pop32(c));                               /* 1101155E: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 1101155F: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 11011560: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 11011561: pop ebx */
+    c->esp += 16; return;                                        /* 11011562: ret 0xc */
+L_11011565:
+    flags_sub(c, rd32((c->esp + 0x00000018u)), 0x0u, 4);         /* 11011565: cmp dword ptr [esp + 0x18], 0 */
+    if (c->zf) goto L_1101157E;                                  /* 1101156A: je 0x1101157e */
+    c->esi = (uint32_t)(rd32((c->esp + 0x00000018u)));           /* 1101156C: mov esi, dword ptr [esp + 0x18] */
+    c->ecx = (uint32_t)(c->ebp);                                 /* 11011570: mov ecx, ebp */
+    c->ecx = (uint32_t)(op_shr(c, c->ecx, 0x2u, 4));             /* 11011572: shr ecx, 2 */
+    while (c->ecx) { wr32(c->edi, rd32(c->esi)); c->esi += 4; c->edi += 4; c->ecx--; } /* 11011575: rep movsd dword ptr es:[edi], dword ptr [esi] */
+    c->ecx = (uint32_t)(c->ebp);                                 /* 11011577: mov ecx, ebp */
+    c->ecx = (uint32_t)(flags_logicz(c, c->ecx & 0x3u, 4));      /* 11011579: and ecx, 3 */
+    while (c->ecx) { wr8(c->edi, rd8(c->esi)); c->esi += 1; c->edi += 1; c->ecx--; } /* 1101157C: rep movsb byte ptr es:[edi], byte ptr [esi] */
+L_1101157E:
+    c->eax = (uint32_t)(rd32((c->ebx + 0x00000094u)));           /* 1101157E: mov eax, dword ptr [ebx + 0x94] */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 11011584: test eax, eax */
+    if (c->zf) goto L_11011591;                                  /* 11011586: je 0x11011591 */
+    push32(c, c->eax);                                           /* 11011588: push eax */
+    push32(c, 0x1101158Eu); dispatch(c, 0x11019830u);            /* 11011589: call 0x11019830 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1101158E: add esp, 4 */
+L_11011591:
+    c->ebp = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 11011591: mov ebp, dword ptr [esp + 0x14] */
+    push32(c, c->ebp);                                           /* 11011595: push ebp */
+    push32(c, 0x1101159Bu); dispatch(c, 0x11019909u);            /* 11011596: call 0x11019909 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x4u, 4));          /* 1101159B: add esp, 4 */
+    c->edx = (uint32_t)(c->eax);                                 /* 1101159E: mov edx, eax */
+    wr32((c->ebx + 0x00000094u), c->eax);                        /* 110115A0: mov dword ptr [ebx + 0x94], eax */
+    flags_logicz(c, c->edx & c->edx, 4);                         /* 110115A6: test edx, edx */
+    if (!c->zf) goto L_110115B6;                                 /* 110115A8: jne 0x110115b6 */
+    c->eax = (uint32_t)(0xFFFFFFECu);                            /* 110115AA: mov eax, 0xffffffec */
+    c->ebp = (uint32_t)(pop32(c));                               /* 110115AF: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 110115B0: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 110115B1: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 110115B2: pop ebx */
+    c->esp += 16; return;                                        /* 110115B3: ret 0xc */
+L_110115B6:
+    flags_sub(c, rd32((c->esp + 0x00000018u)), 0x0u, 4);         /* 110115B6: cmp dword ptr [esp + 0x18], 0 */
+    if (!c->zf) goto L_110115DB;                                 /* 110115BB: jne 0x110115db */
+    flags_sub(c, rd32((c->esp + 0x00000014u)), 0x0u, 4);         /* 110115BD: cmp dword ptr [esp + 0x14], 0 */
+    if ((c->zf || (c->sf != c->of))) goto L_11011615;            /* 110115C2: jle 0x11011615 */
+    c->edi = (uint32_t)(c->edx);                                 /* 110115C4: mov edi, edx */
+    c->eax = (uint32_t)(0x2020202u);                             /* 110115C6: mov eax, 0x2020202 */
+    c->ecx = (uint32_t)(c->ebp);                                 /* 110115CB: mov ecx, ebp */
+    c->ecx = (uint32_t)(op_shr(c, c->ecx, 0x2u, 4));             /* 110115CD: shr ecx, 2 */
+    while (c->ecx) { wr32(c->edi, c->eax); c->edi += 4; c->ecx--; } /* 110115D0: rep stosd dword ptr es:[edi], eax */
+    c->ecx = (uint32_t)(c->ebp);                                 /* 110115D2: mov ecx, ebp */
+    c->ecx = (uint32_t)(flags_logicz(c, c->ecx & 0x3u, 4));      /* 110115D4: and ecx, 3 */
+    while (c->ecx) { wr8(c->edi, R8L(c->eax)); c->edi += 1; c->ecx--; } /* 110115D7: rep stosb byte ptr es:[edi], al */
+    goto L_11011615;                                             /* 110115D9: jmp 0x11011615 */
+L_110115DB:
+    c->esi = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 110115DB: mov esi, dword ptr [esp + 0x1c] */
+    flags_logicz(c, c->esi & c->esi, 4);                         /* 110115DF: test esi, esi */
+    if (!c->zf) goto L_11011601;                                 /* 110115E1: jne 0x11011601 */
+    flags_sub(c, rd32((c->esp + 0x00000014u)), 0x0u, 4);         /* 110115E3: cmp dword ptr [esp + 0x14], 0 */
+    if ((c->zf || (c->sf != c->of))) goto L_11011615;            /* 110115E8: jle 0x11011615 */
+    c->edi = (uint32_t)(c->edx);                                 /* 110115EA: mov edi, edx */
+    c->eax = (uint32_t)(0x1010101u);                             /* 110115EC: mov eax, 0x1010101 */
+    c->ecx = (uint32_t)(c->ebp);                                 /* 110115F1: mov ecx, ebp */
+    c->ecx = (uint32_t)(op_shr(c, c->ecx, 0x2u, 4));             /* 110115F3: shr ecx, 2 */
+    while (c->ecx) { wr32(c->edi, c->eax); c->edi += 4; c->ecx--; } /* 110115F6: rep stosd dword ptr es:[edi], eax */
+    c->ecx = (uint32_t)(c->ebp);                                 /* 110115F8: mov ecx, ebp */
+    c->ecx = (uint32_t)(flags_logicz(c, c->ecx & 0x3u, 4));      /* 110115FA: and ecx, 3 */
+    while (c->ecx) { wr8(c->edi, R8L(c->eax)); c->edi += 1; c->ecx--; } /* 110115FD: rep stosb byte ptr es:[edi], al */
+    goto L_11011615;                                             /* 110115FF: jmp 0x11011615 */
+L_11011601:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 11011601: mov eax, dword ptr [esp + 0x14] */
+    c->edi = (uint32_t)(c->edx);                                 /* 11011605: mov edi, edx */
+    c->ecx = (uint32_t)(c->eax);                                 /* 11011607: mov ecx, eax */
+    c->ecx = (uint32_t)(op_shr(c, c->ecx, 0x2u, 4));             /* 11011609: shr ecx, 2 */
+    while (c->ecx) { wr32(c->edi, rd32(c->esi)); c->esi += 4; c->edi += 4; c->ecx--; } /* 1101160C: rep movsd dword ptr es:[edi], dword ptr [esi] */
+    c->ecx = (uint32_t)(c->eax);                                 /* 1101160E: mov ecx, eax */
+    c->ecx = (uint32_t)(flags_logicz(c, c->ecx & 0x3u, 4));      /* 11011610: and ecx, 3 */
+    while (c->ecx) { wr8(c->edi, rd8(c->esi)); c->esi += 1; c->edi += 1; c->ecx--; } /* 11011613: rep movsb byte ptr es:[edi], byte ptr [esi] */
+L_11011615:
+    wr32((c->ebx + 0x000000B4u), 0x0u);                          /* 11011615: mov dword ptr [ebx + 0xb4], 0 */
+    wr16((c->ebx + 0x0000009Au), 0x0u);                          /* 1101161F: mov word ptr [ebx + 0x9a], 0 */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 11011628: xor eax, eax */
+    flags_sub(c, rd32((c->esp + 0x00000014u)), c->eax, 4);       /* 1101162A: cmp dword ptr [esp + 0x14], eax */
+    if ((c->zf || (c->sf != c->of))) goto L_1101164E;            /* 1101162E: jle 0x1101164e */
+L_11011630:
+    flags_sub(c, rd8((c->edx + c->eax*1)), 0x2u, 1);             /* 11011630: cmp byte ptr [edx + eax], 2 */
+    if (!c->zf) goto L_11011647;                                 /* 11011634: jne 0x11011647 */
+    wr32((c->ebx + 0x000000B4u), 0x1u);                          /* 11011636: mov dword ptr [ebx + 0xb4], 1 */
+    wr16((c->ebx + 0x0000009Au), flags_incs(c, rd16((c->ebx + 0x0000009Au)), 2)); /* 11011640: inc word ptr [ebx + 0x9a] */
+L_11011647:
+    c->eax = (uint32_t)(flags_incs(c, c->eax, 4));               /* 11011647: inc eax */
+    flags_sub(c, c->eax, rd32((c->esp + 0x00000014u)), 4);       /* 11011648: cmp eax, dword ptr [esp + 0x14] */
+    if ((c->sf != c->of)) goto L_11011630;                       /* 1101164C: jl 0x11011630 */
+L_1101164E:
+    c->edi = (uint32_t)(rd32((c->ebx + 0x000000BEu)));           /* 1101164E: mov edi, dword ptr [ebx + 0xbe] */
+    flags_logicz(c, c->edi & c->edi, 4);                         /* 11011654: test edi, edi */
+    if (c->zf) goto L_1101166A;                                  /* 11011656: je 0x1101166a */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 11011658: xor eax, eax */
+    c->ecx = (uint32_t)(0xC0u);                                  /* 1101165A: mov ecx, 0xc0 */
+    while (c->ecx) { wr32(c->edi, c->eax); c->edi += 4; c->ecx--; } /* 1101165F: rep stosd dword ptr es:[edi], eax */
+L_11011661:
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 11011661: xor eax, eax */
+    c->ebp = (uint32_t)(pop32(c));                               /* 11011663: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 11011664: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 11011665: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 11011666: pop ebx */
+    c->esp += 16; return;                                        /* 11011667: ret 0xc */
+L_1101166A:
+    push32(c, 0x1u);                                             /* 1101166A: push 1 */
+    push32(c, 0x300u);                                           /* 1101166C: push 0x300 */
+    push32(c, 0x11011676u); dispatch(c, 0x110198B9u);            /* 11011671: call 0x110198b9 */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x8u, 4));          /* 11011676: add esp, 8 */
+    wr32((c->ebx + 0x000000BEu), c->eax);                        /* 11011679: mov dword ptr [ebx + 0xbe], eax */
+    flags_logicz(c, c->eax & c->eax, 4);                         /* 1101167F: test eax, eax */
+    if (!c->zf) goto L_11011661;                                 /* 11011681: jne 0x11011661 */
+    c->eax = (uint32_t)(0xFFFFFFECu);                            /* 11011683: mov eax, 0xffffffec */
+    c->ebp = (uint32_t)(pop32(c));                               /* 11011688: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 11011689: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 1101168A: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 1101168B: pop ebx */
+    c->esp += 16; return;                                        /* 1101168C: ret 0xc */
+}
+
+void L_11011690(CPU *c)
+{
+    push32(c, c->esi);                                           /* 11011690: push esi */
+    c->edx = (uint32_t)((c->ecx + 0x0000009Cu));                 /* 11011691: lea edx, [ecx + 0x9c] */
+    push32(c, c->edi);                                           /* 11011697: push edi */
+    c->esi = (uint32_t)(flags_logicz(c, c->esi ^ c->esi, 4));    /* 11011698: xor esi, esi */
+    c->eax = (uint32_t)(0x4u);                                   /* 1101169A: mov eax, 4 */
+L_1101169F:
+    flags_sub(c, rd16((c->edx)), 0x4u, 2);                       /* 1101169F: cmp word ptr [edx], 4 */
+    if (c->zf) goto L_110116A6;                                  /* 110116A3: je 0x110116a6 */
+    c->esi = (uint32_t)(flags_incs(c, c->esi, 4));               /* 110116A5: inc esi */
+L_110116A6:
+    c->edx = (uint32_t)(flags_add(c, c->edx, 0x2u, 4));          /* 110116A6: add edx, 2 */
+    c->eax = (uint32_t)(flags_decs(c, c->eax, 4));               /* 110116A9: dec eax */
+    if (!c->zf) goto L_1101169F;                                 /* 110116AA: jne 0x1101169f */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 110116AC: xor eax, eax */
+    c->edi = (uint32_t)(rd32((c->esp + 0x0000000Cu)));           /* 110116AE: mov edi, dword ptr [esp + 0xc] */
+    SET16(c->eax, rd16((c->ecx + 0x00000098u)));                 /* 110116B2: mov ax, word ptr [ecx + 0x98] */
+    { int64_t _p=(int64_t)(int32_t)(c->eax)*(int32_t)(c->esi); c->eax = (uint32_t)((uint32_t)_p); c->cf=c->of=((int32_t)_p!=_p); } /* 110116B9: imul eax, esi */
+    c->esi = (uint32_t)(rd32((c->ecx + 0x00000090u)));           /* 110116BC: mov esi, dword ptr [ecx + 0x90] */
+    c->ecx = (uint32_t)(c->eax);                                 /* 110116C2: mov ecx, eax */
+    c->ecx = (uint32_t)(op_shr(c, c->ecx, 0x2u, 4));             /* 110116C4: shr ecx, 2 */
+    while (c->ecx) { wr32(c->edi, rd32(c->esi)); c->esi += 4; c->edi += 4; c->ecx--; } /* 110116C7: rep movsd dword ptr es:[edi], dword ptr [esi] */
+    c->ecx = (uint32_t)(c->eax);                                 /* 110116C9: mov ecx, eax */
+    c->ecx = (uint32_t)(flags_logicz(c, c->ecx & 0x3u, 4));      /* 110116CB: and ecx, 3 */
+    while (c->ecx) { wr8(c->edi, rd8(c->esi)); c->esi += 1; c->edi += 1; c->ecx--; } /* 110116CE: rep movsb byte ptr es:[edi], byte ptr [esi] */
+    c->edi = (uint32_t)(pop32(c));                               /* 110116D0: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 110116D1: pop esi */
+    c->esp += 8; return;                                         /* 110116D2: ret 4 */
 }
 
 void L_110116E0(CPU *c)
@@ -20255,6 +22032,198 @@ L_11011DD7:
     c->esi = (uint32_t)(pop32(c));                               /* 11011DDA: pop esi */
     c->ebx = (uint32_t)(pop32(c));                               /* 11011DDB: pop ebx */
     c->esp += 4; return;                                         /* 11011DDC: ret  */
+}
+
+void L_11011DE0(CPU *c)
+{
+    c->esp = (uint32_t)(flags_sub(c, c->esp, 0x20u, 4));         /* 11011DE0: sub esp, 0x20 */
+    wr32((c->esp + 0x00000018u), c->ecx);                        /* 11011DE3: mov dword ptr [esp + 0x18], ecx */
+    push32(c, c->ebx);                                           /* 11011DE7: push ebx */
+    flags_sub(c, rd32((c->esp + 0x00000030u)), 0x3u, 4);         /* 11011DE8: cmp dword ptr [esp + 0x30], 3 */
+    push32(c, c->esi);                                           /* 11011DED: push esi */
+    push32(c, c->edi);                                           /* 11011DEE: push edi */
+    push32(c, c->ebp);                                           /* 11011DEF: push ebp */
+    c->ebp = (uint32_t)(rd32((c->esp + 0x00000038u)));           /* 11011DF0: mov ebp, dword ptr [esp + 0x38] */
+    if (!c->zf) goto L_11011E06;                                 /* 11011DF4: jne 0x11011e06 */
+    c->eax = (uint32_t)((c->ebp + 0x00000001u));                 /* 11011DF6: lea eax, [ebp + 1] */
+    c->ecx = (uint32_t)((c->ebp + 0x00000002u));                 /* 11011DF9: lea ecx, [ebp + 2] */
+    wr32((c->esp + 0x00000020u), c->eax);                        /* 11011DFC: mov dword ptr [esp + 0x20], eax */
+    wr32((c->esp + 0x0000001Cu), c->ecx);                        /* 11011E00: mov dword ptr [esp + 0x1c], ecx */
+    goto L_11011E0E;                                             /* 11011E04: jmp 0x11011e0e */
+L_11011E06:
+    wr32((c->esp + 0x0000001Cu), c->ebp);                        /* 11011E06: mov dword ptr [esp + 0x1c], ebp */
+    wr32((c->esp + 0x00000020u), c->ebp);                        /* 11011E0A: mov dword ptr [esp + 0x20], ebp */
+L_11011E0E:
+    c->ecx = (uint32_t)(flags_logicz(c, c->ecx ^ c->ecx, 4));    /* 11011E0E: xor ecx, ecx */
+    c->edi = (uint32_t)(rd32((c->esp + 0x00000044u)));           /* 11011E10: mov edi, dword ptr [esp + 0x44] */
+    c->ebx = (uint32_t)(rd32((c->esp + 0x0000002Cu)));           /* 11011E14: mov ebx, dword ptr [esp + 0x2c] */
+L_11011E18:
+    c->edx = (uint32_t)(flags_logicz(c, c->edx ^ c->edx, 4));    /* 11011E18: xor edx, edx */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000028u)));           /* 11011E1A: mov eax, dword ptr [esp + 0x28] */
+    SET16(c->edx, rd16((c->eax + c->ecx*2 + 0x0000009Cu)));      /* 11011E1E: mov dx, word ptr [eax + ecx*2 + 0x9c] */
+    c->edx = (uint32_t)(flags_decs(c, c->edx, 4));               /* 11011E26: dec edx */
+    flags_sub(c, c->edx, 0x4u, 4);                               /* 11011E27: cmp edx, 4 */
+    if ((!c->cf && !c->zf)) goto L_11011E57;                     /* 11011E2A: ja 0x11011e57 */
+    { uint32_t _jt = rd32((c->edx*4 + GVA(0x11012004)));         /* 11011E2C: jmp dword ptr [edx*4 + 0x11012004] */
+      if (_jt == GVA(0x11011E33)) goto L_11011E33;               /* 11011E2C: jmp dword ptr [edx*4 + 0x11012004] */
+      if (_jt == GVA(0x11011E3C)) goto L_11011E3C;               /* 11011E2C: jmp dword ptr [edx*4 + 0x11012004] */
+      if (_jt == GVA(0x11011E41)) goto L_11011E41;               /* 11011E2C: jmp dword ptr [edx*4 + 0x11012004] */
+      if (_jt == GVA(0x11011E4A)) goto L_11011E4A;               /* 11011E2C: jmp dword ptr [edx*4 + 0x11012004] */
+      if (_jt == GVA(0x11011E50)) goto L_11011E50;               /* 11011E2C: jmp dword ptr [edx*4 + 0x11012004] */
+      abort(); }                                                 /* 11011E2C: jmp dword ptr [edx*4 + 0x11012004] */
+L_11011E33:
+    c->edx = (uint32_t)((c->edi + c->ecx*1));                    /* 11011E33: lea edx, [edi + ecx] */
+    wr32((c->esp + 0x00000018u), c->edx);                        /* 11011E36: mov dword ptr [esp + 0x18], edx */
+    goto L_11011E57;                                             /* 11011E3A: jmp 0x11011e57 */
+L_11011E3C:
+    c->ebx = (uint32_t)((c->edi + c->ecx*1));                    /* 11011E3C: lea ebx, [edi + ecx] */
+    goto L_11011E57;                                             /* 11011E3F: jmp 0x11011e57 */
+L_11011E41:
+    c->eax = (uint32_t)((c->edi + c->ecx*1));                    /* 11011E41: lea eax, [edi + ecx] */
+    wr32((c->esp + 0x00000014u), c->eax);                        /* 11011E44: mov dword ptr [esp + 0x14], eax */
+    goto L_11011E57;                                             /* 11011E48: jmp 0x11011e57 */
+L_11011E4A:
+    wr32((c->esp + 0x00000010u), c->ecx);                        /* 11011E4A: mov dword ptr [esp + 0x10], ecx */
+    goto L_11011E57;                                             /* 11011E4E: jmp 0x11011e57 */
+L_11011E50:
+    c->eax = (uint32_t)((c->ecx + 0x00000001u));                 /* 11011E50: lea eax, [ecx + 1] */
+    wr32((c->esp + 0x00000010u), c->eax);                        /* 11011E53: mov dword ptr [esp + 0x10], eax */
+L_11011E57:
+    c->ecx = (uint32_t)(flags_incs(c, c->ecx, 4));               /* 11011E57: inc ecx */
+    flags_sub(c, c->ecx, 0x4u, 4);                               /* 11011E58: cmp ecx, 4 */
+    if ((c->sf != c->of)) goto L_11011E18;                       /* 11011E5B: jl 0x11011e18 */
+    c->esi = (uint32_t)(rd32((c->esp + 0x00000010u)));           /* 11011E5D: mov esi, dword ptr [esp + 0x10] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000034u)));           /* 11011E61: mov edx, dword ptr [esp + 0x34] */
+    { int64_t _p=(int64_t)(int32_t)(c->esi)*(int32_t)(c->edx); c->esi = (uint32_t)((uint32_t)_p); c->cf=c->of=((int32_t)_p!=_p); } /* 11011E65: imul esi, edx */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax ^ c->eax, 4));    /* 11011E68: xor eax, eax */
+    c->ecx = (uint32_t)(c->esi);                                 /* 11011E6A: mov ecx, esi */
+    c->ecx = (uint32_t)(op_shr(c, c->ecx, 0x2u, 4));             /* 11011E6C: shr ecx, 2 */
+    while (c->ecx) { wr32(c->edi, c->eax); c->edi += 4; c->ecx--; } /* 11011E6F: rep stosd dword ptr es:[edi], eax */
+    c->ecx = (uint32_t)(c->esi);                                 /* 11011E71: mov ecx, esi */
+    c->ecx = (uint32_t)(flags_logicz(c, c->ecx & 0x3u, 4));      /* 11011E73: and ecx, 3 */
+    while (c->ecx) { wr8(c->edi, R8L(c->eax)); c->edi += 1; c->ecx--; } /* 11011E76: rep stosb byte ptr es:[edi], al */
+    flags_logicz(c, c->edx & c->edx, 4);                         /* 11011E78: test edx, edx */
+    if ((c->zf || (c->sf != c->of))) goto L_11011FFA;            /* 11011E7A: jle 0x11011ffa */
+    wr32((c->esp + 0x0000002Cu), c->edx);                        /* 11011E80: mov dword ptr [esp + 0x2c], edx */
+L_11011E84:
+    flags_sub(c, rd32((c->esp + 0x00000048u)), 0x0u, 4);         /* 11011E84: cmp dword ptr [esp + 0x48], 0 */
+    if (!c->zf) goto L_11011EAD;                                 /* 11011E89: jne 0x11011ead */
+    SET8L(c->ecx, rd8((c->ebp)));                                /* 11011E8B: mov cl, byte ptr [ebp] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 11011E8E: mov eax, dword ptr [esp + 0x14] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 11011E92: mov edx, dword ptr [esp + 0x20] */
+    wr8((c->eax), R8L(c->ecx));                                  /* 11011E96: mov byte ptr [eax], cl */
+    c->eax = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 11011E98: mov eax, dword ptr [esp + 0x1c] */
+    SET8L(c->ecx, rd8((c->edx)));                                /* 11011E9C: mov cl, byte ptr [edx] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000018u)));           /* 11011E9E: mov edx, dword ptr [esp + 0x18] */
+    wr8((c->ebx), R8L(c->ecx));                                  /* 11011EA2: mov byte ptr [ebx], cl */
+    SET8L(c->eax, rd8((c->eax)));                                /* 11011EA4: mov al, byte ptr [eax] */
+    wr8((c->edx), R8L(c->eax));                                  /* 11011EA6: mov byte ptr [edx], al */
+    goto L_11011FD2;                                             /* 11011EA8: jmp 0x11011fd2 */
+L_11011EAD:
+    flags_logicz(c, rd8((c->esp + 0x00000040u)) & 0x10u, 1);     /* 11011EAD: test byte ptr [esp + 0x40], 0x10 */
+    if (c->zf) goto L_11011F32;                                  /* 11011EB2: je 0x11011f32 */
+    c->eax = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 11011EB4: mov eax, dword ptr [esp + 0x1c] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 11011EB8: mov edx, dword ptr [esp + 0x20] */
+    c->esi = (uint32_t)((uint32_t)(int32_t)(int8_t)(rd8((c->eax)))); /* 11011EBC: movsx esi, byte ptr [eax] */
+    c->ecx = (uint32_t)((uint32_t)(int32_t)(int8_t)(rd8((c->edx)))); /* 11011EBF: movsx ecx, byte ptr [edx] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000028u)));           /* 11011EC2: mov eax, dword ptr [esp + 0x28] */
+    c->edx = (uint32_t)((c->esi + c->ecx*1));                    /* 11011EC6: lea edx, [esi + ecx] */
+    c->edi = (uint32_t)(rd32((c->eax + 0x0000008Cu)));           /* 11011EC9: mov edi, dword ptr [eax + 0x8c] */
+    c->eax = (uint32_t)((c->edx*2 + 0x00000001u));               /* 11011ECF: lea eax, [edx*2 + 1] */
+    c->edx = (c->eax & 0x80000000u) ? 0xFFFFFFFFu : 0u;          /* 11011ED6: cdq  */
+    wr32((c->esp + 0x00000024u), c->edi);                        /* 11011ED7: mov dword ptr [esp + 0x24], edi */
+    c->edi = (uint32_t)(0x3u);                                   /* 11011EDB: mov edi, 3 */
+    { int64_t _n=(int64_t)(((uint64_t)c->edx<<32)|c->eax); int32_t _d=(int32_t)(c->edi); c->eax=(uint32_t)(_n/_d); c->edx=(uint32_t)(_n%_d); } /* 11011EE0: idiv edi */
+    c->edx = (uint32_t)((uint32_t)(int32_t)(int8_t)(rd8((c->ebp)))); /* 11011EE2: movsx edx, byte ptr [ebp] */
+    c->eax = (uint32_t)(flags_add(c, c->eax, c->edx, 4));        /* 11011EE6: add eax, edx */
+    c->edi = (uint32_t)(rd32((c->esp + 0x00000024u)));           /* 11011EE8: mov edi, dword ptr [esp + 0x24] */
+    c->eax = (uint32_t)(flags_sub(c, c->eax, 0xAAu, 4));         /* 11011EEC: sub eax, 0xaa */
+    c->edx = (uint32_t)(0x80u);                                  /* 11011EF1: mov edx, 0x80 */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax & 0x3FFu, 4));    /* 11011EF6: and eax, 0x3ff */
+    c->edx = (uint32_t)(flags_sub(c, c->edx, c->ecx, 4));        /* 11011EFB: sub edx, ecx */
+    SET8L(c->eax, rd8((c->eax + c->edi*1)));                     /* 11011EFD: mov al, byte ptr [eax + edi] */
+    wr8((c->ebx), R8L(c->eax));                                  /* 11011F00: mov byte ptr [ebx], al */
+    c->eax = (uint32_t)((uint32_t)(int32_t)(int8_t)(R8L(c->eax))); /* 11011F02: movsx eax, al */
+    c->edx = (uint32_t)((c->eax + c->edx*2));                    /* 11011F05: lea edx, [eax + edx*2] */
+    c->edx = (uint32_t)(flags_logicz(c, c->edx & 0x3FFu, 4));    /* 11011F08: and edx, 0x3ff */
+    SET8L(c->eax, rd8((c->edx + c->edi*1)));                     /* 11011F0E: mov al, byte ptr [edx + edi] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000018u)));           /* 11011F11: mov edx, dword ptr [esp + 0x18] */
+    wr8((c->edx), R8L(c->eax));                                  /* 11011F15: mov byte ptr [edx], al */
+    c->eax = (uint32_t)(0x80u);                                  /* 11011F17: mov eax, 0x80 */
+    c->eax = (uint32_t)(flags_sub(c, c->eax, c->esi, 4));        /* 11011F1C: sub eax, esi */
+    c->ecx = (uint32_t)((uint32_t)(int32_t)(int8_t)(rd8((c->ebx)))); /* 11011F1E: movsx ecx, byte ptr [ebx] */
+    c->ecx = (uint32_t)((c->ecx + c->eax*2));                    /* 11011F21: lea ecx, [ecx + eax*2] */
+    c->ecx = (uint32_t)(flags_logicz(c, c->ecx & 0x3FFu, 4));    /* 11011F24: and ecx, 0x3ff */
+    SET8L(c->ecx, rd8((c->ecx + c->edi*1)));                     /* 11011F2A: mov cl, byte ptr [ecx + edi] */
+    goto L_11011FCC;                                             /* 11011F2D: jmp 0x11011fcc */
+L_11011F32:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000020u)));           /* 11011F32: mov eax, dword ptr [esp + 0x20] */
+    c->ecx = (uint32_t)(rd32((c->esp + 0x0000001Cu)));           /* 11011F36: mov ecx, dword ptr [esp + 0x1c] */
+    c->edi = (uint32_t)((uint32_t)(int32_t)(int8_t)(rd8((c->eax)))); /* 11011F3A: movsx edi, byte ptr [eax] */
+    c->esi = (uint32_t)((uint32_t)(int32_t)(int8_t)(rd8((c->ecx)))); /* 11011F3D: movsx esi, byte ptr [ecx] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000028u)));           /* 11011F40: mov eax, dword ptr [esp + 0x28] */
+    c->ecx = (uint32_t)((uint32_t)(int32_t)(int8_t)(rd8((c->ebp)))); /* 11011F44: movsx ecx, byte ptr [ebp] */
+    c->edx = (uint32_t)(rd32((c->eax + 0x0000008Cu)));           /* 11011F48: mov edx, dword ptr [eax + 0x8c] */
+    c->eax = (uint32_t)((c->edi + c->edi*4));                    /* 11011F4E: lea eax, [edi + edi*4] */
+    wr32((c->esp + 0x00000024u), c->edx);                        /* 11011F51: mov dword ptr [esp + 0x24], edx */
+    c->edx = (uint32_t)((c->edi + c->eax*2));                    /* 11011F55: lea edx, [edi + eax*2] */
+    c->eax = (uint32_t)((c->edx + c->edx*8));                    /* 11011F58: lea eax, [edx + edx*8] */
+    c->edx = (uint32_t)((c->edi + c->eax*4));                    /* 11011F5B: lea edx, [edi + eax*4] */
+    c->eax = (uint32_t)((c->edi + c->edx*4));                    /* 11011F5E: lea eax, [edi + edx*4] */
+    c->edx = (uint32_t)((c->esi + c->esi*2));                    /* 11011F61: lea edx, [esi + esi*2] */
+    c->eax = (uint32_t)(op_shl(c, c->eax, 0x2u, 4));             /* 11011F64: shl eax, 2 */
+    c->edx = (uint32_t)((c->esi + c->edx*4));                    /* 11011F67: lea edx, [esi + edx*4] */
+    c->edx = (uint32_t)(op_shl(c, c->edx, 0x3u, 4));             /* 11011F6A: shl edx, 3 */
+    c->eax = (uint32_t)(flags_sub(c, 0, c->eax, 4));             /* 11011F6D: neg eax */
+    c->edx = (uint32_t)((c->esi + c->edx*8));                    /* 11011F6F: lea edx, [esi + edx*8] */
+    c->edx = (uint32_t)((c->esi + c->edx*2));                    /* 11011F72: lea edx, [esi + edx*2] */
+    c->edx = (uint32_t)(op_shl(c, c->edx, 0x3u, 4));             /* 11011F75: shl edx, 3 */
+    c->eax = (uint32_t)(flags_sub(c, c->eax, c->edx, 4));        /* 11011F78: sub eax, edx */
+    c->eax = (uint32_t)(flags_add(c, c->eax, 0x265600u, 4));     /* 11011F7A: add eax, 0x265600 */
+    c->edx = (c->eax & 0x80000000u) ? 0xFFFFFFFFu : 0u;          /* 11011F7F: cdq  */
+    c->edx = (uint32_t)(flags_logicz(c, c->edx & 0x3FFFu, 4));   /* 11011F80: and edx, 0x3fff */
+    c->eax = (uint32_t)(flags_add(c, c->eax, c->edx, 4));        /* 11011F86: add eax, edx */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000024u)));           /* 11011F88: mov edx, dword ptr [esp + 0x24] */
+    c->eax = (uint32_t)(op_sar(c, c->eax, 0xEu, 4));             /* 11011F8C: sar eax, 0xe */
+    c->eax = (uint32_t)(flags_add(c, c->eax, c->ecx, 4));        /* 11011F8F: add eax, ecx */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax & 0x3FFu, 4));    /* 11011F91: and eax, 0x3ff */
+    SET8L(c->eax, rd8((c->eax + c->edx*1)));                     /* 11011F96: mov al, byte ptr [eax + edx] */
+    wr8((c->ebx), R8L(c->eax));                                  /* 11011F99: mov byte ptr [ebx], al */
+    c->eax = (uint32_t)((c->esi + 0xFFFFFF80u));                 /* 11011F9B: lea eax, [esi - 0x80] */
+    c->eax = (uint32_t)(op_shl(c, c->eax, 0x4u, 4));             /* 11011F9E: shl eax, 4 */
+    c->esi = (uint32_t)(0xAu);                                   /* 11011FA1: mov esi, 0xa */
+    c->edx = (c->eax & 0x80000000u) ? 0xFFFFFFFFu : 0u;          /* 11011FA6: cdq  */
+    { int64_t _n=(int64_t)(((uint64_t)c->edx<<32)|c->eax); int32_t _d=(int32_t)(c->esi); c->eax=(uint32_t)(_n/_d); c->edx=(uint32_t)(_n%_d); } /* 11011FA7: idiv esi */
+    c->eax = (uint32_t)(flags_add(c, c->eax, c->ecx, 4));        /* 11011FA9: add eax, ecx */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000024u)));           /* 11011FAB: mov edx, dword ptr [esp + 0x24] */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax & 0x3FFu, 4));    /* 11011FAF: and eax, 0x3ff */
+    c->esi = (uint32_t)(rd32((c->esp + 0x00000018u)));           /* 11011FB4: mov esi, dword ptr [esp + 0x18] */
+    SET8L(c->eax, rd8((c->eax + c->edx*1)));                     /* 11011FB8: mov al, byte ptr [eax + edx] */
+    wr8((c->esi), R8L(c->eax));                                  /* 11011FBB: mov byte ptr [esi], al */
+    c->eax = (uint32_t)((c->ecx + c->edi*2 + 0xFFFFFF00u));      /* 11011FBD: lea eax, [ecx + edi*2 - 0x100] */
+    c->eax = (uint32_t)(flags_logicz(c, c->eax & 0x3FFu, 4));    /* 11011FC4: and eax, 0x3ff */
+    SET8L(c->ecx, rd8((c->eax + c->edx*1)));                     /* 11011FC9: mov cl, byte ptr [eax + edx] */
+L_11011FCC:
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000014u)));           /* 11011FCC: mov eax, dword ptr [esp + 0x14] */
+    wr8((c->eax), R8L(c->ecx));                                  /* 11011FD0: mov byte ptr [eax], cl */
+L_11011FD2:
+    c->ebp = (uint32_t)(flags_add(c, c->ebp, rd32((c->esp + 0x0000003Cu)), 4)); /* 11011FD2: add ebp, dword ptr [esp + 0x3c] */
+    c->eax = (uint32_t)(rd32((c->esp + 0x0000003Cu)));           /* 11011FD6: mov eax, dword ptr [esp + 0x3c] */
+    c->edx = (uint32_t)(rd32((c->esp + 0x00000010u)));           /* 11011FDA: mov edx, dword ptr [esp + 0x10] */
+    wr32((c->esp + 0x00000020u), flags_add(c, rd32((c->esp + 0x00000020u)), c->eax, 4)); /* 11011FDE: add dword ptr [esp + 0x20], eax */
+    c->ebx = (uint32_t)(flags_add(c, c->ebx, c->edx, 4));        /* 11011FE2: add ebx, edx */
+    wr32((c->esp + 0x0000001Cu), flags_add(c, rd32((c->esp + 0x0000001Cu)), c->eax, 4)); /* 11011FE4: add dword ptr [esp + 0x1c], eax */
+    wr32((c->esp + 0x00000018u), flags_add(c, rd32((c->esp + 0x00000018u)), c->edx, 4)); /* 11011FE8: add dword ptr [esp + 0x18], edx */
+    wr32((c->esp + 0x00000014u), flags_add(c, rd32((c->esp + 0x00000014u)), c->edx, 4)); /* 11011FEC: add dword ptr [esp + 0x14], edx */
+    wr32((c->esp + 0x0000002Cu), flags_decs(c, rd32((c->esp + 0x0000002Cu)), 4)); /* 11011FF0: dec dword ptr [esp + 0x2c] */
+    if (!c->zf) goto L_11011E84;                                 /* 11011FF4: jne 0x11011e84 */
+L_11011FFA:
+    c->ebp = (uint32_t)(pop32(c));                               /* 11011FFA: pop ebp */
+    c->edi = (uint32_t)(pop32(c));                               /* 11011FFB: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 11011FFC: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 11011FFD: pop ebx */
+    c->esp = (uint32_t)(flags_add(c, c->esp, 0x20u, 4));         /* 11011FFE: add esp, 0x20 */
+    c->esp += 28; return;                                        /* 11012001: ret 0x18 */
 }
 
 void L_11012020(CPU *c)
