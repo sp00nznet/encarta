@@ -201,12 +201,17 @@ The `.M20` files are Microsoft Multimedia Viewer 2.0 containers — a successor 
 
 ## Recompilation Strategy
 
-### Phase 1: Foundation & Data Formats
-- [ ] Set up build system (CMake + MSVC or MinGW)
-- [ ] Reverse engineer DECO_32.DLL (FIF image codec) — smallest, self-contained
-- [ ] Reverse engineer M20/MVB 2.0 container format
-- [ ] Write standalone content extraction tools
-- [ ] Document all file formats
+### Phase 1: Foundation & Data Formats — ✅ substantially complete
+- [x] Set up build system (CMake + MSVC, Win32 target)
+- [x] Reverse engineer DECO_32.DLL (FTC/FIF image codec) — **fully statically
+      recompiled to native C** (all 28 exports, 137-function closure; see below)
+- [x] Reverse engineer M20/MVB 2.0 container format (`m20dump`: B-tree walk,
+      leaf-page parse, extract; `.FSM` entries are uncompressed `FTC\0` images)
+- [x] Write standalone content extraction tools (`m20dump`, `decooracle`, `recomp`)
+- [x] End-to-end real-content pipeline: ISO → `m20dump -x` → decode real
+      `PICON.M20` images to full-colour PNG
+- [ ] Finish format docs; handle the `"FIFF"` FIF variant + non-full-res scaling
+- [ ] Clean-room regenerate the codec's constant tables (drop the DLL-data dep)
 
 ### Phase 2: UI Framework
 - [ ] Map EEUIL10.DLL's 1,868 exports to class hierarchy
@@ -259,11 +264,39 @@ cmake --build build --config Release --target m20dump
 
 ### Static Recompilation of DECO_32.DLL (`tools/recomp`)
 
-The proprietary FTC image codec has been **statically recompiled** — its decode
-pipeline mechanically translated from x86 to native C (`lift.py`) and validated
-byte-identical to the original on all test images, with no original code
-executed. This both unblocked full-colour FTC output and produced a recompilable
-reference implementation. See [`tools/recomp/README.md`](tools/recomp/README.md).
+The proprietary FTC image codec has been **fully statically recompiled** — **all
+28 exports** mechanically translated from x86 (incl. x87 FPU) to native C by a
+purpose-built lifter (`lift.py`, capstone-based), a **137-function closure** with
+zero unhandled opcodes. Validated **byte-identical** to the original DLL, with
+**no original code executed** (the DLL is mapped only as a constant-data image, or
+not at all). See [`tools/recomp/README.md`](tools/recomp/README.md).
+
+Both FTC encoding modes found in real content decode correctly:
+
+| Mode | Header bytes | Share of PICON | Result |
+|------|--------------|----------------|--------|
+| self-contained | `01 01 02 01` | ~29% | **pixel-exact** to the DLL |
+| FTT-referenced | `04 03 04 01` | ~71% | **clean full colour** (recomp is *more correct* than the DLL bridge, which speckles chroma under standalone setup) |
+
+How it was built: a faithful DLL-bridge **oracle** (`decooracle`) established
+ground-truth output + CRC baselines and a per-function call **tracer**
+(`decotrace`); the codec was then lifted leaf-up and differentially validated
+against the oracle at every step (the VLC reader alone passed 3,000,000
+fuzz trials with zero mismatches).
+
+### Real-content image pipeline
+
+```bash
+# 1. mount an Encarta ISO  (PowerShell: Mount-DiskImage CD1ENC97ENC.iso)
+# 2. extract raw images from a container (use -x; the FTC entries are NOT
+#    LZ77-compressed, so -d would corrupt them)
+m20dump -x "G:\ENCYC97\PICON.M20" -o out_dir
+# 3. decode a real image to PNG (auto-loads any referenced FTT from the same dir)
+recomp_decode out_dir\T000009D.FSM "" image.png
+```
+
+`PICON.M20` holds **11,348 FTC images** (`.FSM`) + 49 shared fractal transform
+tables (`.FTT`); all decode to correct full colour through the recompiled codec.
 
 ### FTC Decoder (`ftcdecode`)
 
@@ -298,7 +331,9 @@ ftcdecode -d input.ftc output.bmp
 - [x] FIF container decode — **perfect quality**, extracts embedded FTT/FTC sub-images
 - [x] FTC flat-fill decode — **recognizable grayscale** for all test files
 - [x] Chroma scale table (word0=8 divide-by-16, separate from luma word0=6)
-- [ ] FTC color output — chroma needs deeper RE (DLL uses LUT + arithmetic coder)
+- [x] **FTC full colour — SOLVED** (via `decooracle` and the `recomp` static
+      recompilation; the clean-room `ftcdecode` chroma path is superseded by the
+      recompiled codec)
 
 ## Tools Needed
 
@@ -306,7 +341,9 @@ ftcdecode -d input.ftc output.bmp
 - [Resource Hacker](http://www.angusj.com/resourcehacker/) — for extracting resources from ENCRES97.DLL
 - Visual Studio 2022 (MSVC) — for building tools (Win32 target)
 - CMake 3.16+ — build system
-- Python 3 + `pefile` — for PE analysis scripts
+- Python 3 + `pefile` + `capstone` — for PE analysis and the x86→C lifter
+  (`tools/recomp/lift.py`)
+- IDA Pro (idalib, headless) / Ghidra — function boundaries + decompilation
 
 ## Legal
 
@@ -314,19 +351,23 @@ This project contains no copyrighted Microsoft code or content. It is a clean-ro
 
 ## Status
 
-**Current Phase: 1 — Data Format Reverse Engineering**
+**Phase 1 (Data Format RE) — substantially complete; the DECO_32 image codec is
+fully recompiled. Next up: remaining Phase-1 polish, then Phase 2/3.**
 
 - [x] Identify all executables and DLLs (PE32 vs NE/16-bit)
 - [x] Catalog PE sections, imports, exports for all 32-bit modules
 - [x] Map data file formats and multimedia assets
 - [x] Document architecture and component relationships
-- [x] Ghidra disassembly of DECO_32.DLL — key functions mapped
-- [x] M20 container extraction tool
-- [x] FTT image decoder — **perfect quality** raw pixel decode
-- [x] FIF container decoder — **perfect quality** extract embedded FTT/FTC sub-images
+- [x] Ghidra/IDA disassembly of DECO_32.DLL — all functions mapped
+- [x] M20/MVB 2.0 container parser + extractor (`m20dump`)
+- [x] FTT raw decoder + FIF container decoder — **perfect quality**
 - [x] FTC image decoder (clean-room) — luma/grayscale recognizable
-- [x] **FTC full-colour decode — SOLVED** via `decooracle` (faithful DLL bridge)
-- [x] **DECO_32 FTC codec statically recompiled (x86→C) — pixel-exact**, no
-      original code executed (`tools/recomp`)
-- [ ] Clean-room regeneration of the codec's constant tables (lift the builders)
-- [ ] Begin Ghidra/IDA disassembly of ENC97.EXE (main application)
+- [x] **FTC full-colour decode — SOLVED** (`decooracle` faithful DLL bridge)
+- [x] **DECO_32 statically recompiled (x86+x87→C) — all 28 exports, 137-function
+      closure, byte-exact, no original code executed** (`tools/recomp`)
+- [x] **End-to-end real-content pipeline** — decode real `PICON.M20` images
+      (both FTC modes) to full-colour PNG
+- [ ] Clean-room regeneration of the codec's constant tables (drop DLL-data dep)
+- [ ] Full M20/MVB format documentation; `"FIFF"` FIF variant + scaling paths
+- [ ] **Begin Ghidra/IDA disassembly of ENC97.EXE** (main application) — Phase 3
+- [ ] Map EEUIL10.DLL UI class hierarchy — Phase 2
