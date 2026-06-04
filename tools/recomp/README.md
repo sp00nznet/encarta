@@ -223,14 +223,20 @@ startup:
 [14] KERNEL32!GetStartupInfoA  [15] GetModuleHandleA
 [18] MFC40#1368 (AfxWinMain)   -> MFC + ENC97 InitInstance
 [19] MSVCRT40!exit(...)
-*** lifted ENC97 reached MSVCRT40.dll!exit after 19 dispatched calls
+*** lifted ENC97 reached exit after 1046 dispatched calls
+    (182 C++/CRT init fns routed through LIFTED dispatch)
 ```
 
 So the recompiled entry drives the entire CRT initialisation (set-app-type,
 fp-control, the two `_initterm` C++/CRT init-table passes, arg parsing) and then
 `AfxWinMain`, which runs MFC and ENC97's own `InitInstance`, before the app
-terminates through the real `exit`. Getting here required two new lifter
-capabilities, both essential for any SEH-using / position-dependent code:
+terminates through the real `exit`. The harness also **intercepts `_initterm`**
+and routes each entry of the C++/CRT init-pointer table back through the dispatch
+table — so the **static initializers run as lifted code** (182 functions, ~1046
+total lifted dispatches), exercising the *real→lifted* call path (the inverse of
+the import trampoline) needed to run application code that real library code
+invokes. Getting here required two new lifter capabilities, both essential for
+any SEH-using / position-dependent code:
 
 - **`fs:` segment access** (`mov eax, fs:[0]` → `__readfsdword(0)`): the CRT
   entry installs an SEH frame via the TIB; without this the lift null-derefs.

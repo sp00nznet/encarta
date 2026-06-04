@@ -43,6 +43,8 @@ static volatile uint32_t g_last;        /* last internal target dispatched */
 static volatile uint32_t g_last_import; /* last import target */
 static volatile int g_done;
 static int g_trace;   /* RUN_TRACE: log the first N import calls of the boot */
+static uint32_t g_initterm;            /* resolved MSVCRT40!_initterm address */
+static unsigned long g_initfns;        /* C++/CRT init fns routed through lifted dispatch */
 /* resolved-address -> "dll!name" for tracing which import the boot is in */
 static struct { uint32_t addr; char name[64]; } g_inames[1024];
 static int g_ninames;
@@ -111,6 +113,18 @@ void dispatch(CPU *c, uint32_t target)
         return;
     }
     g_last_import = target;
+    /* Intercept _initterm: walk the C++/CRT init-pointer table and route each
+       entry through our dispatch so the static initializers run as LIFTED code
+       (this is the real->lifted path that real MFC would otherwise call directly). */
+    if (target == g_initterm && g_initterm) {
+        uint32_t b = rd32(c->esp + 4), e = rd32(c->esp + 8);
+        for (uint32_t p = b; p < e; p += 4) {
+            uint32_t fn = rd32(p);
+            if (fn) { g_initfns++; push32(c, 0xDEADBEEFu); dispatch(c, fn); }
+        }
+        c->eax = 0; c->esp += 4;     /* mimic cdecl ret; caller cleans the 2 args */
+        return;
+    }
     const char *nm = imp_name(target);
     if (g_trace && g_calls <= (unsigned)g_trace)
         fprintf(stderr, "  [%lu] import %s\n", g_calls, nm), fflush(stderr);
@@ -121,8 +135,9 @@ void dispatch(CPU *c, uint32_t target)
         uint32_t code = rd32(c->esp + 4);
         fprintf(stderr, "\n*** lifted ENC97 reached %s(%u) after %lu dispatched calls\n", nm, code, g_calls);
         fflush(stderr);
-        printf("ENC97 lifted boot: ran CRT+MFC startup to %s(%u) — %lu calls dispatched, last lifted fn 0x%06X\n",
-               nm, code, g_calls, g_last);
+        printf("ENC97 lifted boot: ran CRT+MFC startup to %s(%u) — %lu calls dispatched "
+               "(%lu C++/CRT init fns routed through LIFTED dispatch), last lifted fn 0x%06X\n",
+               nm, code, g_calls, g_initfns, g_last);
         fflush(stdout);
         ExitProcess(code);
     }
@@ -199,6 +214,9 @@ static int map_and_wire(const char *path)
                 if(g_ninames < 1024){ g_inames[g_ninames].addr=(uint32_t)(uintptr_t)p;
                     if(ent&0x80000000u) snprintf(g_inames[g_ninames].name,64,"%s#%u",dll,ent&0xFFFF);
                     else snprintf(g_inames[g_ninames].name,64,"%s!%s",dll,(const char*)(base+(ent&0x7FFFFFFF)+2));
+                    if(!_stricmp(dll,"MSVCRT40.dll") && !(ent&0x80000000u) &&
+                       !strcmp((const char*)(base+(ent&0x7FFFFFFF)+2),"_initterm"))
+                        g_initterm=(uint32_t)(uintptr_t)p;
                     g_ninames++; }
             }
         }
