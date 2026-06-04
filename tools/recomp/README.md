@@ -190,6 +190,17 @@ real code, EEUIL10 needs no lift/stub (it loads), and only the MFC `CWinApp`
 launch (entry → `InitInstance` → message loop, which wants the disc/data) remains
 to actually boot the UI.
 
+### The real app boots on Windows 11
+
+As the end-to-end check of all the above, launching `ENC97.EXE` from `analysis\`
+(so the three Encarta-private DLLs resolve) **boots**: it runs CRT + MFC init and
+its own `InitInstance`, then reaches an Encarta dialog titled **"Fonts not
+found"** (a resource string in `ENCRES97.DLL`). So the 1997 binary executes its
+real startup on Win11 with no code/dependency blocker; getting past that dialog
+is a content/install step — Encarta ships custom fonts its installer registers —
+not a recompilation problem. (Launched under a watchdog that force-terminates the
+modal dialog; nothing was installed system-wide.)
+
 ## Status / future
 
 - [x] Decode path lifted, pixel-exact (FTC mode `01 01 02 01`, self-contained)
