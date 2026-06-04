@@ -16,6 +16,9 @@
 
 #include <stdint.h>
 #include <string.h>
+#if defined(_MSC_VER)
+#include <intrin.h>   /* __readfsdword/__writefsdword: TIB-relative (fs:) access for SEH */
+#endif
 
 typedef struct {
     uint32_t eax, ecx, edx, ebx, esp, ebp, esi, edi;

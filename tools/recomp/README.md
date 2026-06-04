@@ -210,6 +210,47 @@ real code, EEUIL10 needs no lift/stub (it loads), and only the MFC `CWinApp`
 launch (entry → `InitInstance` → message loop, which wants the disc/data) remains
 to actually boot the UI.
 
+### The *lifted* entry point boots the app
+
+`recomp_enc97_run` executes the **recompiled** entry point — `start@0x50DB70`,
+the CRT/MFC bootstrap — as lifted C, through the 7,326-function dispatch table
+with the full 914-import IAT wired to real Win32/MFC/CRT. It runs the complete
+startup:
+
+```
+[1]  MSVCRT40!__set_app_type   [2] __p__fmode   [3] __p__commode  [7] _controlfp
+[9]  MSVCRT40!_initterm        [10] __getmainargs  [12] _initterm  [13] __p__acmdln
+[14] KERNEL32!GetStartupInfoA  [15] GetModuleHandleA
+[18] MFC40#1368 (AfxWinMain)   -> MFC + ENC97 InitInstance
+[19] MSVCRT40!exit(...)
+*** lifted ENC97 reached MSVCRT40.dll!exit after 19 dispatched calls
+```
+
+So the recompiled entry drives the entire CRT initialisation (set-app-type,
+fp-control, the two `_initterm` C++/CRT init-table passes, arg parsing) and then
+`AfxWinMain`, which runs MFC and ENC97's own `InitInstance`, before the app
+terminates through the real `exit`. Getting here required two new lifter
+capabilities, both essential for any SEH-using / position-dependent code:
+
+- **`fs:` segment access** (`mov eax, fs:[0]` → `__readfsdword(0)`): the CRT
+  entry installs an SEH frame via the TIB; without this the lift null-derefs.
+- **address-immediate relocation**: `push offset table` and similar absolute
+  immediates are emitted as `GVA(imm)` when the `.reloc` table marks them, so the
+  lifted code is position-independent (e.g. `_initterm`'s init-table bounds are
+  now correct at any load base — previously they were stale VAs and faulted).
+
+The CRT-level boot is fully lifted; `AfxWinMain`/`InitInstance` execute as the
+real mapped code (reached via relocated vtable pointers — the hybrid handoff),
+calling Win32/MFC through the wired IAT. In this uninstalled environment
+`InitInstance` exits early (the same "Fonts not found" condition seen below);
+making the MFC/app body run as lifted code too would mean routing MFC's
+vtable/callback dispatches through the table — a larger, separate effort.
+
+```
+cmake --build build --config Release --target recomp_enc97_run   # needs enc97_full.c
+build\tools\recomp\Release\recomp_enc97_run.exe analysis\ENC97.EXE 10000
+```
+
 ### The real app boots on Windows 11
 
 As the end-to-end check of all the above, launching `ENC97.EXE` from `analysis\`

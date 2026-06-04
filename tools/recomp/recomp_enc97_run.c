@@ -1,0 +1,297 @@
+/*
+ * recomp_enc97_run.c - BOOT the lifted ENC97.EXE: execute the recompiled entry
+ * point (start @0x50DB70) through the 7,326-function dispatch table, with the
+ * full 914-import IAT wired to real Win32/MFC/CRT.
+ *
+ * Internal calls (direct original-VA or indirect relocated live-VA) route to the
+ * lifted C function if present, else fall back to the real mapped original.
+ * Imports (addresses outside the image) are real DLL functions called through an
+ * esp-switch trampoline. The lifted entry runs on a big worker stack under a
+ * watchdog; we report how far the recompiled code gets (call count, last lifted
+ * function, whether a window appeared) before the watchdog stops it.
+ *
+ * Build 32-bit. Needs the generated enc97_full.c (the full lift).
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include "cpu.h"
+
+#define PREF_BASE 0x400000u
+
+#include "enc97_full_list.h"
+#define DECL(a) void L_##a(CPU *);
+LIFTED_FUNCS(DECL)
+#undef DECL
+
+typedef void (*lfn)(CPU *);
+typedef struct { uint32_t va; lfn fn; } entry_t;
+static entry_t g_lifted[] = {
+#define E(a) { 0x##a, L_##a },
+    LIFTED_FUNCS(E)
+#undef E
+};
+#define NLIFTED (sizeof g_lifted / sizeof *g_lifted)
+
+static uint8_t *g_base;
+static uint32_t g_imgsz;
+static volatile unsigned long g_calls;
+static volatile uint32_t g_last;        /* last internal target dispatched */
+static volatile uint32_t g_last_import; /* last import target */
+static volatile int g_done;
+static int g_trace;   /* RUN_TRACE: log the first N import calls of the boot */
+/* resolved-address -> "dll!name" for tracing which import the boot is in */
+static struct { uint32_t addr; char name[64]; } g_inames[1024];
+static int g_ninames;
+static const char *imp_name(uint32_t addr)
+{
+    for (int i = 0; i < g_ninames; i++) if (g_inames[i].addr == addr) return g_inames[i].name;
+    return "?";
+}
+
+static int cmp_entry(const void *a, const void *b)
+{ uint32_t x=((const entry_t*)a)->va, y=((const entry_t*)b)->va; return (x>y)-(x<y); }
+static lfn lookup(uint32_t va)
+{
+    size_t lo=0, hi=NLIFTED;
+    while (lo<hi){ size_t m=(lo+hi)/2;
+        if (g_lifted[m].va<va) lo=m+1; else if (g_lifted[m].va>va) hi=m; else return g_lifted[m].fn; }
+    return NULL;
+}
+
+/* esp-switch trampoline: run real code (import or real internal) on the emulated
+   stack, loading GP regs from the CPU and capturing eax+esp afterwards. */
+static uint32_t T_eax,T_ecx,T_edx,T_ebx,T_esi,T_edi,T_espp4,T_tgt,T_fesp,T_sesp;
+static void call_machine(CPU *c, uint32_t target)
+{
+    T_eax=c->eax; T_ecx=c->ecx; T_edx=c->edx; T_ebx=c->ebx; T_esi=c->esi; T_edi=c->edi;
+    T_espp4=c->esp+4; T_tgt=target;
+    __asm {
+        push ebx
+        push esi
+        push edi
+        push ebp
+        mov T_sesp, esp
+        mov eax, T_eax
+        mov ecx, T_ecx
+        mov edx, T_edx
+        mov ebx, T_ebx
+        mov esi, T_esi
+        mov edi, T_edi
+        mov esp, T_espp4
+        call dword ptr [T_tgt]
+        mov T_fesp, esp
+        mov T_eax, eax
+        mov esp, T_sesp
+        pop ebp
+        pop edi
+        pop esi
+        pop ebx
+    }
+    c->eax=T_eax; c->esp=T_fesp;
+}
+
+void dispatch(CPU *c, uint32_t target)
+{
+    g_calls++;
+    uint32_t ova = 0;
+    if (target >= PREF_BASE && target < PREF_BASE + g_imgsz)
+        ova = target;                                   /* direct internal (original VA) */
+    else if (target >= (uint32_t)(uintptr_t)g_base &&
+             target <  (uint32_t)(uintptr_t)g_base + g_imgsz)
+        ova = target - g_image_delta;                   /* indirect relocated live internal */
+    if (ova) {
+        g_last = ova;
+        lfn fn = lookup(ova);
+        if (fn) { fn(c); return; }
+        call_machine(c, ova + g_image_delta);           /* unlifted internal -> real original */
+        return;
+    }
+    g_last_import = target;
+    const char *nm = imp_name(target);
+    if (g_trace && g_calls <= (unsigned)g_trace)
+        fprintf(stderr, "  [%lu] import %s\n", g_calls, nm), fflush(stderr);
+    /* the app terminating means the lifted entry drove CRT+MFC startup to its
+       end; report the milestone cleanly instead of vanishing inside real exit(). */
+    if (!strcmp(nm,"MSVCRT40.dll!exit") || !strcmp(nm,"MSVCRT40.dll!_exit") ||
+        !strcmp(nm,"KERNEL32.dll!ExitProcess")) {
+        uint32_t code = rd32(c->esp + 4);
+        fprintf(stderr, "\n*** lifted ENC97 reached %s(%u) after %lu dispatched calls\n", nm, code, g_calls);
+        fflush(stderr);
+        printf("ENC97 lifted boot: ran CRT+MFC startup to %s(%u) — %lu calls dispatched, last lifted fn 0x%06X\n",
+               nm, code, g_calls, g_last);
+        fflush(stdout);
+        ExitProcess(code);
+    }
+    call_machine(c, target);                            /* import -> real DLL */
+}
+void dispatch_jmp(CPU *c, uint32_t t){ dispatch(c,t); }
+void dispatch_indirect(CPU *c, uint32_t t){ dispatch(c,t); }
+
+static uint8_t *g_estack;
+#define EMU_STACK (4u << 20)
+static uint32_t call_lifted(lfn fn, const uint32_t *args, int n)
+{
+    CPU c; memset(&c,0,sizeof c);
+    c.esp = (uint32_t)(uintptr_t)(g_estack + EMU_STACK - 4096);
+    for (int i=n-1;i>=0;i--) push32(&c,args[i]);
+    push32(&c, 0xDEADBEEFu);
+    fn(&c);
+    return c.eax;
+}
+
+/* ---- map + relocate ENC97, then wire its full import table to real code ---- */
+static HMODULE load_for(const char *dll)
+{
+    char path[MAX_PATH];
+    if (!_stricmp(dll,"DECO_32.DLL")||!_stricmp(dll,"ENCAPI32.dll")||!_stricmp(dll,"EEUIL10.dll")){
+        snprintf(path,sizeof path,"C:\\encarta\\analysis\\%s",dll); return LoadLibraryA(path);
+    }
+    if (!_stricmp(dll,"MSVCRT40.dll")) return LoadLibraryA("msvcrt.dll");
+    return LoadLibraryA(dll);
+}
+static int g_imports, g_imports_res;
+static int map_and_wire(const char *path)
+{
+    FILE *f=fopen(path,"rb"); if(!f) return 0;
+    fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET);
+    uint8_t *file=malloc(sz); if(fread(file,1,sz,f)!=(size_t)sz){fclose(f);return 0;} fclose(f);
+    PIMAGE_DOS_HEADER dos=(PIMAGE_DOS_HEADER)file;
+    PIMAGE_NT_HEADERS nt=(PIMAGE_NT_HEADERS)(file+dos->e_lfanew);
+    uint32_t imgsz=nt->OptionalHeader.SizeOfImage;
+    /* OS-chosen base; relocs are applied below and the lifter now GVA-wraps
+       address immediates, so the lifted code is correct at any base. */
+    uint8_t *base=VirtualAlloc(NULL,imgsz,MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE);
+    if(!base){free(file);return 0;}
+    memcpy(base,file,nt->OptionalHeader.SizeOfHeaders);
+    PIMAGE_SECTION_HEADER s=IMAGE_FIRST_SECTION(nt);
+    for(int i=0;i<nt->FileHeader.NumberOfSections;i++)
+        if(s[i].SizeOfRawData) memcpy(base+s[i].VirtualAddress,file+s[i].PointerToRawData,s[i].SizeOfRawData);
+    g_base=base; g_imgsz=imgsz; g_image_delta=(int32_t)((uint32_t)(uintptr_t)base-PREF_BASE);
+    IMAGE_DATA_DIRECTORY rd=nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+    if(g_image_delta && rd.Size){
+        uint8_t *p=base+rd.VirtualAddress,*end=p+rd.Size;
+        while(p<end){ PIMAGE_BASE_RELOCATION br=(PIMAGE_BASE_RELOCATION)p;
+            uint32_t n=(br->SizeOfBlock-sizeof *br)/2; uint16_t *e=(uint16_t*)(br+1);
+            for(uint32_t i=0;i<n;i++) if((e[i]>>12)==IMAGE_REL_BASED_HIGHLOW)
+                *(uint32_t*)(base+br->VirtualAddress+(e[i]&0xFFF))+=g_image_delta;
+            p+=br->SizeOfBlock; }
+    }
+    /* wire imports to real code (read descriptors from `file` headers, write the
+       mapped IAT in `base`); free `file` only after we're done with `nt`. */
+    IMAGE_DATA_DIRECTORY id=nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    PIMAGE_IMPORT_DESCRIPTOR imp=(PIMAGE_IMPORT_DESCRIPTOR)(base+id.VirtualAddress);
+    for(;imp->Name;imp++){
+        const char *dll=(const char*)(base+imp->Name);
+        HMODULE h=load_for(dll);
+        uint32_t oft=imp->OriginalFirstThunk?imp->OriginalFirstThunk:imp->FirstThunk;
+        uint32_t *lookup_t=(uint32_t*)(base+oft);
+        uint32_t *iat=(uint32_t*)(base+imp->FirstThunk);
+        for(int i=0;lookup_t[i];i++){
+            uint32_t ent=lookup_t[i]; FARPROC p=NULL;
+            if(h){ if(ent&0x80000000u) p=GetProcAddress(h,(LPCSTR)(uintptr_t)(ent&0xFFFF));
+                   else p=GetProcAddress(h,(LPCSTR)(base+(ent&0x7FFFFFFF)+2)); }
+            g_imports++;
+            if(p){ iat[i]=(uint32_t)(uintptr_t)p; g_imports_res++;
+                if(g_ninames < 1024){ g_inames[g_ninames].addr=(uint32_t)(uintptr_t)p;
+                    if(ent&0x80000000u) snprintf(g_inames[g_ninames].name,64,"%s#%u",dll,ent&0xFFFF);
+                    else snprintf(g_inames[g_ninames].name,64,"%s!%s",dll,(const char*)(base+(ent&0x7FFFFFFF)+2));
+                    g_ninames++; }
+            }
+        }
+    }
+    free(file);
+    return 1;
+}
+
+static volatile DWORD g_fault_code;
+/* Vectored handler: faults inside real code called on the switched trampoline
+   stack are uncatchable by SEH, so log diagnostics here (then continue search). */
+static LONG CALLBACK veh_diag(PEXCEPTION_POINTERS ep)
+{
+    DWORD code = ep->ExceptionRecord->ExceptionCode;
+    if (code == 0x40010006 || code == 0x4001000A) return EXCEPTION_CONTINUE_EXECUTION; /* OutputDebugString */
+    if (code >= 0xC0000000u) {
+        uint32_t fa = (uint32_t)(uintptr_t)ep->ExceptionRecord->ExceptionAddress;
+        uint32_t ova = (fa >= (uint32_t)(uintptr_t)g_base && fa < (uint32_t)(uintptr_t)g_base + g_imgsz)
+                     ? fa - g_image_delta : 0;
+        fprintf(stderr, "VEH fault 0x%08lX @%08X%s after %lu calls; last lifted=0x%06X last import=0x%08X (%s)\n",
+                code, fa, ova ? "" : " (external)", g_calls, g_last, g_last_import, imp_name(g_last_import));
+        if (ova) fprintf(stderr, "  faulting addr is ENC97 original-VA 0x%06X\n", ova);
+        fflush(stderr);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+struct winscan { DWORD pid; char *title; };
+static BOOL CALLBACK find_proc_window(HWND h, LPARAM lp)
+{
+    struct winscan *w = (struct winscan *)lp; DWORD p = 0;
+    GetWindowThreadProcessId(h, &p);
+    if (p == w->pid && IsWindowVisible(h) && GetWindowTextLengthA(h) > 0) {
+        GetWindowTextA(h, w->title, 250); return FALSE;
+    }
+    return TRUE;
+}
+
+static DWORD WINAPI run_thread(LPVOID arg)
+{
+    (void)arg;
+    __try {
+        call_lifted(L_0050DB70, NULL, 0);   /* lifted CRT/MFC entry: start() */
+        g_done = 1;
+    } __except (g_fault_code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+        fprintf(stderr, "FAULT 0x%08lX after %lu calls; last lifted fn=0x%06X last import=0x%08X (%s)\n",
+                g_fault_code, g_calls, g_last, g_last_import, imp_name(g_last_import));
+        fflush(stderr);
+    }
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    setvbuf(stdout, NULL, _IONBF, 0); setvbuf(stderr, NULL, _IONBF, 0);
+    { const char *t = getenv("RUN_TRACE"); g_trace = t ? atoi(t) : 0; }
+    AddVectoredExceptionHandler(1, veh_diag);
+    fprintf(stderr,"[1] start\n");
+    const char *exe = (argc>=2)?argv[1]:"C:\\encarta\\analysis\\ENC97.EXE";
+    int timeout_ms = (argc>=3)?atoi(argv[2]):8000;
+    if(!map_and_wire(exe)){ fprintf(stderr,"map/wire failed\n"); return 1; }
+    fprintf(stderr,"[2] mapped+wired\n");
+    qsort(g_lifted,NLIFTED,sizeof *g_lifted,cmp_entry);
+    g_estack=VirtualAlloc(NULL,EMU_STACK,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    fprintf(stderr,"ENC97 mapped @%p (delta %+d); IAT %d/%d wired; %u lifted fns\n",
+            (void*)g_base,(int)g_image_delta,g_imports_res,g_imports,(unsigned)NLIFTED);
+    fprintf(stderr,"booting lifted entry start@0x50DB70 (watchdog %d ms)...\n",timeout_ms);
+
+    /* run the lifted entry on a worker with a big stack (lifted calls recurse on
+       the real C stack); watchdog + window poll from the main thread. */
+    HANDLE th=CreateThread(NULL, 64u<<20, run_thread, NULL, 0, NULL);
+    char wintitle[256] = {0};
+    int elapsed = 0, step = 100;
+    while (elapsed < timeout_ms) {
+        if (WaitForSingleObject(th, step) == WAIT_OBJECT_0) break;
+        elapsed += step;
+        /* did the booting app create a top-level window in our process? */
+        struct winscan wp = { GetCurrentProcessId(), wintitle };
+        EnumWindows(find_proc_window, (LPARAM)&wp);
+        if (wintitle[0]) break;
+    }
+
+    if(g_done)
+        fprintf(stderr,"lifted entry RETURNED after %lu dispatched calls\n", g_calls);
+    else
+        fprintf(stderr,"%s: %lu calls; last lifted fn=0x%06X last import=0x%08X (%s)\n",
+                wintitle[0]?"window appeared":"watchdog stop",
+                g_calls, g_last, g_last_import, imp_name(g_last_import));
+
+    printf("ENC97 lifted boot: %lu calls dispatched, last lifted fn 0x%06X%s%s%s\n",
+           g_calls, g_last,
+           g_done?" (entry returned)":" (running)",
+           wintitle[0]?" — window: " : "", wintitle);
+    TerminateThread(th, 0);   /* bounded: stop whatever the boot is doing */
+    return 0;
+}
