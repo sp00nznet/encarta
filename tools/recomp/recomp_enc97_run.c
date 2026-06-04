@@ -184,7 +184,7 @@ static uint8_t *g_r2l_arena; static uint32_t g_r2l_top;
 #define R2L_FRAME 0x8000u
 
 static uint64_t __cdecl r2l_helper(uint32_t ova, uint32_t this_, uint32_t *real_args,
-                                   uint32_t ebx, uint32_t esi, uint32_t edi)
+                                   uint32_t ebx, uint32_t esi, uint32_t edi, uint32_t ebp)
 {
     uint32_t save = g_r2l_top;
     g_r2l_top -= R2L_FRAME;
@@ -192,7 +192,9 @@ static uint64_t __cdecl r2l_helper(uint32_t ova, uint32_t this_, uint32_t *real_
     for (int i = 0; i < 16; i++) wr32(argsp + 4 + i*4, real_args[i]);
     wr32(argsp, 0xDEADBEEFu);                            /* fake return slot */
     CPU c; memset(&c, 0, sizeof c);
-    c.ecx = this_; c.ebx = ebx; c.esi = esi; c.edi = edi; c.esp = argsp;
+    /* seed all GP regs from the real caller: some routed targets are thunks that
+       use the CALLER's ebp (e.g. `lea ecx,[ebp-0x10]`) without a frame of own. */
+    c.ecx = this_; c.ebx = ebx; c.esi = esi; c.edi = edi; c.ebp = ebp; c.esp = argsp;
     g_r2l_calls++;
     dispatch(&c, ova + g_image_delta);                   /* -> lifted */
     uint32_t pop = (c.esp >= argsp + 4) ? (c.esp - argsp - 4) : 0;
@@ -204,7 +206,8 @@ __declspec(naked) static void r2l_common(void)
 {
     __asm {
         push ebp
-        mov  ebp, esp                  /* [ebp+4]=retaddr, [ebp+8]=arg0 */
+        mov  ebp, esp                  /* [ebp+4]=retaddr, [ebp+8]=arg0, [ebp]=caller ebp */
+        push dword ptr [ebp]           /* caller's ebp (for ebp-relative thunks) */
         push edi
         push esi
         push ebx
@@ -213,7 +216,7 @@ __declspec(naked) static void r2l_common(void)
         push ecx                       /* this */
         push eax                       /* ova */
         call r2l_helper                /* edx:eax = pop:result */
-        add  esp, 24                   /* clean 6 cdecl args */
+        add  esp, 28                   /* clean 7 cdecl args */
         mov  ecx, edx                  /* ecx = pop bytes */
         mov  edx, [ebp+4]              /* retaddr */
         mov  esp, ebp
@@ -246,18 +249,28 @@ static int rewrite_fnptr_slots(void)
     for(int i=0;i<nt->FileHeader.NumberOfSections;i++)
         if(!memcmp(s[i].Name,".text",5)){ tlo=base+s[i].VirtualAddress;
             thi=tlo+s[i].Misc.VirtualSize; }
+    /* A function-start pointer (points into .text at a lifted fn entry). */
+    #define IS_FNPTR(val) ((val)>=tlo && (val)<thi && lookup((val)-g_image_delta))
+    const int MINVT=3;       /* only rewrite runs of >=3 (real vtables); a run of */
+                             /* 3 consecutive valid fn-starts is not coincidence,  */
+                             /* so this avoids clobbering data that merely looks    */
+                             /* like a pointer. */
     int n=0;
     for(int i=0;i<nt->FileHeader.NumberOfSections;i++){
         if(memcmp(s[i].Name,".rdata",6) && memcmp(s[i].Name,".data",5)) continue;
         uint32_t a=base+s[i].VirtualAddress, e=a+s[i].Misc.VirtualSize;
-        for(uint32_t p=a; p+4<=e; p+=4){
+        for(uint32_t p=a; p+4<=e; ){
             uint32_t v=*(uint32_t*)(uintptr_t)p;
-            if(v>=tlo && v<thi){                       /* points into .text */
-                uint32_t ova=v-g_image_delta;
-                if(lookup(ova)){                        /* ...at a function start */
-                    *(uint32_t*)(uintptr_t)p=make_tramp(ova); n++;
-                }
-            }
+            if(IS_FNPTR(v)){
+                uint32_t q=p; int run=0;             /* measure the run length */
+                while(q+4<=e && IS_FNPTR(*(uint32_t*)(uintptr_t)q)){ run++; q+=4; }
+                if(run>=MINVT)
+                    for(uint32_t r=p;r<q;r+=4){
+                        uint32_t ova=*(uint32_t*)(uintptr_t)r - g_image_delta;
+                        *(uint32_t*)(uintptr_t)r=make_tramp(ova); n++;
+                    }
+                p=q;
+            } else p+=4;
         }
     }
     return n;
