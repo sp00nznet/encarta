@@ -160,15 +160,35 @@ semantics). The real originals are called on the real C stack — not via the
 esp-switch trampoline — so a fault on synthetic input unwinds normally and is
 caught (the esp-switch makes faults uncatchable).
 
-What remains for a *whole-app* running recomp is scale + runtime, not unknown
-blockers: build the 7,326-entry dispatch table, wire the Win32/MFC import
-trampoline (proven here and on ENCAPI32) for its 914 imports, lift/stub EEUIL10,
-and stand up an MFC-integrated launcher. The hard questions — "does the lifter
-handle a 1.3 MB MFC app?", "does lifted app code execute against real Win32?",
-and "do lifted→lifted internal calls dispatch and compute correctly?" — are all
-answered: **yes — the whole thing lifts and compiles, and lifted functions run
-correctly through both the import trampoline and lifted→lifted dispatch,
-matching the real originals.**
+The hard questions — "does the lifter handle a 1.3 MB MFC app?", "does lifted
+app code execute against real Win32?", and "do lifted→lifted internal calls
+dispatch and compute correctly?" — are all answered: **yes — the whole thing
+lifts and compiles, and lifted functions run correctly through both the import
+trampoline and lifted→lifted dispatch, matching the real originals.**
+
+### Imports are fully satisfiable — the "MFC40 wall" was a myth
+
+`recomp_enc97_iat` maps ENC97 and wires its **entire 914-import IAT**, reporting
+what resolves on a modern system:
+
+```
+TOTAL: 914 imports across 13 DLLs (13 loaded) -> 914 resolved, 0 stubbed
+100.0% of imports wired to real code
+OS loader: LoadLibrary(ENC97.EXE) SUCCEEDED — every dependency (incl. MFC40
+           from SysWOW64) is satisfiable on this Win11 system.
+```
+
+The earlier assumption that **MFC40.DLL** was an unobtainable blocker is wrong:
+Windows 11 still ships `mfc40.dll`/`mfc40u.dll` in `SysWOW64`, and the 32-bit
+`msvcrt.dll` there covers all 71 MSVCRT40 imports (including the x86 FP helpers
+`_ftol`/`_CIpow`/`_adj_fdiv*` a 64-bit msvcrt lacks). The three Encarta-private
+DLLs (`DECO_32`/`ENCAPI32`/`EEUIL10`) load from `analysis\` by full path —
+pre-loading them satisfies ENC97's dependency on them, after which the real OS
+loader maps and binds the whole EXE. So **all four prerequisites for a running
+recomp are met**: the 7,326-entry dispatch table is built, every import wires to
+real code, EEUIL10 needs no lift/stub (it loads), and only the MFC `CWinApp`
+launch (entry → `InitInstance` → message loop, which wants the disc/data) remains
+to actually boot the UI.
 
 ## Status / future
 
