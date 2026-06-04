@@ -11,3 +11,66 @@ void L_00401D10(CPU *c)
     c->eax = (uint32_t)(0x1u);                                   /* 00401D24: mov eax, 1 */
     c->esp += 16; return;                                        /* 00401D29: ret 0xc */
 }
+
+void L_004E3F40(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 004E3F40: mov eax, dword ptr [esp + 4] */
+    flags_sub(c, c->eax, 0xA31Bu, 4);                            /* 004E3F44: cmp eax, 0xa31b */
+    if (!c->zf) goto L_004E3F51;                                 /* 004E3F49: jne 0x4e3f51 */
+    SET16(c->eax, flags_logicz(c, R16(c->eax) ^ R16(c->eax), 2)); /* 004E3F4B: xor ax, ax */
+    c->esp += 8; return;                                         /* 004E3F4E: ret 4 */
+L_004E3F51:
+    push32(c, c->eax);                                           /* 004E3F51: push eax */
+    c->ecx = (uint32_t)(flags_add(c, c->ecx, 0x1A4u, 4));        /* 004E3F52: add ecx, 0x1a4 */
+    push32(c, 0x004E3F5Du); dispatch(c, 0x004FF190u);            /* 004E3F58: call 0x4ff190 */
+    c->esp += 8; return;                                         /* 004E3F5D: ret 4 */
+}
+
+void L_004FF190(CPU *c)
+{
+    SET16(c->eax, flags_logicz(c, R16(c->eax) ^ R16(c->eax), 2)); /* 004FF190: xor ax, ax */
+    push32(c, c->ebx);                                           /* 004FF193: push ebx */
+    push32(c, c->esi);                                           /* 004FF194: push esi */
+    push32(c, c->edi);                                           /* 004FF195: push edi */
+    c->edi = (uint32_t)(rd32((c->ecx + 0x00000004u)));           /* 004FF196: mov edi, dword ptr [ecx + 4] */
+    flags_logicz(c, c->edi & c->edi, 4);                         /* 004FF199: test edi, edi */
+    if (c->zf) goto L_004FF1C4;                                  /* 004FF19B: je 0x4ff1c4 */
+    c->ebx = (uint32_t)(rd32((c->ecx + 0x0000000Cu)));           /* 004FF19D: mov ebx, dword ptr [ecx + 0xc] */
+    c->esi = (uint32_t)(rd32((c->esp + 0x00000010u)));           /* 004FF1A0: mov esi, dword ptr [esp + 0x10] */
+L_004FF1A4:
+    c->ecx = (uint32_t)((R16(c->eax)));                          /* 004FF1A4: movzx ecx, ax */
+    c->edx = (uint32_t)(c->ecx);                                 /* 004FF1A7: mov edx, ecx */
+    c->ecx = (uint32_t)((c->ecx + c->ecx*4));                    /* 004FF1A9: lea ecx, [ecx + ecx*4] */
+    c->ecx = (uint32_t)((c->ecx + c->ecx*2));                    /* 004FF1AC: lea ecx, [ecx + ecx*2] */
+    c->edx = (uint32_t)((c->edx + c->ecx*4));                    /* 004FF1AF: lea edx, [edx + ecx*4] */
+    c->ecx = (uint32_t)((c->edx + c->edx*2));                    /* 004FF1B2: lea ecx, [edx + edx*2] */
+    flags_sub(c, rd32((c->ecx + c->ebx*1 + 0x00000004u)), c->esi, 4); /* 004FF1B5: cmp dword ptr [ecx + ebx + 4], esi */
+    if (c->zf) goto L_004FF1C8;                                  /* 004FF1B9: je 0x4ff1c8 */
+    SET16(c->eax, flags_incs(c, R16(c->eax), 2));                /* 004FF1BB: inc ax */
+    c->ecx = (uint32_t)((R16(c->eax)));                          /* 004FF1BD: movzx ecx, ax */
+    flags_sub(c, c->ecx, c->edi, 4);                             /* 004FF1C0: cmp ecx, edi */
+    if (c->cf) goto L_004FF1A4;                                  /* 004FF1C2: jb 0x4ff1a4 */
+L_004FF1C4:
+    SET16(c->eax, 0xFFFFu);                                      /* 004FF1C4: mov ax, 0xffff */
+L_004FF1C8:
+    c->edi = (uint32_t)(pop32(c));                               /* 004FF1C8: pop edi */
+    c->esi = (uint32_t)(pop32(c));                               /* 004FF1C9: pop esi */
+    c->ebx = (uint32_t)(pop32(c));                               /* 004FF1CA: pop ebx */
+    c->esp += 8; return;                                         /* 004FF1CB: ret 4 */
+}
+
+void L_004AD870(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 004AD870: mov eax, dword ptr [esp + 4] */
+    c->ecx = (uint32_t)(flags_add(c, c->ecx, 0x84u, 4));         /* 004AD874: add ecx, 0x84 */
+    push32(c, c->eax);                                           /* 004AD87A: push eax */
+    push32(c, 0x004AD880u); dispatch(c, 0x004ADD10u);            /* 004AD87B: call 0x4add10 */
+    c->esp += 8; return;                                         /* 004AD880: ret 4 */
+}
+
+void L_004ADD10(CPU *c)
+{
+    c->eax = (uint32_t)(rd32((c->esp + 0x00000004u)));           /* 004ADD10: mov eax, dword ptr [esp + 4] */
+    wr32((c->ecx + 0x0000000Au), c->eax);                        /* 004ADD14: mov dword ptr [ecx + 0xa], eax */
+    c->esp += 8; return;                                         /* 004ADD17: ret 4 */
+}
