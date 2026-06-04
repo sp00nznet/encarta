@@ -248,9 +248,29 @@ any SEH-using / position-dependent code:
 The CRT-level boot is fully lifted; `AfxWinMain`/`InitInstance` execute as the
 real mapped code (reached via relocated vtable pointers — the hybrid handoff),
 calling Win32/MFC through the wired IAT. In this uninstalled environment
-`InitInstance` exits early (the same "Fonts not found" condition seen below);
-making the MFC/app body run as lifted code too would mean routing MFC's
-vtable/callback dispatches through the table — a larger, separate effort.
+`InitInstance` exits early (the same "Fonts not found" condition seen below).
+
+#### Real→lifted trampoline + vtable routing (running the app body lifted)
+
+To push the app *body* into lifted execution, the harness has the inverse of the
+import trampoline — a **real→lifted `__thiscall` trampoline**. A per-target stub
+(`mov eax, <ova>; jmp r2l_common`) lets *real* code (MFC virtual dispatch) call a
+**lifted** function: it copies the caller's args onto a private emulated-stack
+frame, seeds a `CPU` (`ecx`=`this`), runs the lifted function, and returns
+`__thiscall`-correctly (popping the arg bytes the lifted `ret N` cleaned).
+Reentrant (LIFO arena; result+pop returned in `edx:eax`). Validated in isolation
+(`R2L_TEST`): a real `__thiscall` call into the trampoline runs lifted
+`sub_4AD870→sub_4ADD10` and writes `this+0x8E` correctly.
+
+`R2L_VTABLES` then rewrites every `.rdata`/`.data` slot that points at a
+**function start** (so jump tables — whose entries are mid-function — are left
+alone) to such a trampoline: **12,411 slots routed**, after which real MFC
+virtual-dispatches land in lifted code. The boot runs ~1052 lifted dispatches —
+through static init *and into MFC's virtual calls into the app* — before a heap
+corruption from a remaining boundary subtlety; debugging that is the next step.
+Both directions of the lifted↔real boundary now work: import trampoline
+(lifted→real) and this real→lifted path (proven), with `_initterm` already
+running 182 init functions lifted.
 
 ```
 cmake --build build --config Release --target recomp_enc97_run   # needs enc97_full.c

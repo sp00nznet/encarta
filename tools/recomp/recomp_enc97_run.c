@@ -45,6 +45,7 @@ static volatile int g_done;
 static int g_trace;   /* RUN_TRACE: log the first N import calls of the boot */
 static uint32_t g_initterm;            /* resolved MSVCRT40!_initterm address */
 static unsigned long g_initfns;        /* C++/CRT init fns routed through lifted dispatch */
+static unsigned long g_r2l_calls;      /* real->lifted (vtable/fn-ptr) calls */
 /* resolved-address -> "dll!name" for tracing which import the boot is in */
 static struct { uint32_t addr; char name[64]; } g_inames[1024];
 static int g_ninames;
@@ -96,9 +97,19 @@ static void call_machine(CPU *c, uint32_t target)
     c->eax=T_eax; c->esp=T_fesp;
 }
 
+static uint8_t *g_tramp_pool; static size_t g_tramp_off;   /* (defined below; fwd for dispatch) */
+
 void dispatch(CPU *c, uint32_t target)
 {
     g_calls++;
+    /* a redirected vtable/fn-pointer slot may hand us a trampoline address; the
+       lifted target's original-VA is the `mov eax, ova` immediate at stub+1. */
+    if (g_tramp_pool && target >= (uint32_t)(uintptr_t)g_tramp_pool &&
+        target < (uint32_t)(uintptr_t)g_tramp_pool + g_tramp_off) {
+        uint32_t ova = *(uint32_t *)(uintptr_t)(target + 1);
+        lfn fn = lookup(ova);
+        if (fn) { g_last = ova; fn(c); return; }
+    }
     uint32_t ova = 0;
     if (target >= PREF_BASE && target < PREF_BASE + g_imgsz)
         ova = target;                                   /* direct internal (original VA) */
@@ -136,8 +147,8 @@ void dispatch(CPU *c, uint32_t target)
         fprintf(stderr, "\n*** lifted ENC97 reached %s(%u) after %lu dispatched calls\n", nm, code, g_calls);
         fflush(stderr);
         printf("ENC97 lifted boot: ran CRT+MFC startup to %s(%u) — %lu calls dispatched "
-               "(%lu C++/CRT init fns routed through LIFTED dispatch), last lifted fn 0x%06X\n",
-               nm, code, g_calls, g_initfns, g_last);
+               "(%lu init fns, %lu real->lifted vtable calls), last lifted fn 0x%06X\n",
+               nm, code, g_calls, g_initfns, g_r2l_calls, g_last);
         fflush(stdout);
         ExitProcess(code);
     }
@@ -156,6 +167,100 @@ static uint32_t call_lifted(lfn fn, const uint32_t *args, int n)
     push32(&c, 0xDEADBEEFu);
     fn(&c);
     return c.eax;
+}
+
+/* ================= real -> lifted thiscall trampoline =====================
+ * The inverse of call_machine: when REAL code (e.g. MFC virtual dispatch) calls
+ * a function pointer that we've redirected here, run the LIFTED function instead.
+ * A per-target stub (`mov eax, ova; jmp r2l_common`) lands in r2l_common with
+ * eax=target original-VA, ecx=this, [esp]=retaddr, args above. r2l_helper copies
+ * the args onto a private emulated-stack frame (so the lifted code's pushes can't
+ * collide with the real stack), runs the lifted fn, and reports how many arg
+ * bytes its `ret N` cleaned so the trampoline returns thiscall-correctly.
+ * Reentrant: nesting frames are LIFO on a dedicated arena; result+pop come back
+ * in edx:eax (no globals). */
+static uint8_t *g_r2l_arena; static uint32_t g_r2l_top;
+#define R2L_ARENA (8u<<20)
+#define R2L_FRAME 0x8000u
+
+static uint64_t __cdecl r2l_helper(uint32_t ova, uint32_t this_, uint32_t *real_args,
+                                   uint32_t ebx, uint32_t esi, uint32_t edi)
+{
+    uint32_t save = g_r2l_top;
+    g_r2l_top -= R2L_FRAME;
+    uint32_t argsp = g_r2l_top + R2L_FRAME - 0x100;     /* args near frame top */
+    for (int i = 0; i < 16; i++) wr32(argsp + 4 + i*4, real_args[i]);
+    wr32(argsp, 0xDEADBEEFu);                            /* fake return slot */
+    CPU c; memset(&c, 0, sizeof c);
+    c.ecx = this_; c.ebx = ebx; c.esi = esi; c.edi = edi; c.esp = argsp;
+    g_r2l_calls++;
+    dispatch(&c, ova + g_image_delta);                   /* -> lifted */
+    uint32_t pop = (c.esp >= argsp + 4) ? (c.esp - argsp - 4) : 0;
+    g_r2l_top = save;
+    return (uint64_t)c.eax | ((uint64_t)(pop & 0xFFFF) << 32);
+}
+
+__declspec(naked) static void r2l_common(void)
+{
+    __asm {
+        push ebp
+        mov  ebp, esp                  /* [ebp+4]=retaddr, [ebp+8]=arg0 */
+        push edi
+        push esi
+        push ebx
+        lea  edx, [ebp+8]
+        push edx                       /* real_args */
+        push ecx                       /* this */
+        push eax                       /* ova */
+        call r2l_helper                /* edx:eax = pop:result */
+        add  esp, 24                   /* clean 6 cdecl args */
+        mov  ecx, edx                  /* ecx = pop bytes */
+        mov  edx, [ebp+4]              /* retaddr */
+        mov  esp, ebp
+        pop  ebp
+        add  esp, 4                    /* pop retaddr */
+        add  esp, ecx                  /* thiscall: callee cleans args */
+        jmp  edx                       /* return (eax=result) */
+    }
+}
+
+static uint32_t make_tramp(uint32_t ova)
+{
+    uint8_t *s = g_tramp_pool + g_tramp_off; g_tramp_off += 16;
+    s[0]=0xB8; *(uint32_t*)(s+1)=ova;                     /* mov eax, ova */
+    s[5]=0xE9; *(int32_t*)(s+6)=(int32_t)((uint8_t*)r2l_common-(s+10)); /* jmp r2l_common */
+    return (uint32_t)(uintptr_t)s;
+}
+
+/* Redirect ENC97's vtable / function-pointer slots to real->lifted trampolines,
+   so when real MFC virtual-dispatches into the app it lands in LIFTED code. Only
+   slots whose target is a FUNCTION START (lookup succeeds) are rewritten — this
+   excludes jump tables (their entries are mid-function labels, not fn starts).
+   Scans .rdata + .data (where vtables and fn-ptr tables live). */
+static int rewrite_fnptr_slots(void)
+{
+    PIMAGE_DOS_HEADER dos=(PIMAGE_DOS_HEADER)g_base;
+    PIMAGE_NT_HEADERS nt=(PIMAGE_NT_HEADERS)(g_base+dos->e_lfanew);
+    PIMAGE_SECTION_HEADER s=IMAGE_FIRST_SECTION(nt);
+    uint32_t tlo=0,thi=0; uint32_t base=(uint32_t)(uintptr_t)g_base;
+    for(int i=0;i<nt->FileHeader.NumberOfSections;i++)
+        if(!memcmp(s[i].Name,".text",5)){ tlo=base+s[i].VirtualAddress;
+            thi=tlo+s[i].Misc.VirtualSize; }
+    int n=0;
+    for(int i=0;i<nt->FileHeader.NumberOfSections;i++){
+        if(memcmp(s[i].Name,".rdata",6) && memcmp(s[i].Name,".data",5)) continue;
+        uint32_t a=base+s[i].VirtualAddress, e=a+s[i].Misc.VirtualSize;
+        for(uint32_t p=a; p+4<=e; p+=4){
+            uint32_t v=*(uint32_t*)(uintptr_t)p;
+            if(v>=tlo && v<thi){                       /* points into .text */
+                uint32_t ova=v-g_image_delta;
+                if(lookup(ova)){                        /* ...at a function start */
+                    *(uint32_t*)(uintptr_t)p=make_tramp(ova); n++;
+                }
+            }
+        }
+    }
+    return n;
 }
 
 /* ---- map + relocate ENC97, then wire its full import table to real code ---- */
@@ -281,8 +386,33 @@ int main(int argc, char **argv)
     fprintf(stderr,"[2] mapped+wired\n");
     qsort(g_lifted,NLIFTED,sizeof *g_lifted,cmp_entry);
     g_estack=VirtualAlloc(NULL,EMU_STACK,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    g_r2l_arena=VirtualAlloc(NULL,R2L_ARENA,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    g_r2l_top=(uint32_t)(uintptr_t)(g_r2l_arena+R2L_ARENA);
+    g_tramp_pool=VirtualAlloc(NULL,0x200000,MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE);
+
+    if(getenv("R2L_TEST")){   /* unit-test the real->lifted thiscall trampoline */
+        uint8_t *buf=calloc(0x200,1);
+        uint32_t t=make_tramp(0x4AD870u);   /* lifted __thiscall(this,v): *(this+0x8E)=v */
+        FlushInstructionCache(GetCurrentProcess(),NULL,0);
+        uint32_t this_=(uint32_t)(uintptr_t)buf, val=0xCAFEF00Du, tgt=t;
+        __asm {                              /* real thiscall call: ecx=this, arg on stack */
+            mov  ecx, this_
+            push val
+            mov  eax, tgt
+            call eax                         /* trampoline does thiscall ret 4 cleanup */
+        }
+        uint32_t got=*(uint32_t*)(buf+0x8E);
+        printf("%s real->lifted thiscall trampoline: sub_4AD870(this,0xCAFEF00D) via REAL call -> this+0x8E=%08X\n",
+               got==0xCAFEF00Du?"PASS":"FAIL",got);
+        return got==0xCAFEF00Du?0:1;
+    }
     fprintf(stderr,"ENC97 mapped @%p (delta %+d); IAT %d/%d wired; %u lifted fns\n",
             (void*)g_base,(int)g_image_delta,g_imports_res,g_imports,(unsigned)NLIFTED);
+    if(getenv("R2L_VTABLES")){
+        int nv=rewrite_fnptr_slots();
+        FlushInstructionCache(GetCurrentProcess(),NULL,0);
+        fprintf(stderr,"routed %d vtable/fn-ptr slots -> real->lifted trampolines\n",nv);
+    }
     fprintf(stderr,"booting lifted entry start@0x50DB70 (watchdog %d ms)...\n",timeout_ms);
 
     /* run the lifted entry on a worker with a big stack (lifted calls recurse on
