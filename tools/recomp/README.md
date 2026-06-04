@@ -49,6 +49,26 @@ You must supply your own legitimate `DECO_32.DLL` (path arg 4, or it is found
 under `analysis/`); only its constant data tables are read — nothing is
 redistributed here.
 
+### Standalone — no DLL file at runtime
+
+`recomp_decode_standalone` runs the same lift with the DLL's data image
+**reconstructed from a compiled-in blob**, so it needs **no `DECO_32.DLL` file**:
+
+```powershell
+py -3.11 gen_deco_data.py           # one-time: DECO_32.DLL -> deco32_data.c (gitignored)
+cmake -B build -G "Visual Studio 17 2022" -A Win32
+cmake --build build --config Release --target recomp_decode_standalone
+build\tools\recomp\Release\recomp_decode_standalone.exe fif_test\picon_000.ftc 74D4A38C
+# -> PASS pixcrc=74D4A38C  (all 5 picons byte-exact, no DLL file touched)
+```
+
+`gen_deco_data.py` snapshots the DLL's section bytes (a build artifact, gitignored
+like the lift output — not redistributed); at startup the standalone build
+allocates the `0x11000000` image, lays the sections at their RVAs (`.bss`
+zero-filled), and fixes the one `GetVersion` slot. `.text` is included even
+though no original code executes — MSVC 4.x embeds the decoder's **jump tables
+inline in `.text`**, which the lifted `switch` if-chains read via `GVA()`.
+
 ## Regenerating the lift
 
 ```powershell
@@ -208,8 +228,8 @@ modal dialog; nothing was installed system-wide.)
 - [x] Data-only standalone mode (no original code executed)
 - [x] FTC mode `04 03 04 01` (FTT-referenced) lifted — 110-function closure,
       decodes real PICON content to clean full colour
-- [ ] Clean-room **regeneration** of the constant tables (lift the table
-      builders) to remove the runtime dependency on the DLL data entirely
+- [x] **No DLL file at runtime** — `recomp_decode_standalone` reconstructs the
+      data image from a generated blob; 5/5 picons byte-exact with no `DECO_32.DLL`
 - [ ] Non-full-resolution scaling paths and the `"FIFF"` FIF variant
 - [ ] Clean public C API + integration into a user-facing decoder
 
