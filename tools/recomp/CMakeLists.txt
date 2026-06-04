@@ -18,6 +18,7 @@ add_executable(recomp_enc97_iat recomp_enc97_iat.c)  # wire + report ENC97's 914
 # (too large); guarded so the target only exists when they're present locally.
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/enc97_full.c)
     add_executable(recomp_enc97_full recomp_enc97_full.c enc97_full.c cpu_rt.c)
+    add_executable(recomp_enc97_run recomp_enc97_run.c enc97_full.c cpu_rt.c)  # boot the lifted main app
 endif()
 
 if(MSVC)
@@ -38,6 +39,12 @@ if(MSVC)
         # TU; codegen level does not affect the lifted semantics, so disable it.
         target_compile_options(recomp_enc97_full PRIVATE /Od /bigobj /wd4244 /wd4146)
         # add LEAF_TRACE to print each leaf VA to stderr (debugging the sweep)
+    endif()
+    if(TARGET recomp_enc97_run)
+        # host must NOT sit at 0x400000 so ENC97 can map at its preferred base
+        # (delta=0; the lifter doesn't relocate address immediates).
+        target_link_options(recomp_enc97_run PRIVATE /LARGEADDRESSAWARE:NO /BASE:0x60000000 /DYNAMICBASE:NO)
+        target_compile_options(recomp_enc97_run PRIVATE /Od /bigobj /wd4244 /wd4146)
     endif()
 endif()
 target_include_directories(recomp_decode PRIVATE ${CMAKE_SOURCE_DIR}/tools/decooracle)
