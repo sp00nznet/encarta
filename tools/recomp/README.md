@@ -123,6 +123,43 @@ cmake --build build --config Release --target recomp_enc97
 build\tools\recomp\Release\recomp_enc97.exe   # -> ALL PASS (3 differential checks)
 ```
 
+### At full scale — the whole 7,326-function lift, exercised
+
+`recomp_enc97_full` links the **complete** lift (`enc97_full.c`, all 7,326
+functions, ~452k lines) and builds the **full 7,326-entry dispatch table**
+(sorted, binary-searched). It then runs three checks:
+
+- **[A]** table integrity — 7,326 entries, sorted, unique VAs, all non-null.
+- **[B]** the three validated chains above, with their internal targets now
+  resolved among all 7,326 functions through the real dispatch table.
+- **[C]** a **differential sweep**: every *bounded straight-line* pure-leaf
+  function (no calls/imports/writes/loops — so it cannot hang, unbounded-probe,
+  or corrupt the stack) is run both lifted and as the real mapped original with
+  identical register + stack state, and `eax` is compared. Result:
+
+  ```
+  PASS [C] no-write pure-leaf differential sweep: 818 matched, 0 mismatch, 11 skipped
+  ```
+
+  **818 distinct ENC97 functions match the real originals byte-exactly**; the 11
+  skips faulted identically on the synthetic (zeroed) input. Because the lift was
+  modelled at delta 0, address-returning leaves are compared modulo the load
+  delta (same logical pointer).
+
+This target is only built when the regenerated `enc97_full.c` is present locally
+(it is too large to commit and is derived from the user's own `ENC97.EXE`).
+Regenerate it and the sweep inputs with:
+```
+py lift.py ENC97.EXE funcs.txt enc97_full.c              # full 7,326-fn lift
+py find_pure_chain.py                                    # -> enc97_pure_leaves.h
+```
+
+Notes from building it: MSVC's optimizer chokes for many minutes on the 40 MB
+monolithic TU, so the target compiles `/Od` (codegen level doesn't affect lifted
+semantics). The real originals are called on the real C stack — not via the
+esp-switch trampoline — so a fault on synthetic input unwinds normally and is
+caught (the esp-switch makes faults uncatchable).
+
 What remains for a *whole-app* running recomp is scale + runtime, not unknown
 blockers: build the 7,326-entry dispatch table, wire the Win32/MFC import
 trampoline (proven here and on ENCAPI32) for its 914 imports, lift/stub EEUIL10,
