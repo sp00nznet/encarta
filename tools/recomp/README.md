@@ -100,27 +100,38 @@ Regenerate (no addrs ⇒ lift every function in the funcs file):
 py lift.py ENC97.EXE funcs.txt enc97_full.c
 ```
 
-Lifted ENC97 code also **runs**. `recomp_enc97.c` manual-maps ENC97.EXE at an
+Lifted ENC97 code also **runs**, and is validated differentially against the
+**real mapped originals**. `recomp_enc97.c` manual-maps ENC97.EXE at an
 OS-chosen base (applying its 40,222 base relocations so absolute addresses — and
-the lifted code's `GVA()`, via `g_image_delta` — resolve), populates the
-USER32 IAT slots the target uses, then runs lifted `sub_401D10`
-(`LoadCursorA`+`SetCursor`→1) through the import trampoline and compares to the
-**real mapped function** side-by-side: both return 1, both call the real Win32
-APIs. This proves the lift executes correctly against a real Win32 boundary, not
-just that it compiles.
+the lifted code's `GVA()`, via `g_image_delta` — resolve), then runs three
+lifted code paths and compares each to the real function executed in place:
+
+| # | Lifted path | Exercises | Check |
+|---|-------------|-----------|-------|
+| 1 | `sub_401D10` | Win32 import trampoline (`LoadCursorA`+`SetCursor`) | lifted==real==1 |
+| 2 | `sub_4E3F40` → `sub_4FF190` | **lifted→lifted dispatch**; a real array search (loop + `lea`-based ×36 indexing) over a synthetic table | lifted==real for 5 present/absent/sentinel keys |
+| 3 | `sub_4AD870` → `sub_4ADD10` | **lifted→lifted `__thiscall`** (`this` in `ecx`) + memory write | `*(this+0x8E)` lifted==real |
+
+The dispatch table routes internal (original-VA) targets to the lifted C
+function when present, else falls back to executing the real mapped original;
+out-of-image targets are real Win32 APIs via the import trampoline. This proves
+the lift executes correctly — across both the Win32 boundary and internal
+lifted→lifted calls — not just that it compiles.
 
 ```
 cmake --build build --config Release --target recomp_enc97
-build\tools\recomp\Release\recomp_enc97.exe   # -> PASS ENC97 sub_401D10 (lifted==real==1)
+build\tools\recomp\Release\recomp_enc97.exe   # -> ALL PASS (3 differential checks)
 ```
 
 What remains for a *whole-app* running recomp is scale + runtime, not unknown
 blockers: build the 7,326-entry dispatch table, wire the Win32/MFC import
 trampoline (proven here and on ENCAPI32) for its 914 imports, lift/stub EEUIL10,
 and stand up an MFC-integrated launcher. The hard questions — "does the lifter
-handle a 1.3 MB MFC app?" and "does lifted app code execute against real Win32?"
-— are answered: **yes, the whole thing lifts and compiles, and lifted functions
-run correctly through the import trampoline.**
+handle a 1.3 MB MFC app?", "does lifted app code execute against real Win32?",
+and "do lifted→lifted internal calls dispatch and compute correctly?" — are all
+answered: **yes — the whole thing lifts and compiles, and lifted functions run
+correctly through both the import trampoline and lifted→lifted dispatch,
+matching the real originals.**
 
 ## Status / future
 
