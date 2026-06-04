@@ -135,6 +135,23 @@ static uint32_t map_dll_image(const char *path)
     return 0x11000000u;
 }
 
+#ifdef DECO_STANDALONE
+/* Standalone: no DLL file. Allocate the image at the preferred base, populate
+ * the initialized data sections from the generated blob (.bss stays zero), and
+ * fix the one imported indirect (GetVersion). No original bytes of .text exist. */
+void deco_load_data(unsigned char *image_base);
+static uint32_t map_data_standalone(void)
+{
+    void *base = VirtualAlloc((void *)0x11000000u, 0x26000u, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (base != (void *)0x11000000u) return 0;     /* need preferred base (delta=0) */
+    deco_load_data((unsigned char *)base);
+    HMODULE k = GetModuleHandleA("kernel32.dll");
+    *(uint32_t *)0x110220DCu = (uint32_t)(uintptr_t)GetProcAddress(k, "GetVersion");
+    g_image_size = 0x26000u;
+    return 0x11000000u;
+}
+#endif
+
 static uint8_t *read_file(const char *p, long *n) {
     FILE *f = fopen(p, "rb"); if (!f) return NULL;
     fseek(f, 0, SEEK_END); *n = ftell(f); fseek(f, 0, SEEK_SET);
@@ -150,9 +167,16 @@ int main(int argc, char **argv)
     const char *outpng = (argc >= 4) ? argv[3] : NULL;
     const char *dll = (argc >= 5) ? argv[4] : "C:\\encarta\\analysis\\DECO_32.DLL";
 
-    /* Default: map the DLL as DATA only (no DllMain, no original code runs).
-     * Falls back to LoadLibrary if the preferred base 0x11000000 is taken, or
-     * if RECOMP_NOMAP is set. */
+    /* Preferred (standalone build): reconstruct the data image from the linked-in
+     * blob — NO DLL file needed at all. Then: data-only map of the DLL file; then
+     * LoadLibrary. RECOMP_NOMAP forces the LoadLibrary fallback. */
+#ifdef DECO_STANDALONE
+    if (!getenv("RECOMP_NOMAP") && map_data_standalone()) {
+        g_image_delta = 0;
+        (void)dll;
+        fprintf(stderr, "[standalone — reconstructed data image, no DLL file]\n");
+    } else
+#endif
     if (!getenv("RECOMP_NOMAP") && map_dll_image(dll)) {
         g_image_delta = 0;
         fprintf(stderr, "[data-only map @0x11000000 — no DllMain, no original code]\n");
