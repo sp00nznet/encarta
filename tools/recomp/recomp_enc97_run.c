@@ -46,6 +46,7 @@ static int g_trace;   /* RUN_TRACE: log the first N import calls of the boot */
 static uint32_t g_initterm;            /* resolved MSVCRT40!_initterm address */
 static unsigned long g_initfns;        /* C++/CRT init fns routed through lifted dispatch */
 static unsigned long g_r2l_calls;      /* real->lifted (vtable/fn-ptr) calls */
+static int g_heapcheck;                /* R2L_HEAPCHECK: HeapValidate after each r2l call */
 /* resolved-address -> "dll!name" for tracing which import the boot is in */
 static struct { uint32_t addr; char name[64]; } g_inames[1024];
 static int g_ninames;
@@ -197,6 +198,14 @@ static uint64_t __cdecl r2l_helper(uint32_t ova, uint32_t this_, uint32_t *real_
     c.ecx = this_; c.ebx = ebx; c.esi = esi; c.edi = edi; c.ebp = ebp; c.esp = argsp;
     g_r2l_calls++;
     dispatch(&c, ova + g_image_delta);                   /* -> lifted */
+    if (g_heapcheck) {                                   /* pinpoint the corrupting call */
+        HANDLE hs[64]; DWORD nh = GetProcessHeaps(64, hs);
+        for (DWORD i = 0; i < nh; i++)
+            if (!HeapValidate(hs[i], 0, NULL)) {
+                fprintf(stderr, "HEAP CORRUPT after lifted 0x%06X (r2l #%lu, heap %p)\n",
+                        ova, g_r2l_calls, hs[i]); fflush(stderr); break;
+            }
+    }
     uint32_t pop = (c.esp >= argsp + 4) ? (c.esp - argsp - 4) : 0;
     g_r2l_top = save;
     return (uint64_t)c.eax | ((uint64_t)(pop & 0xFFFF) << 32);
@@ -391,6 +400,7 @@ int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0); setvbuf(stderr, NULL, _IONBF, 0);
     { const char *t = getenv("RUN_TRACE"); g_trace = t ? atoi(t) : 0; }
+    g_heapcheck = getenv("R2L_HEAPCHECK") != NULL;
     AddVectoredExceptionHandler(1, veh_diag);
     fprintf(stderr,"[1] start\n");
     const char *exe = (argc>=2)?argv[1]:"C:\\encarta\\analysis\\ENC97.EXE";
