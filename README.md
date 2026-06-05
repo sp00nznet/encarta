@@ -210,8 +210,10 @@ The `.M20` files are Microsoft Multimedia Viewer 2.0 containers — a successor 
 - [x] Write standalone content extraction tools (`m20dump`, `decooracle`, `recomp`)
 - [x] End-to-end real-content pipeline: ISO → `m20dump -x` → decode real
       `PICON.M20` images to full-colour PNG
+- [x] **Drop the runtime DLL dependency** — `recomp_decode_standalone`
+      reconstructs the codec's data image from a generated blob; all 5 picons
+      decode byte-exact with **no `DECO_32.DLL` file**
 - [ ] Finish format docs; handle the `"FIFF"` FIF variant + non-full-res scaling
-- [ ] Clean-room regenerate the codec's constant tables (drop the DLL-data dep)
 
 ### Phase 2: UI Framework
 - [ ] Map EEUIL10.DLL's 1,868 exports to class hierarchy
@@ -219,13 +221,29 @@ The `.M20` files are Microsoft Multimedia Viewer 2.0 containers — a successor 
 - [ ] Replace 256-color palette logic with 32-bit rendering
 - [ ] Reimplement CRefUIManager and theming system
 
-### Phase 3: Core Application
-- [ ] Static disassembly of ENC97.EXE (IDA Pro / Ghidra)
-- [ ] Identify and annotate major subsystems
-- [ ] Reimplement article browser and renderer
-- [ ] Reimplement search engine
-- [ ] Reimplement atlas viewer
-- [ ] Reimplement MindMaze game
+### Phase 3: Core Application — 🚧 lifter scales to the whole app; entry boots
+The strategy here is **mechanical static recompilation** (x86→C), the same
+approach proven on DECO_32, rather than hand-reimplementation:
+- [x] Static disassembly + function map of ENC97.EXE (IDA Pro idalib, 7,326 fns)
+- [x] **Whole binary lifts to compilable C** — all 7,326 functions, 0 unhandled
+      opcodes (`enc97_full.c`, ~452k lines, compiles clean)
+- [x] Dispatch table validated at scale — **818 functions differential-match the
+      real originals**, byte-exact
+- [x] **All 914 imports wire to real code** (MFC40/MSVCRT40 ship in SysWOW64; the
+      "MFC40 wall" was a myth) — `LoadLibrary(ENC97.EXE)` itself succeeds
+- [x] Lifter handles real position-dependent / SEH code: **`fs:` segment access**
+      and **address-immediate relocation** (`.reloc`-driven)
+- [x] **The lifted entry point boots the app** — runs CRT init, `AfxWinMain`,
+      ENC97's `InitInstance`, to a clean `exit`; `_initterm` routed so 182
+      static-initializers run as lifted code
+- [x] **Bidirectional lifted↔real boundary** — import trampoline (lifted→real)
+      + real→lifted `__thiscall` trampoline (real MFC virtual-dispatch → lifted),
+      with vtable routing (10k+ slots)
+- [ ] Resolve the MFC object-lifecycle boundary bug (heap corruption under full
+      vtable routing) to run `InitInstance` + the app body fully lifted
+- [ ] Article browser / search / atlas / MindMaze (emerge from the lifted body)
+
+See `tools/recomp/README.md` for the full ENC97 recompilation writeup.
 
 ### Phase 4: Multimedia & Polish
 - [ ] Replace ACM stream wrappers with modern audio APIs
@@ -264,14 +282,30 @@ cmake --build build --config Release --target m20dump
 | `datdump` | `tools/datdump/` | DAT configuration dumper | Working |
 | `fifdecode` | `tools/fifdecode/` | Old DLL bridge (wrong export signatures) | Superseded by `decooracle` |
 
-### Static Recompilation of DECO_32.DLL (`tools/recomp`)
+### Static Recompilation (`tools/recomp`)
 
-The proprietary FTC image codec has been **fully statically recompiled** — **all
-28 exports** mechanically translated from x86 (incl. x87 FPU) to native C by a
-purpose-built lifter (`lift.py`, capstone-based), a **137-function closure** with
-zero unhandled opcodes. Validated **byte-identical** to the original DLL, with
-**no original code executed** (the DLL is mapped only as a constant-data image, or
-not at all). See [`tools/recomp/README.md`](tools/recomp/README.md).
+**DECO_32.DLL — done.** The proprietary FTC image codec has been **fully
+statically recompiled** — **all 28 exports** mechanically translated from x86
+(incl. x87 FPU) to native C by a purpose-built lifter (`lift.py`, capstone-based),
+a **137-function closure** with zero unhandled opcodes. Validated
+**byte-identical** to the original DLL, with **no original code executed**. It now
+also runs with **no `DECO_32.DLL` file at all** (`recomp_decode_standalone`
+reconstructs the data image from a generated blob). See
+[`tools/recomp/README.md`](tools/recomp/README.md).
+
+**ENC97.EXE — the whole 1.3 MB MFC app lifts, and the recompiled entry boots it.**
+All **7,326 functions** lift to compilable C (0 unhandled opcodes); the dispatch
+table is validated at scale (**818 functions differential-match** the originals);
+all **914 imports wire to real code** (MFC40/MSVCRT40 ship in SysWOW64). The
+lifter gained `fs:`/SEH and `.reloc`-driven address-immediate relocation, so the
+**lifted entry point boots the application** — CRT init → `AfxWinMain` →
+`InitInstance` → clean `exit`, with `_initterm` routed so 182 static-initializers
+run lifted. A **real→lifted `__thiscall` trampoline** (the inverse of the import
+trampoline) lets real MFC virtual-dispatch into lifted code; running the full app
+body that way is gated on one remaining object-lifecycle boundary bug.
+
+ENCAPI32.DLL is also lifted and validated against the real Win32 boundary
+(`fGetArticleID`).
 
 Both FTC encoding modes found in real content decode correctly:
 
