@@ -20,6 +20,8 @@
  *   R2L_TRACE=1      log real->lifted entries; =2 also log every call inside one
  *   RUN_TRACE=N      log the first N import calls
  *   MSGBOX_LOG       log the app's message boxes and answer OK without showing them
+ *   NO_PRINTDLG      stub PrintDlgA -> FALSE (the startup printer query can stall)
+ *   REG_LOG          log the registry keys/values the app looks for at startup
  * Isolation modes for a slot that misbehaves - each removes one layer:
  *   R2L_PASSTHRU     rewritten slot jumps straight at the original (no trampoline)
  *   R2L_STUB         trampoline returns 0 without running the callee
@@ -425,6 +427,47 @@ static int WINAPI msgbox_hook(HWND h, LPCSTR text, LPCSTR cap, UINT type)
     return IDOK;
 }
 
+/* NO_PRINTDLG: answer "no printer" without asking the spooler. Encarta queries
+   the default printer during startup; on a machine where that call stalls it
+   never gets to its UI, which has nothing to do with the recompilation. */
+static int g_no_printdlg;
+static BOOL WINAPI printdlg_hook(void *pd)
+{
+    (void)pd;
+    fprintf(stderr, "PrintDlgA stubbed -> FALSE\n"); fflush(stderr);
+    return FALSE;
+}
+
+/* REG_LOG: log the registry the app consults at startup. Encarta expects its
+   Setup to have recorded where the content lives; this says which keys and
+   values it wants, and which ones came back empty. */
+static int g_reg_log;
+static LONG (WINAPI *real_regcreate)(HKEY,LPCSTR,DWORD,LPSTR,DWORD,REGSAM,void*,PHKEY,LPDWORD);
+static LONG (WINAPI *real_regopen)(HKEY,LPCSTR,DWORD,REGSAM,PHKEY);
+static LONG (WINAPI *real_regquery)(HKEY,LPCSTR,LPDWORD,LPDWORD,LPBYTE,LPDWORD);
+static LONG WINAPI regcreate_hook(HKEY k, LPCSTR sub, DWORD r, LPSTR cls, DWORD o,
+                                  REGSAM sam, void *sa, PHKEY out, LPDWORD disp)
+{
+    LONG rc = real_regcreate(k, sub, r, cls, o, sam, sa, out, disp);
+    fprintf(stderr, "  reg create %-60s -> %ld\n", sub ? sub : "(null)", rc);
+    fflush(stderr); return rc;
+}
+static LONG WINAPI regopen_hook(HKEY k, LPCSTR sub, DWORD o, REGSAM sam, PHKEY out)
+{
+    LONG rc = real_regopen(k, sub, o, sam, out);
+    fprintf(stderr, "  reg open   %-60s -> %ld\n", sub ? sub : "(null)", rc);
+    fflush(stderr); return rc;
+}
+static LONG WINAPI regquery_hook(HKEY k, LPCSTR name, LPDWORD res, LPDWORD type,
+                                 LPBYTE data, LPDWORD len)
+{
+    LONG rc = real_regquery(k, name, res, type, data, len);
+    fprintf(stderr, "  reg query  %-30s -> %ld%s%s\n", name ? name : "(default)", rc,
+            (rc == 0 && data && type && *type == REG_SZ) ? " = " : "",
+            (rc == 0 && data && type && *type == REG_SZ) ? (char *)data : "");
+    fflush(stderr); return rc;
+}
+
 static int g_imports, g_imports_res;
 static int map_and_wire(const char *path)
 {
@@ -485,6 +528,18 @@ static int map_and_wire(const char *path)
                     if(g_msgbox_log && !(ent&0x80000000u) &&
                        !strncmp((const char*)(base+(ent&0x7FFFFFFF)+2),"MessageBox",10))
                         iat[i]=(uint32_t)(uintptr_t)msgbox_hook;
+                    if(g_no_printdlg && !(ent&0x80000000u) &&
+                       !strncmp((const char*)(base+(ent&0x7FFFFFFF)+2),"PrintDlg",8))
+                        iat[i]=(uint32_t)(uintptr_t)printdlg_hook;
+                    if(g_reg_log && !(ent&0x80000000u)){
+                        const char *n=(const char*)(base+(ent&0x7FFFFFFF)+2);
+                        if(!strcmp(n,"RegCreateKeyExA")){ *(void**)&real_regcreate=(void*)p;
+                            iat[i]=(uint32_t)(uintptr_t)regcreate_hook; }
+                        else if(!strcmp(n,"RegOpenKeyExA")){ *(void**)&real_regopen=(void*)p;
+                            iat[i]=(uint32_t)(uintptr_t)regopen_hook; }
+                        else if(!strcmp(n,"RegQueryValueExA")){ *(void**)&real_regquery=(void*)p;
+                            iat[i]=(uint32_t)(uintptr_t)regquery_hook; }
+                    }
                     g_ninames++; }
             }
         }
@@ -591,6 +646,8 @@ int main(int argc, char **argv)
     g_r2l_stub  = getenv("R2L_STUB")  != NULL;
     g_r2l_passthru = getenv("R2L_PASSTHRU") != NULL;
     g_msgbox_log   = getenv("MSGBOX_LOG")   != NULL;
+    g_no_printdlg  = getenv("NO_PRINTDLG")  != NULL;
+    g_reg_log      = getenv("REG_LOG")      != NULL;
     { const char *h = getenv("R2L_HEAPCHECK"); g_heapcheck = h ? (atoi(h) ? atoi(h) : 1) : 0; }
     AddVectoredExceptionHandler(1, veh_diag);
     fprintf(stderr,"[1] start\n");

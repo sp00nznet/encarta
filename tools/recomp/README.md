@@ -315,6 +315,45 @@ The dialog is the app's own, not a crash: without installed content and registry
 state Encarta declines to start. Everything up to that point — including the
 virtual dispatches MFC makes back into application code — executes lifted.
 
+#### The app body runs recompiled
+
+Two more things stood between the lifted boot and the application proper, and
+neither was visible until the app got far enough to complain:
+
+- **The command line.** The lifted CRT parses `_acmdln` - which is the *harness*
+  process's command line - so ENC97 read `analysis/ENC97.EXE 20000` as its own
+  parameters and refused to start ("The command line is improperly formatted").
+  The harness now points `MSVCRT40!__p__acmdln` at a command line of the app's
+  own (`ENC97_CMDLINE` overrides). `InitInstance` then returns TRUE and MFC calls
+  the app's `Run()` - **the application body, executing lifted**.
+- **A lifter bug the app body walked straight into.** `lift.py` wrapped
+  relocatable address *immediates* in `GVA()` but not absolute *displacements
+  inside memory operands* when the operand also had a base register:
+  `mov dl, byte ptr [ecx + 0x56d902]` was emitted with the raw displacement, so
+  at any load base but the preferred one it read from the unrelocated address.
+  `.reloc` marks exactly these, so the same rule now drives both (280 such
+  operands across the 7,326 functions).
+
+With those fixed the lifted app runs its startup for real - palette setup,
+`EEUIL10` UI-library init (`InitShruilDLL`, `CRefUIManager`), the Encarta startup
+chime, device contexts, window classes - **2,200 dispatched calls, 250 of them
+real MFC virtual dispatches landing in lifted code**, against 1,046 with routing
+off. Running the same slots through `R2L_PASSTHRU` (real bodies) reaches exactly
+the same point, so the recompiled body no longer diverges from the original.
+
+Where it stops is Encarta's own install check, not the recompilation. It warns
+that its custom fonts are missing (non-fatal, "will run without these fonts"),
+then reports the generic "unknown error has occurred while initializing" from
+`Run()` at `0x405380` and exits 0. Its registry probe (`REG_LOG`) shows only
+absent user preferences - `SaveWindowLayout`, `TextStyle`, `JumpColor` - and its
+HKLM writes denied for want of admin; none of that is fatal on its own. Getting
+past it means giving the app the install state its Setup would have created.
+
+One environment trap worth recording: Encarta calls `comdlg32!PrintDlgA` during
+startup to size the default printer, and on this machine that stalls in the
+spooler for ~44 s and takes the process with it. `NO_PRINTDLG` stubs it to FALSE;
+everything above happens in 0.2 s with it set.
+
 ### The real app boots on Windows 11
 
 As the end-to-end check of all the above, launching `ENC97.EXE` from `analysis\`
