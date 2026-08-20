@@ -2,6 +2,14 @@
 
 A project to statically recompile Microsoft Encarta 97 Encyclopedia (English, 2-CD edition) into modern, natively-running code for Windows 10/11+.
 
+**It runs.** ENC97.EXE's 1.3 MB of x86 is mechanically translated to C, and the
+recompiled code drives the real application on Windows 11 - CRT and MFC startup,
+`InitInstance`, the app's `Run()` loop, the Encarta UI library, and article
+rendering. In a 40-second session with the window up: **83,051 dispatched calls,
+10,242 of them real MFC virtual dispatches landing in recompiled code.**
+
+![Encarta 97 running as recompiled code](docs/encarta97-running.png)
+
 ## Why?
 
 Encarta 97 was a landmark multimedia encyclopedia — the gold standard of digital reference before Wikipedia. It shipped as a Win32 application targeting Windows 95/NT, built with MFC 4.0 and MSVC 4.x. On modern Windows 11 it barely runs due to:
@@ -221,47 +229,54 @@ The `.M20` files are Microsoft Multimedia Viewer 2.0 containers — a successor 
 - [ ] Replace 256-color palette logic with 32-bit rendering
 - [ ] Reimplement CRefUIManager and theming system
 
-### Phase 3: Core Application — 🚧 lifter scales to the whole app; entry boots
+### Phase 3: Core Application — ✅ the app runs as recompiled code
 The strategy here is **mechanical static recompilation** (x86→C), the same
 approach proven on DECO_32, rather than hand-reimplementation:
+
+**The lift**
 - [x] Static disassembly + function map of ENC97.EXE (IDA Pro idalib, 7,326 fns)
 - [x] **Whole binary lifts to compilable C** — all 7,326 functions, 0 unhandled
       opcodes (`enc97_full.c`, ~452k lines, compiles clean)
 - [x] Dispatch table validated at scale — **818 functions differential-match the
       real originals**, byte-exact
 - [x] **All 914 imports wire to real code** (MFC40/MSVCRT40 ship in SysWOW64; the
-      "MFC40 wall" was a myth) — `LoadLibrary(ENC97.EXE)` itself succeeds
-- [x] Lifter handles real position-dependent / SEH code: **`fs:` segment access**
-      and **address-immediate relocation** (`.reloc`-driven)
-- [x] **The lifted entry point boots the app** — runs CRT init, `AfxWinMain`,
-      ENC97's `InitInstance`, to a clean `exit`; `_initterm` routed so 182
-      static-initializers run as lifted code
-- [x] **Bidirectional lifted↔real boundary** — import trampoline (lifted→real)
-      + real→lifted `__thiscall` trampoline (real MFC virtual-dispatch → lifted),
-      with vtable routing (10k+ slots)
-- [x] **Full vtable routing runs clean** — the heap corruption was two harness
-      bugs, not a lift bug: `call_machine` didn't seed `ebp` (so unlifted
-      frameless SEH/dtor funclets addressed the host's frame) and wasn't
-      reentrant (a nested call clobbered the outer's saved `esp`)
-- [x] **The recompiled boot reaches Encarta's own UI** — all 10,432 fn-pointer
-      slots routed, CRT + MFC init + `InitInstance` lifted, app dialog on screen
-- [x] **The application body runs recompiled** — `InitInstance` returns TRUE and
-      MFC calls the app's `Run()` lifted: palette, `EEUIL10` UI-library init,
-      startup sound, window classes. 2,200 dispatched calls, 250 real→lifted
-      virtual dispatches; `R2L_PASSTHRU` (real bodies) reaches the same point
-- [x] Lifter: `.reloc`-marked **displacements** inside memory operands are now
-      GVA-wrapped too, not just address immediates (`mov dl,[ecx+0x56d902]`)
-- [x] **Encarta 97 runs** — `ENC97_PROFILE` answers the `97Options` profile
-      lookups (`CodePath`/`DATPath`/`BookPath`) the app's Setup would have
-      written, so with CD1 mounted it loads content and puts up its real UI
-      — toolbar, article text, artwork — without installing anything
-      ([screenshot](docs/encarta97-running.png))
-- [x] Lifter: an indirect `call` now resolves its target **before** pushing the
-      return address (`call [esp+0x18]` was reading one slot off)
-- [x] `LIFT_LO`/`LIFT_HI` — bisect *which functions run lifted* to pin a bad lift,
-      the function-level twin of the slot-routing bisect
-- [ ] Article browser / search / atlas / MindMaze, with the whole body lifted
-- [ ] Article browser / search / atlas / MindMaze (emerge from the lifted body)
+      "MFC40 wall" was a myth)
+- [x] Position-dependent / SEH code: **`fs:` segment access**, and `.reloc`-driven
+      relocation of both address **immediates** and **displacements inside memory
+      operands** (`mov dl,[ecx+0x56d902]`)
+- [x] Indirect `call` resolves its target **before** pushing the return address —
+      a real `call [esp+0x18]` reads its target with the pre-push `esp`
+      (12,703 call sites; this one cost a jump to address 0)
+
+**The hybrid boundary**
+- [x] **Bidirectional lifted↔real** — import trampoline (lifted→real) plus a
+      real→lifted `__thiscall` trampoline, so real MFC virtual-dispatch lands in
+      recompiled code; **10,432 function-pointer slots routed**
+- [x] `_initterm` routed so 182 static initializers run lifted
+- [x] Three correctness rules the boundary trampoline has to obey, each found the
+      hard way: seed **`ebp`** (MSVC's frameless SEH/dtor funclets address the
+      *caller's* frame), be **reentrant** (a nested call must not clobber the
+      outer's saved `esp`), and capture **`edx`** (64-bit returns come back in
+      `edx:eax`)
+
+**Running the thing**
+- [x] The app gets its own command line (the lifted CRT parses `_acmdln`, which
+      is otherwise the *harness* process's)
+- [x] `ENC97_PROFILE` answers the `97Options` profile lookups
+      (`CodePath`/`DATPath`/`BookPath`) that Setup would have written — so with
+      CD1 mounted the app finds its content **without installing anything**
+- [x] **Encarta 97 runs**: toolbar, article text, and its illuminated-manuscript
+      artwork decoded and drawn ([screenshot](docs/encarta97-running.png))
+- [ ] Drive the UI — search, atlas, timeline, MindMaze — with the body lifted
+- [ ] Shrink the real-code surface: replace MFC40/EEUIL10 with native equivalents
+
+**Debugging tools** (in `recomp_enc97_run`, see its header for the full list)
+- `R2L_LO`/`R2L_HI` — bisect *which vtable slots are routed* to lifted code
+- `LIFT_LO`/`LIFT_HI` — bisect *which functions run lifted* to pin a bad lift
+- `R2L_PASSTHRU` / `R2L_STUB` / `R2L_REAL` — an isolation ladder that says
+      whether a failure is in the lift, the slot rewrite, the calling convention,
+      or the stack switch
+- `MSGBOX_LOG`, `REG_LOG`, `WATCH=va,...`, `RUN_TRACE`, `R2L_HEAPCHECK`
 
 See `tools/recomp/README.md` for the full ENC97 recompilation writeup.
 
@@ -321,9 +336,10 @@ lifter gained `fs:`/SEH and `.reloc`-driven address-immediate relocation, so the
 **lifted entry point boots the application** — CRT init → `AfxWinMain` →
 `InitInstance` → clean `exit`, with `_initterm` routed so 182 static-initializers
 run lifted. A **real→lifted `__thiscall` trampoline** (the inverse of the import
-trampoline) lets real MFC virtual-dispatch into lifted code, and with all 10,432
-function-pointer slots routed the boot now runs clean to **Encarta's own
-dialog** — the app's UI, drawn by recompiled code.
+trampoline) lets real MFC virtual-dispatch into lifted code. With all 10,432
+function-pointer slots routed, **the application runs** — 83,051 dispatched
+calls, 10,242 of them real MFC virtual dispatches landing in recompiled code,
+with Encarta's UI on screen.
 
 ENCAPI32.DLL is also lifted and validated against the real Win32 boundary
 (`fGetArticleID`).
@@ -408,8 +424,11 @@ This project contains no copyrighted Microsoft code or content. It is a clean-ro
 
 ## Status
 
-**Phase 1 (Data Format RE) — substantially complete; the DECO_32 image codec is
-fully recompiled. Next up: remaining Phase-1 polish, then Phase 2/3.**
+**Encarta 97 runs as recompiled code.** The DECO_32 image codec is fully
+recompiled (byte-exact, no DLL needed), the whole of ENC97.EXE lifts and
+executes, and the application starts and renders articles on Windows 11.
+Next: driving the UI with the body lifted, and shrinking the remaining
+real-code surface (MFC40, EEUIL10).
 
 - [x] Identify all executables and DLLs (PE32 vs NE/16-bit)
 - [x] Catalog PE sections, imports, exports for all 32-bit modules
