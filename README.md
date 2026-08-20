@@ -418,9 +418,43 @@ ftcdecode -d input.ftc output.bmp
   (`tools/recomp/lift.py`)
 - IDA Pro (idalib, headless) / Ghidra — function boundaries + decompilation
 
+## Credits
+
+The reverse engineering here stands on other people's published work:
+
+- **Kostya Shishkov** and **Alyssa Milburn** — their documentation of the
+  FVF/IFS fractal codec family is what made the clean-room FTC decoder
+  (`tools/ftcdecode`) possible. The header layout was reverse engineered from
+  `DECO_32.DLL`, but the fractal transform itself is their groundwork.
+- **[capstone](https://www.capstone-engine.org/)** (BSD-3-Clause) and
+  **[pefile](https://github.com/erocarrera/pefile)** (MIT) — the disassembly and
+  PE parsing the lifter is built on. Used as libraries, not vendored.
+- **Ghidra**, **IDA Pro** and **Resource Hacker** — function boundaries,
+  decompilation and resource extraction.
+
+`DECO_32.DLL` is a fractal image codec Microsoft licensed from **Iterated
+Systems**. It is a subject of the work here, not a contributor to it.
+
+Tools and techniques from this project are contributed back to
+**[pcrecomp](https://github.com/sp00nznet/pcrecomp)** — in particular
+`runtime/hybrid/` (the lifted↔real boundary) and `docs/HYBRID.md`.
+
 ## Legal
 
-This project contains no copyrighted Microsoft code or content. It is a clean-room reimplementation effort. You must own a legitimate copy of Encarta 97 Encyclopedia to use the content files.
+The project's own code is MIT licensed — see [LICENSE](LICENSE).
+
+That licence covers the tools, the lifter, the runtime and the harness. It does
+not cover Microsoft Encarta 97 Encyclopedia: **no original executables, DLLs,
+fonts or content files are distributed here**, and you need a legitimate copy of
+the product to use any of this. The build deliberately ignores `*.iso`,
+`analysis/` and the 40 MB generated lift, all of which are derived from your own
+copy.
+
+For honesty's sake: a handful of small files *are* derived from the original
+product and are excluded from the MIT grant — the decoder test vectors under
+`fif_test/`, the oracle traces produced by running the original DLL, and the
+screenshot above. They are kept because the decoders cannot be tested without
+them. [LICENSE](LICENSE) lists them explicitly.
 
 ## Status
 
@@ -433,17 +467,49 @@ real-code surface (MFC40, EEUIL10).
 - [x] Identify all executables and DLLs (PE32 vs NE/16-bit)
 - [x] Catalog PE sections, imports, exports for all 32-bit modules
 - [x] Map data file formats and multimedia assets
-- [x] Document architecture and component relationships
 - [x] Ghidra/IDA disassembly of DECO_32.DLL — all functions mapped
 - [x] M20/MVB 2.0 container parser + extractor (`m20dump`)
 - [x] FTT raw decoder + FIF container decoder — **perfect quality**
-- [x] FTC image decoder (clean-room) — luma/grayscale recognizable
-- [x] **FTC full-colour decode — SOLVED** (`decooracle` faithful DLL bridge)
-- [x] **DECO_32 statically recompiled (x86+x87→C) — all 28 exports, 137-function
-      closure, byte-exact, no original code executed** (`tools/recomp`)
-- [x] **End-to-end real-content pipeline** — decode real `PICON.M20` images
-      (both FTC modes) to full-colour PNG
+- [x] **FTC full-colour decode — SOLVED**; **DECO_32 statically recompiled**
+      (all 28 exports, byte-exact, no original code executed, no DLL needed)
+- [x] **ENC97.EXE lifts whole** (7,326 fns) and **the application runs** as
+      recompiled code, hybrid against real MFC
+
+## Roadmap
+
+Where it stands: the application body is recompiled C; MFC40, MSVCRT40,
+EEUIL10 and Windows itself are still real code underneath. That is a working
+program, not yet a port. The distance between the two is the roadmap.
+
+**1. Prove it, and stop it regressing.** The app boots to the article view —
+that is one code path. Everything else (search, atlas, timeline, MindMaze,
+media playback) is untested lifted code, and each will surface its own lift
+bugs the way `sub_4BB6F0` did.
+- [ ] Drive the UI and fix what falls out, using the `R2L_LO/HI` and
+      `LIFT_LO/HI` bisects — they turn "it crashed 30,000 calls in" into a
+      named function in ~14 runs
+- [ ] A scripted regression run (window appears, N real→lifted calls, no
+      faults) so a lifter change can't silently break the boot
+- [ ] Raise differential validation past the current 818/7,326 functions
+
+**2. Shrink the real-code surface.** This is the actual work of becoming a port,
+in cost order:
+- [ ] **Lift `EEUIL10.DLL`** (1,868 exports) — it is PE32, the same lifter
+      applies, and it is *Encarta's own* UI library. The single biggest step
+      toward the app being entirely our code
+- [ ] `ENCTITLE.DLL` — blocked on its 16-bit `AM16`/`AMF16` thunks
+- [ ] `MFC40.DLL` — 398 imports by ordinal. Keep it real (it works) or
+      reimplement the used subset; a decision, not an obligation
+- [ ] Drop the CD check and run from a local content directory
+
+**3. The 1997 assumptions.** Palette-based 256-colour rendering, GDI, ACM audio,
+Indeo/Cinepak AVI, MIDI. Replace with modern equivalents once the code above is
+ours to change.
+
+**4. Then the interesting question: 64-bit and non-Windows.** Today everything
+is 32-bit because lifted registers hold real host pointers. Both need the same
+thing — a memory model that isn't "the register is the address".
+
+**Still open from the format work**
 - [ ] Clean-room regeneration of the codec's constant tables (drop DLL-data dep)
 - [ ] Full M20/MVB format documentation; `"FIFF"` FIF variant + scaling paths
-- [ ] **Begin Ghidra/IDA disassembly of ENC97.EXE** (main application) — Phase 3
-- [ ] Map EEUIL10.DLL UI class hierarchy — Phase 2

@@ -1,0 +1,48 @@
+MIT License
+
+Copyright (c) 2026 sp00nz
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---------------------------------------------------------------------------
+Scope
+
+The MIT licence above covers the code in this repository: the analysis and
+extraction tools, the x86->C lifter, the recompilation runtime and harness,
+the build files, and the documentation.
+
+It does NOT and cannot cover Microsoft Encarta 97 Encyclopedia itself. The
+original executables, DLLs, fonts and content files are Microsoft's, are not
+distributed here, and you need a legitimate copy of the product to use any of
+this. DECO_32.DLL implements a fractal image codec licensed from Iterated
+Systems; it is a subject of the reverse engineering here, not a part of it.
+
+A small number of files in this repository are DERIVED from that original
+product and are therefore outside the MIT grant as well. They are kept because
+the decoders are untestable without them:
+
+  fif_test/*.ftc, *.ftt, *.fif    image fragments extracted from PICON.M20,
+                                  used as decoder test vectors
+  fif_test/oracle_out/*           execution traces and pixel CRCs produced by
+                                  running the original DECO_32.DLL
+  encart97.ann                    4-byte annotation stub
+  docs/encarta97-running.png      a screenshot of the running program
+
+If you are Microsoft and would like any of that removed, open an issue and it
+goes.
