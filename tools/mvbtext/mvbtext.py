@@ -9,28 +9,31 @@ Run m20dump first to extract the internal files:
 Then:
     py mvbtext.py <dir> titles            # all article titles (_TTLBTREE)
     py mvbtext.py <dir> phrases           # the |Phrases dictionary, decoded
-    py mvbtext.py <dir> text <entry>      # topic text with phrases expanded
+    py mvbtext.py <dir> prose <entry>     # decompress a topic and read it
+    py mvbtext.py <dir> text <entry>      # raw (undecompressed) topic scan
     py mvbtext.py <dir> grep <substr>     # find titles containing substr
 
-Status: titles are fully extractable. |Phrases is fully decoded (see
-docs/FORMATS.md) so phrase references now expand to their real text instead of
-being elided. Topic bodies still are not running prose: expanding a topic
-stream byte-for-byte yields real phrases and real captions but interleaved with
-record structure, because the topic entries are formatted records rather than a
-flat text stream. Parsing those records is the remaining step - see README.md.
+Status: titles and |Phrases are complete. Topic bodies are **LZ77 compressed**
+(the same WinHelp LZ77 that packs the phrase dictionary) and `prose` reads real
+article text out of them. What is not finished is the encoding of high phrase
+indices inside a topic, so some references still come out wrong - see
+docs/FORMATS.md for exactly what is known and what is not.
 """
 import os, re, struct, sys
 
 
 # ---------------------------------------------------------------- |Phrases
 
-def lz77(src):
+def lz77(src, cap=None):
     """WinHelp/MVB LZ77. Control byte, LSB-first: a set bit introduces a 2-byte
     (len<<12)|dist code copying len+3 bytes from dist+1 back; a clear bit is a
-    literal byte."""
+    literal byte. Stops cleanly on an impossible back-reference, which is what
+    makes it usable as a probe for where a stream starts."""
     out = bytearray()
     i, n = 0, len(src)
     while i < n:
+        if cap and len(out) >= cap:
+            break
         bits = src[i]; i += 1
         for b in range(8):
             if i >= n:
@@ -81,6 +84,50 @@ def phrases(d):
 
 
 # ---------------------------------------------------------------- topics
+
+def topic_stream(raw, scan_limit=4096):
+    """A topic entry is a header we do not fully understand followed by an LZ77
+    stream. No header field has been found that points at the stream, so locate
+    it by trying each start and keeping the one that decompresses furthest -
+    a wrong start hits an impossible back-reference almost immediately, so this
+    is cheap and unambiguous in practice.
+
+    Returns (decompressed_bytes, start_offset)."""
+    best = (0, 0)
+    for start in range(min(scan_limit, len(raw))):
+        out = lz77(raw[start:], cap=4096)
+        if len(out) > best[0]:
+            best = (len(out), start)
+    if best[0] == 0:
+        return b"", -1
+    return bytes(lz77(raw[best[1]:])), best[1]
+
+
+def expand_refs(buf, ph):
+    """Topic text -> readable text.
+
+    Inside a decompressed topic, bytes 0x20-0x7E are literal and bytes with the
+    high bit set reference the phrase dictionary. Single-byte references
+    (phrase = byte - 0x80) are confirmed: `Sib<84>ia` is "Siberia" (phrase 4 =
+    "er") and `ext<9C>c<89><85>` is "extraction" ("ra" + "ti" + "on").
+
+    High phrase indices are NOT solved. All 128 high bytes occur, and the most
+    frequent (0xB0-0xB6) cannot be their single-byte reading - phrase 54 is
+    "According", which is not plausible thousands of times in one article. They
+    are either a multi-byte escape or interleaved formatting codes. Until that
+    is settled this renders those bytes as their single-byte phrase, which is
+    why some words come out wrong."""
+    out = []
+    for b in buf:
+        if b >= 0x80:
+            idx = b - 0x80
+            out.append(ph[idx] if ph and idx < len(ph) else "")
+        elif 0x20 <= b < 0x7F or b in (9, 10, 13):
+            out.append(chr(b))
+        else:
+            out.append(" ")
+    return re.sub(r"[ \t]{2,}", " ", "".join(out)).strip()
+
 
 def titles(d):
     """All readable, NUL/printable-delimited title strings from _TTLBTREE."""
@@ -149,6 +196,22 @@ def main():
         for t in titles(d):
             if sub in t.lower():
                 print(t)
+    elif cmd == "prose":
+        raw = open(os.path.join(d, sys.argv[3]), "rb").read()
+        try:
+            ph = phrases(d)
+        except Exception as e:
+            print(f"# no phrase dictionary ({e})", file=sys.stderr); ph = None
+        stream, start = topic_stream(raw)
+        if start < 0:
+            print("# no LZ77 stream found"); return 1
+        txt = expand_refs(stream, ph)
+        refs, media = image_refs(txt)
+        print(f"# {sys.argv[3]}: {len(raw)} bytes -> LZ77 stream at {start} "
+              f"-> {len(stream)} bytes -> {len(txt)} chars")
+        if refs:  print("# image refs:", ", ".join(refs))
+        if media: print("# media refs:", ", ".join(media))
+        print(txt)
     elif cmd == "text":
         topic = open(os.path.join(d, sys.argv[3]), "rb").read()
         try:
