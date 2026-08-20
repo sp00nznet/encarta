@@ -251,8 +251,15 @@ approach proven on DECO_32, rather than hand-reimplementation:
       virtual dispatches; `R2L_PASSTHRU` (real bodies) reaches the same point
 - [x] Lifter: `.reloc`-marked **displacements** inside memory operands are now
       GVA-wrapped too, not just address immediates (`mov dl,[ecx+0x56d902]`)
-- [ ] Give the app the install state its Setup creates (fonts + content paths),
-      so it gets past "unknown error while initializing" into the article browser
+- [x] **Encarta 97 starts** — `ENC97_PROFILE` answers the `97Options` profile
+      lookups (`CodePath`/`DATPath`/`BookPath`) the app's Setup would have
+      written, so with CD1 mounted it loads content and opens its main window,
+      "Microsoft Encarta 97 Encyclopedia", without installing anything
+- [x] Lifter: an indirect `call` now resolves its target **before** pushing the
+      return address (`call [esp+0x18]` was reading one slot off)
+- [x] `LIFT_LO`/`LIFT_HI` — bisect *which functions run lifted* to pin a bad lift,
+      the function-level twin of the slot-routing bisect
+- [ ] Article browser / search / atlas / MindMaze, with the whole body lifted
 - [ ] Article browser / search / atlas / MindMaze (emerge from the lifted body)
 
 See `tools/recomp/README.md` for the full ENC97 recompilation writeup.

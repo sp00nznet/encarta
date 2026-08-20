@@ -328,7 +328,14 @@ class Lifter:
         if m == "call":
             t = ops[0]
             tgt = self._target(insn, t)
-            return [f"push32(c, 0x{nxt:08X}u); dispatch(c, {tgt});"]
+            if t.type == X86_OP_IMM:
+                return [f"push32(c, 0x{nxt:08X}u); dispatch(c, {tgt});"]
+            # Indirect: resolve the target BEFORE pushing the return address.
+            # `call dword ptr [esp+0x18]` reads its target with the pre-push esp;
+            # pushing first shifts every esp-relative operand by 4 and calls the
+            # wrong slot (a real one in ENC97 read a zero and jumped to 0).
+            return [f"{{ uint32_t _ct = {tgt};"
+                    f" push32(c, 0x{nxt:08X}u); dispatch(c, _ct); }}"]
         if m == "ret":
             n = (ops[0].imm if ops and ops[0].type == X86_OP_IMM else 0)
             return [f"c->esp += {4 + n}; return;"]
