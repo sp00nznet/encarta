@@ -161,15 +161,14 @@ py tools/mvbtext/mvbtext.py <extract-dir> phrases
 
 ### Referencing phrases
 
-Inside a topic stream a byte in **1..15** starts a 2-byte reference:
+See [Topic entries](#topic-entries): in decompressed topic text a byte with the
+high bit set is a phrase reference, `phrase = byte - 0x80` for low indices.
 
-```
-idx    = 256 * (b - 1) + next_byte
-phrase = phrases[idx / 2]
-if (idx & 1) append a space
-```
-
-Bytes 0x20..0x7E are literal text.
+Note that this is **not** the WinHelp 3.1 scheme (a byte in 1..15 introducing a
+2-byte reference, `phrases[(256*(b-1) + next) / 2]`). That is what the format's
+ancestry suggests and it is wrong here - applying it to Encarta topic text
+produces plausible-looking word salad, which is a good reminder to verify
+against the bytes rather than against the documentation of the parent format.
 
 ---
 
