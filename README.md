@@ -239,8 +239,14 @@ approach proven on DECO_32, rather than hand-reimplementation:
 - [x] **Bidirectional lifted↔real boundary** — import trampoline (lifted→real)
       + real→lifted `__thiscall` trampoline (real MFC virtual-dispatch → lifted),
       with vtable routing (10k+ slots)
-- [ ] Resolve the MFC object-lifecycle boundary bug (heap corruption under full
-      vtable routing) to run `InitInstance` + the app body fully lifted
+- [x] **Full vtable routing runs clean** — the heap corruption was two harness
+      bugs, not a lift bug: `call_machine` didn't seed `ebp` (so unlifted
+      frameless SEH/dtor funclets addressed the host's frame) and wasn't
+      reentrant (a nested call clobbered the outer's saved `esp`)
+- [x] **The recompiled boot reaches Encarta's own UI** — all 10,432 fn-pointer
+      slots routed, CRT + MFC init + `InitInstance` lifted, app dialog on screen
+- [ ] Get past Encarta's "cannot start" dialog (installed content + registry
+      state) so the article browser body actually runs
 - [ ] Article browser / search / atlas / MindMaze (emerge from the lifted body)
 
 See `tools/recomp/README.md` for the full ENC97 recompilation writeup.
@@ -301,8 +307,9 @@ lifter gained `fs:`/SEH and `.reloc`-driven address-immediate relocation, so the
 **lifted entry point boots the application** — CRT init → `AfxWinMain` →
 `InitInstance` → clean `exit`, with `_initterm` routed so 182 static-initializers
 run lifted. A **real→lifted `__thiscall` trampoline** (the inverse of the import
-trampoline) lets real MFC virtual-dispatch into lifted code; running the full app
-body that way is gated on one remaining object-lifecycle boundary bug.
+trampoline) lets real MFC virtual-dispatch into lifted code, and with all 10,432
+function-pointer slots routed the boot now runs clean to **Encarta's own
+dialog** — the app's UI, drawn by recompiled code.
 
 ENCAPI32.DLL is also lifted and validated against the real Win32 boundary
 (`fGetArticleID`).

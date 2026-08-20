@@ -11,6 +11,21 @@
  * function, whether a window appeared) before the watchdog stops it.
  *
  * Build 32-bit. Needs the generated enc97_full.c (the full lift).
+ *
+ * Env switches (diagnostics; all optional):
+ *   R2L_VTABLES      route .rdata/.data function-pointer slots to lifted code
+ *   R2L_LO / R2L_HI  route only slots [LO,HI) - binary-search a bad slot
+ *   R2L_TEST         unit-test the real->lifted thiscall trampoline, then exit
+ *   R2L_HEAPCHECK=1  HeapValidate after each real->lifted call; =2 after every call
+ *   R2L_TRACE=1      log real->lifted entries; =2 also log every call inside one
+ *   RUN_TRACE=N      log the first N import calls
+ * Isolation modes for a slot that misbehaves - each removes one layer:
+ *   R2L_PASSTHRU     rewritten slot jumps straight at the original (no trampoline)
+ *   R2L_STUB         trampoline returns 0 without running the callee
+ *   R2L_REAL=1       run the ORIGINAL code through the trampoline (not the lift)
+ *   R2L_REAL=2       ...and without the esp switch
+ * Together these say whether a failure is in the lift, the slot rewrite, the
+ * trampoline's calling convention, or the stack switch.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,7 +61,11 @@ static int g_trace;   /* RUN_TRACE: log the first N import calls of the boot */
 static uint32_t g_initterm;            /* resolved MSVCRT40!_initterm address */
 static unsigned long g_initfns;        /* C++/CRT init fns routed through lifted dispatch */
 static unsigned long g_r2l_calls;      /* real->lifted (vtable/fn-ptr) calls */
-static int g_heapcheck;                /* R2L_HEAPCHECK: HeapValidate after each r2l call */
+static int g_heapcheck;                /* R2L_HEAPCHECK: 1=after each r2l call, 2=after every call */
+static int g_r2l_trace;                /* R2L_TRACE: log each real->lifted entry */
+static int g_r2l_real;                 /* R2L_REAL: run the ORIGINAL fn on the emulated frame */
+static int g_r2l_stub;                 /* R2L_STUB: return 0 immediately (convention check) */
+static int g_r2l_passthru;             /* R2L_PASSTHRU: rewritten slot jumps to the original */
 /* resolved-address -> "dll!name" for tracing which import the boot is in */
 static struct { uint32_t addr; char name[64]; } g_inames[1024];
 static int g_ninames;
@@ -68,10 +87,22 @@ static lfn lookup(uint32_t va)
 
 /* esp-switch trampoline: run real code (import or real internal) on the emulated
    stack, loading GP regs from the CPU and capturing eax+esp afterwards. */
-static uint32_t T_eax,T_ecx,T_edx,T_ebx,T_esi,T_edi,T_espp4,T_tgt,T_fesp,T_sesp;
+static uint32_t T_eax,T_ecx,T_edx,T_ebx,T_esi,T_edi,T_ebp,T_espp4,T_tgt,T_fesp,T_sesp;
+#pragma warning(disable:4731)   /* we clobber ebp on purpose; push/pop restores it */
 static void call_machine(CPU *c, uint32_t target)
 {
+    /* Reentrant: the real code we call can call BACK into lifted code (vtable
+       routing), which dispatches imports through call_machine again. The inner
+       call would otherwise overwrite T_sesp - the outer's saved host esp - and
+       the outer would restore a bogus esp and return into hyperspace. */
+    uint32_t sv_eax=T_eax, sv_ecx=T_ecx, sv_edx=T_edx, sv_ebx=T_ebx, sv_esi=T_esi,
+             sv_edi=T_edi, sv_ebp=T_ebp, sv_espp4=T_espp4, sv_tgt=T_tgt,
+             sv_fesp=T_fesp, sv_sesp=T_sesp;
     T_eax=c->eax; T_ecx=c->ecx; T_edx=c->edx; T_ebx=c->ebx; T_esi=c->esi; T_edi=c->edi;
+    /* ebp too: MSVC emits frameless funclets (SEH unwind / local-object dtor
+       helpers, e.g. `lea ecx,[ebp-0x10]; jmp ~CString`) that address the CALLER's
+       frame. Leaving the host's ebp there makes them operate on garbage. */
+    T_ebp=c->ebp;
     T_espp4=c->esp+4; T_tgt=target;
     __asm {
         push ebx
@@ -85,6 +116,7 @@ static void call_machine(CPU *c, uint32_t target)
         mov ebx, T_ebx
         mov esi, T_esi
         mov edi, T_edi
+        mov ebp, T_ebp
         mov esp, T_espp4
         call dword ptr [T_tgt]
         mov T_fesp, esp
@@ -96,11 +128,52 @@ static void call_machine(CPU *c, uint32_t target)
         pop ebx
     }
     c->eax=T_eax; c->esp=T_fesp;
+    T_eax=sv_eax; T_ecx=sv_ecx; T_edx=sv_edx; T_ebx=sv_ebx; T_esi=sv_esi;
+    T_edi=sv_edi; T_ebp=sv_ebp; T_espp4=sv_espp4; T_tgt=sv_tgt;
+    T_fesp=sv_fesp; T_sesp=sv_sesp;
 }
 
 static uint8_t *g_tramp_pool; static size_t g_tramp_off;   /* (defined below; fwd for dispatch) */
 
+/* HeapValidate over every process heap; 0 = corrupt. */
+static int heaps_ok(void)
+{
+    HANDLE hs[64]; DWORD nh = GetProcessHeaps(64, hs);
+    for (DWORD i = 0; i < nh; i++) if (!HeapValidate(hs[i], 0, NULL)) return 0;
+    return 1;
+}
+
+static void dispatch_inner(CPU *c, uint32_t target);
+
+/* R2L_HEAPCHECK=2: validate the heap after EVERY dispatched call made while
+   inside a real->lifted call, so the corrupting call names itself. */
 void dispatch(CPU *c, uint32_t target)
+{
+    if (g_r2l_trace > 1 && g_r2l_calls)
+        fprintf(stderr, "   call[%lu] -> %08X ecx=%08X ebp=%08X esp=%08X [ebp-10]=%08X\n",
+                g_calls + 1, target, c->ecx, c->ebp, c->esp, c->ebp ? rd32(c->ebp - 0x10) : 0),
+        fflush(stderr);
+    if (g_heapcheck < 2 || !g_r2l_calls) {
+        unsigned long m = g_calls + 1;
+        dispatch_inner(c, target);
+        if (g_r2l_trace > 1 && g_r2l_calls)
+            fprintf(stderr, "   ret [%lu] <- %08X eax=%08X esp=%08X\n", m, target, c->eax, c->esp),
+            fflush(stderr);
+        return;
+    }
+    unsigned long n = g_calls + 1;
+    dispatch_inner(c, target);
+    if (!heaps_ok()) {
+        fprintf(stderr, "HEAP CORRUPT after call [%lu] -> 0x%08X (%s)\n",
+                n, target, target >= PREF_BASE && target < PREF_BASE + g_imgsz ? "internal" : imp_name(target));
+        fflush(stderr);
+        printf("RESULT: BAD (heap corrupt after call %lu -> 0x%08X)\n", n, target);
+        fflush(stdout);
+        ExitProcess(2);
+    }
+}
+
+static void dispatch_inner(CPU *c, uint32_t target)
 {
     g_calls++;
     /* a redirected vtable/fn-pointer slot may hand us a trampoline address; the
@@ -150,8 +223,9 @@ void dispatch(CPU *c, uint32_t target)
         printf("ENC97 lifted boot: ran CRT+MFC startup to %s(%u) — %lu calls dispatched "
                "(%lu init fns, %lu real->lifted vtable calls), last lifted fn 0x%06X\n",
                nm, code, g_calls, g_initfns, g_r2l_calls, g_last);
+        printf("RESULT: OK\n");
         fflush(stdout);
-        ExitProcess(code);
+        ExitProcess(0);
     }
     call_machine(c, target);                            /* import -> real DLL */
 }
@@ -160,6 +234,9 @@ void dispatch_indirect(CPU *c, uint32_t t){ dispatch(c,t); }
 
 static uint8_t *g_estack;
 #define EMU_STACK (4u << 20)
+static uint8_t *g_r2l_arena; static uint32_t g_r2l_top;
+#define R2L_ARENA (8u<<20)
+#define R2L_FRAME 0x8000u
 static uint32_t call_lifted(lfn fn, const uint32_t *args, int n)
 {
     CPU c; memset(&c,0,sizeof c);
@@ -179,10 +256,9 @@ static uint32_t call_lifted(lfn fn, const uint32_t *args, int n)
  * collide with the real stack), runs the lifted fn, and reports how many arg
  * bytes its `ret N` cleaned so the trampoline returns thiscall-correctly.
  * Reentrant: nesting frames are LIFO on a dedicated arena; result+pop come back
- * in edx:eax (no globals). */
-static uint8_t *g_r2l_arena; static uint32_t g_r2l_top;
-#define R2L_ARENA (8u<<20)
-#define R2L_FRAME 0x8000u
+ * in edx:eax (no globals). Note the arena can't be the real stack: the harness's
+ * own C frames descend from there while the lifted code runs, and the two would
+ * interleave. */
 
 static uint64_t __cdecl r2l_helper(uint32_t ova, uint32_t this_, uint32_t *real_args,
                                    uint32_t ebx, uint32_t esi, uint32_t edi, uint32_t ebp)
@@ -197,17 +273,41 @@ static uint64_t __cdecl r2l_helper(uint32_t ova, uint32_t this_, uint32_t *real_
        use the CALLER's ebp (e.g. `lea ecx,[ebp-0x10]`) without a frame of own. */
     c.ecx = this_; c.ebx = ebx; c.esi = esi; c.edi = edi; c.ebp = ebp; c.esp = argsp;
     g_r2l_calls++;
-    dispatch(&c, ova + g_image_delta);                   /* -> lifted */
+    if (g_r2l_trace)
+        fprintf(stderr, "  r2l #%lu -> 0x%06X this=%08X ret=%08X args=%08X %08X %08X\n",
+                g_r2l_calls, ova, this_, real_args[-1], real_args[0], real_args[1], real_args[2]),
+        fflush(stderr);
+    /* R2L_REAL: run the ORIGINAL code on the emulated frame instead of the lift.
+       Separates "the lift is wrong" from "the emulated-stack boundary is wrong". */
+    /* R2L_STUB: return 0 without running anything - isolates the trampoline's
+       return convention from what the callee actually did. */
+    if (g_r2l_stub)      { c.eax = 0; c.esp = argsp + 4; }
+    else if (g_r2l_real == 2) {        /* original, NO esp switch: plain 0-arg thiscall
+                                          on our own stack - isolates the stack switch */
+        uint32_t t = ova + g_image_delta, r;
+        __asm { mov ecx, this_
+                mov eax, t
+                call eax
+                mov  r, eax }
+        c.eax = r; c.esp = argsp + 4;
+    }
+    else if (g_r2l_real) call_machine(&c, ova + g_image_delta);
+    else                 dispatch(&c, ova + g_image_delta);   /* -> lifted */
     if (g_heapcheck) {                                   /* pinpoint the corrupting call */
         HANDLE hs[64]; DWORD nh = GetProcessHeaps(64, hs);
         for (DWORD i = 0; i < nh; i++)
             if (!HeapValidate(hs[i], 0, NULL)) {
                 fprintf(stderr, "HEAP CORRUPT after lifted 0x%06X (r2l #%lu, heap %p)\n",
-                        ova, g_r2l_calls, hs[i]); fflush(stderr); break;
+                        ova, g_r2l_calls, hs[i]); fflush(stderr);
+                printf("RESULT: BAD (heap corrupt after 0x%06X)\n", ova); fflush(stdout);
+                ExitProcess(2);            /* stop at the FIRST corrupting call */
             }
     }
     uint32_t pop = (c.esp >= argsp + 4) ? (c.esp - argsp - 4) : 0;
     g_r2l_top = save;
+    if (g_r2l_trace)
+        fprintf(stderr, "  r2l #%lu <- 0x%06X eax=%08X pop=%u ret=%08X\n",
+                g_r2l_calls, ova, c.eax, pop, real_args[-1]), fflush(stderr);
     return (uint64_t)c.eax | ((uint64_t)(pop & 0xFFFF) << 32);
 }
 
@@ -240,7 +340,11 @@ static uint32_t make_tramp(uint32_t ova)
 {
     uint8_t *s = g_tramp_pool + g_tramp_off; g_tramp_off += 16;
     s[0]=0xB8; *(uint32_t*)(s+1)=ova;                     /* mov eax, ova */
-    s[5]=0xE9; *(int32_t*)(s+6)=(int32_t)((uint8_t*)r2l_common-(s+10)); /* jmp r2l_common */
+    /* R2L_PASSTHRU: jump straight at the original instead of into the r2l path -
+       same slot rewrite, no trampoline machinery. Isolates one from the other. */
+    s[5]=0xE9; *(int32_t*)(s+6)=(int32_t)((g_r2l_passthru
+        ? (uint8_t*)(uintptr_t)(ova + g_image_delta)
+        : (uint8_t*)r2l_common) - (s+10));                /* jmp target */
     return (uint32_t)(uintptr_t)s;
 }
 
@@ -249,6 +353,9 @@ static uint32_t make_tramp(uint32_t ova)
    slots whose target is a FUNCTION START (lookup succeeds) are rewritten — this
    excludes jump tables (their entries are mid-function labels, not fn starts).
    Scans .rdata + .data (where vtables and fn-ptr tables live). */
+static int g_r2l_lo, g_r2l_hi = 1<<30;   /* R2L_LO/R2L_HI: slot range to route */
+static int g_nslots;                     /* total candidate slots seen */
+static uint32_t g_slot_ova[65536];       /* slot index -> target original VA */
 static int rewrite_fnptr_slots(void)
 {
     PIMAGE_DOS_HEADER dos=(PIMAGE_DOS_HEADER)g_base;
@@ -264,7 +371,7 @@ static int rewrite_fnptr_slots(void)
                              /* 3 consecutive valid fn-starts is not coincidence,  */
                              /* so this avoids clobbering data that merely looks    */
                              /* like a pointer. */
-    int n=0;
+    int n=0, nr=0;      /* n = candidate slots seen (stable bisect index); nr = routed */
     for(int i=0;i<nt->FileHeader.NumberOfSections;i++){
         if(memcmp(s[i].Name,".rdata",6) && memcmp(s[i].Name,".data",5)) continue;
         uint32_t a=base+s[i].VirtualAddress, e=a+s[i].Misc.VirtualSize;
@@ -276,22 +383,31 @@ static int rewrite_fnptr_slots(void)
                 if(run>=MINVT)
                     for(uint32_t r=p;r<q;r+=4){
                         uint32_t ova=*(uint32_t*)(uintptr_t)r - g_image_delta;
-                        *(uint32_t*)(uintptr_t)r=make_tramp(ova); n++;
+                        /* R2L_LO/R2L_HI bisect: route only slots [lo,hi) of the
+                           scan order, so a binary search can name the slot whose
+                           routing breaks the boot. */
+                        if(n<(int)(sizeof g_slot_ova/4)) g_slot_ova[n]=ova;
+                        if(n>=g_r2l_lo && n<g_r2l_hi){
+                            *(uint32_t*)(uintptr_t)r=make_tramp(ova); nr++;
+                        }
+                        n++;
                     }
                 p=q;
             } else p+=4;
         }
     }
-    return n;
+    g_nslots=n;
+    return nr;
 }
 
 /* ---- map + relocate ENC97, then wire its full import table to real code ---- */
+static char g_exedir[MAX_PATH];   /* dir of the ENC97.EXE we mapped */
 static HMODULE load_for(const char *dll)
 {
     char path[MAX_PATH];
-    if (!_stricmp(dll,"DECO_32.DLL")||!_stricmp(dll,"ENCAPI32.dll")||!_stricmp(dll,"EEUIL10.dll")){
-        snprintf(path,sizeof path,"C:\\encarta\\analysis\\%s",dll); return LoadLibraryA(path);
-    }
+    /* Encarta-private DLLs (EEUIL10, DECO_32, ENCAPI32) sit next to the exe. */
+    snprintf(path,sizeof path,"%s%s",g_exedir,dll);
+    if (GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES) return LoadLibraryA(path);
     if (!_stricmp(dll,"MSVCRT40.dll")) return LoadLibraryA("msvcrt.dll");
     return LoadLibraryA(dll);
 }
@@ -299,6 +415,11 @@ static int g_imports, g_imports_res;
 static int map_and_wire(const char *path)
 {
     FILE *f=fopen(path,"rb"); if(!f) return 0;
+    {   const char *b=strrchr(path,'\\'), *b2=strrchr(path,'/');
+        if(b2>b) b=b2;
+        size_t n = b ? (size_t)(b-path)+1 : 0;
+        if(n>=sizeof g_exedir) n=sizeof g_exedir-1;
+        memcpy(g_exedir,path,n); g_exedir[n]=0; }
     fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET);
     uint8_t *file=malloc(sz); if(fread(file,1,sz,f)!=(size_t)sz){fclose(f);return 0;} fclose(f);
     PIMAGE_DOS_HEADER dos=(PIMAGE_DOS_HEADER)file;
@@ -359,13 +480,44 @@ static LONG CALLBACK veh_diag(PEXCEPTION_POINTERS ep)
 {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
     if (code == 0x40010006 || code == 0x4001000A) return EXCEPTION_CONTINUE_EXECUTION; /* OutputDebugString */
-    if (code >= 0xC0000000u) {
+    static int nlog;
+    if (code < 0xC0000000u) {          /* first-chance / C++ / debug exceptions */
+        if (nlog++ < 20)
+            fprintf(stderr, "VEH first-chance 0x%08lX @%p (calls=%lu)\n",
+                    code, ep->ExceptionRecord->ExceptionAddress, g_calls), fflush(stderr);
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    if (1) {
         uint32_t fa = (uint32_t)(uintptr_t)ep->ExceptionRecord->ExceptionAddress;
         uint32_t ova = (fa >= (uint32_t)(uintptr_t)g_base && fa < (uint32_t)(uintptr_t)g_base + g_imgsz)
                      ? fa - g_image_delta : 0;
         fprintf(stderr, "VEH fault 0x%08lX @%08X%s after %lu calls; last lifted=0x%06X last import=0x%08X (%s)\n",
                 code, fa, ova ? "" : " (external)", g_calls, g_last, g_last_import, imp_name(g_last_import));
         if (ova) fprintf(stderr, "  faulting addr is ENC97 original-VA 0x%06X\n", ova);
+        { CONTEXT *x = ep->ContextRecord;
+          fprintf(stderr, "  eip=%08lX esp=%08lX ebp=%08lX eax=%08lX ecx=%08lX edx=%08lX esi=%08lX edi=%08lX\n",
+                  x->Eip, x->Esp, x->Ebp, x->Eax, x->Ecx, x->Edx, x->Esi, x->Edi);
+          /* crude backtrace: code-looking dwords near esp. Off by default - it
+             burns stack (MAX_PATH buffer + fprintf) at a moment when the stack is
+             usually the thing that's broken, and can fault the handler itself. */
+          if (x->Esp && g_r2l_trace) {
+              fprintf(stderr, "  stack near esp:\n");
+              for (int k = -4; k < 48; k++) {
+                  uint32_t sp = x->Esp + k*4, v;
+                  if (IsBadReadPtr((void*)(uintptr_t)sp, 4)) continue;
+                  v = *(uint32_t*)(uintptr_t)sp;
+                  HMODULE m = NULL; char nm[MAX_PATH] = "";
+                  GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                     GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                     (LPCSTR)(uintptr_t)v, &m);
+                  if (m) GetModuleFileNameA(m, nm, MAX_PATH);
+                  int in_img = v >= (uint32_t)(uintptr_t)g_base && v < (uint32_t)(uintptr_t)g_base + g_imgsz;
+                  if (m || in_img) {
+                      const char *b = strrchr(nm, '\\');
+                      fprintf(stderr, "    [esp%+d] %08X  %s%s\n", k*4, v, b ? b+1 : nm,
+                              in_img ? " (ENC97 image)" : "");
+                  }
+              } } }
         fflush(stderr);
     }
     return EXCEPTION_CONTINUE_SEARCH;
@@ -400,12 +552,19 @@ int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0); setvbuf(stderr, NULL, _IONBF, 0);
     { const char *t = getenv("RUN_TRACE"); g_trace = t ? atoi(t) : 0; }
-    g_heapcheck = getenv("R2L_HEAPCHECK") != NULL;
+    { const char *t2 = getenv("R2L_TRACE"); g_r2l_trace = t2 ? (atoi(t2) ? atoi(t2) : 1) : 0; }
+    { const char *r = getenv("R2L_REAL"); g_r2l_real = r ? (atoi(r) ? atoi(r) : 1) : 0; }
+    g_r2l_stub  = getenv("R2L_STUB")  != NULL;
+    g_r2l_passthru = getenv("R2L_PASSTHRU") != NULL;
+    { const char *h = getenv("R2L_HEAPCHECK"); g_heapcheck = h ? (atoi(h) ? atoi(h) : 1) : 0; }
     AddVectoredExceptionHandler(1, veh_diag);
     fprintf(stderr,"[1] start\n");
     const char *exe = (argc>=2)?argv[1]:"C:\\encarta\\analysis\\ENC97.EXE";
     int timeout_ms = (argc>=3)?atoi(argv[2]):8000;
     if(!map_and_wire(exe)){ fprintf(stderr,"map/wire failed\n"); return 1; }
+    /* LoadLibrary calls the app makes at runtime (InitInstance pulls in
+       encres97.dll) search OUR directory, not the mapped app's. */
+    SetDllDirectoryA(g_exedir);
     fprintf(stderr,"[2] mapped+wired\n");
     qsort(g_lifted,NLIFTED,sizeof *g_lifted,cmp_entry);
     g_estack=VirtualAlloc(NULL,EMU_STACK,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
@@ -432,9 +591,13 @@ int main(int argc, char **argv)
     fprintf(stderr,"ENC97 mapped @%p (delta %+d); IAT %d/%d wired; %u lifted fns\n",
             (void*)g_base,(int)g_image_delta,g_imports_res,g_imports,(unsigned)NLIFTED);
     if(getenv("R2L_VTABLES")){
+        { const char *v; if((v=getenv("R2L_LO"))) g_r2l_lo=atoi(v);
+                         if((v=getenv("R2L_HI"))) g_r2l_hi=atoi(v); }
         int nv=rewrite_fnptr_slots();
         FlushInstructionCache(GetCurrentProcess(),NULL,0);
-        fprintf(stderr,"routed %d vtable/fn-ptr slots -> real->lifted trampolines\n",nv);
+        fprintf(stderr,"routed %d of %d vtable/fn-ptr slots (index range [%d,%d)) -> real->lifted\n",
+                nv,g_nslots,g_r2l_lo,g_r2l_hi<g_nslots?g_r2l_hi:g_nslots);
+        if(nv==1) fprintf(stderr,"  slot %d -> lifted fn 0x%06X\n",g_r2l_lo,g_slot_ova[g_r2l_lo]);
     }
     fprintf(stderr,"booting lifted entry start@0x50DB70 (watchdog %d ms)...\n",timeout_ms);
 
@@ -459,8 +622,12 @@ int main(int argc, char **argv)
                 wintitle[0]?"window appeared":"watchdog stop",
                 g_calls, g_last, g_last_import, imp_name(g_last_import));
 
-    printf("ENC97 lifted boot: %lu calls dispatched, last lifted fn 0x%06X%s%s%s\n",
-           g_calls, g_last,
+    /* a window means the app got far enough to put UI up - that's a pass, not a
+       crash; only a fault or a silent stall is BAD. */
+    printf("RESULT: %s\n", (g_done || wintitle[0]) ? "OK" : "BAD (no clean exit)");
+    printf("ENC97 lifted boot: %lu calls dispatched (%lu init fns, %lu real->lifted "
+           "vtable calls), last lifted fn 0x%06X%s%s%s\n",
+           g_calls, g_initfns, g_r2l_calls, g_last,
            g_done?" (entry returned)":" (running)",
            wintitle[0]?" — window: " : "", wintitle);
     TerminateThread(th, 0);   /* bounded: stop whatever the boot is doing */

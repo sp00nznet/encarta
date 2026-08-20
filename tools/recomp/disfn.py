@@ -1,6 +1,6 @@
-import struct, sys
+import struct, sys, os
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
-EXE = r"C:\encarta\analysis\ENC97.EXE"
+EXE = os.path.join(os.path.dirname(__file__), "..", "..", "analysis", "ENC97.EXE")
 FUNCS = r"E:\ida\work\enc97\funcs.txt"
 f = open(EXE, "rb").read()
 pe = struct.unpack_from("<I", f, 0x3c)[0]

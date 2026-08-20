@@ -43,7 +43,7 @@ if(MSVC)
     if(TARGET recomp_enc97_run)
         # host must NOT sit at 0x400000 so ENC97 can map at its preferred base
         # (delta=0; the lifter doesn't relocate address immediates).
-        target_link_options(recomp_enc97_run PRIVATE /LARGEADDRESSAWARE:NO /BASE:0x60000000 /DYNAMICBASE:NO)
+        target_link_options(recomp_enc97_run PRIVATE /LARGEADDRESSAWARE:NO /BASE:0x60000000 /DYNAMICBASE:NO /MAP)
         target_compile_options(recomp_enc97_run PRIVATE /Od /bigobj /wd4244 /wd4146)
     endif()
 endif()
