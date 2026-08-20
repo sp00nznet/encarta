@@ -76,6 +76,19 @@ class Lifter:
     def in_image(self, a):
         return self.image_lo <= (a & 0xffffffff) < self.image_hi
 
+    def disp_is_addr(self, insn, d):
+        """Is a memory operand's displacement an absolute address (needs GVA) or
+        a plain constant offset? `.reloc` marks exactly the former, and it marks
+        them whether or not the operand also has a base register - `mov dl,
+        [ecx + 0x56d902]` indexes a table at an absolute address just as much as
+        `mov eax, [0x58d428]` does. Fall back to a range check only when we have
+        no reloc table at all."""
+        enc = getattr(insn, "encoding", None)
+        do = getattr(enc, "disp_offset", 0) if enc else 0
+        if self.reloc_vas and do:
+            return ((insn.address + do) & 0xffffffff) in self.reloc_vas
+        return self.in_image(d)
+
     # ---- operand rendering ----
     def addr_expr(self, insn, op):
         m = op.mem
@@ -85,10 +98,8 @@ class Lifter:
         d = m.disp & 0xffffffff
         if base: terms.append(f"c->{base}")
         if index: terms.append(f"c->{index}*{m.scale}")
-        if base is None:
-            terms.append(f"GVA(0x{d:08X})" if self.in_image(d) else f"0x{d:08X}u")
-        elif d:
-            terms.append(f"0x{d:08X}u")
+        if d or not terms:
+            terms.append(f"GVA(0x{d:08X})" if self.disp_is_addr(insn, d) else f"0x{d:08X}u")
         return "(" + " + ".join(terms) + ")"
 
     def seg_name(self, op):

@@ -19,6 +19,7 @@
  *   R2L_HEAPCHECK=1  HeapValidate after each real->lifted call; =2 after every call
  *   R2L_TRACE=1      log real->lifted entries; =2 also log every call inside one
  *   RUN_TRACE=N      log the first N import calls
+ *   MSGBOX_LOG       log the app's message boxes and answer OK without showing them
  * Isolation modes for a slot that misbehaves - each removes one layer:
  *   R2L_PASSTHRU     rewritten slot jumps straight at the original (no trampoline)
  *   R2L_STUB         trampoline returns 0 without running the callee
@@ -59,6 +60,7 @@ static volatile uint32_t g_last_import; /* last import target */
 static volatile int g_done;
 static int g_trace;   /* RUN_TRACE: log the first N import calls of the boot */
 static uint32_t g_initterm;            /* resolved MSVCRT40!_initterm address */
+static uint32_t g_acmdln;              /* resolved MSVCRT40!__p__acmdln address */
 static unsigned long g_initfns;        /* C++/CRT init fns routed through lifted dispatch */
 static unsigned long g_r2l_calls;      /* real->lifted (vtable/fn-ptr) calls */
 static int g_heapcheck;                /* R2L_HEAPCHECK: 1=after each r2l call, 2=after every call */
@@ -411,6 +413,18 @@ static HMODULE load_for(const char *dll)
     if (!_stricmp(dll,"MSVCRT40.dll")) return LoadLibraryA("msvcrt.dll");
     return LoadLibraryA(dll);
 }
+/* MSGBOX_LOG: log the app's message boxes and answer OK without showing them.
+   Encarta's startup failures are reported this way, and the text names exactly
+   what it thinks is missing - which a modal dialog under a watchdog does not. */
+static int g_msgbox_log;
+static int WINAPI msgbox_hook(HWND h, LPCSTR text, LPCSTR cap, UINT type)
+{
+    (void)h; (void)type;
+    fprintf(stderr, "MessageBox [%s]: %s\n", cap ? cap : "", text ? text : "");
+    fflush(stderr);
+    return IDOK;
+}
+
 static int g_imports, g_imports_res;
 static int map_and_wire(const char *path)
 {
@@ -465,6 +479,12 @@ static int map_and_wire(const char *path)
                     if(!_stricmp(dll,"MSVCRT40.dll") && !(ent&0x80000000u) &&
                        !strcmp((const char*)(base+(ent&0x7FFFFFFF)+2),"_initterm"))
                         g_initterm=(uint32_t)(uintptr_t)p;
+                    if(!_stricmp(dll,"MSVCRT40.dll") && !(ent&0x80000000u) &&
+                       !strcmp((const char*)(base+(ent&0x7FFFFFFF)+2),"__p__acmdln"))
+                        g_acmdln=(uint32_t)(uintptr_t)p;
+                    if(g_msgbox_log && !(ent&0x80000000u) &&
+                       !strncmp((const char*)(base+(ent&0x7FFFFFFF)+2),"MessageBox",10))
+                        iat[i]=(uint32_t)(uintptr_t)msgbox_hook;
                     g_ninames++; }
             }
         }
@@ -494,6 +514,10 @@ static LONG CALLBACK veh_diag(PEXCEPTION_POINTERS ep)
         fprintf(stderr, "VEH fault 0x%08lX @%08X%s after %lu calls; last lifted=0x%06X last import=0x%08X (%s)\n",
                 code, fa, ova ? "" : " (external)", g_calls, g_last, g_last_import, imp_name(g_last_import));
         if (ova) fprintf(stderr, "  faulting addr is ENC97 original-VA 0x%06X\n", ova);
+        if (code == 0xC0000005u && ep->ExceptionRecord->NumberParameters >= 2)
+            fprintf(stderr, "  %s %08X\n",
+                    ep->ExceptionRecord->ExceptionInformation[0] ? "bad WRITE to" : "bad READ from",
+                    (uint32_t)ep->ExceptionRecord->ExceptionInformation[1]);
         { CONTEXT *x = ep->ContextRecord;
           fprintf(stderr, "  eip=%08lX esp=%08lX ebp=%08lX eax=%08lX ecx=%08lX edx=%08lX esi=%08lX edi=%08lX\n",
                   x->Eip, x->Esp, x->Ebp, x->Eax, x->Ecx, x->Edx, x->Esi, x->Edi);
@@ -523,14 +547,24 @@ static LONG CALLBACK veh_diag(PEXCEPTION_POINTERS ep)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
-struct winscan { DWORD pid; char *title; };
+struct winscan { DWORD pid; char *title; HWND hwnd; };
 static BOOL CALLBACK find_proc_window(HWND h, LPARAM lp)
 {
     struct winscan *w = (struct winscan *)lp; DWORD p = 0;
     GetWindowThreadProcessId(h, &p);
     if (p == w->pid && IsWindowVisible(h) && GetWindowTextLengthA(h) > 0) {
-        GetWindowTextA(h, w->title, 250); return FALSE;
+        GetWindowTextA(h, w->title, 250); w->hwnd = h; return FALSE;
     }
+    return TRUE;
+}
+/* the title alone is generic ("... cannot start"); the child statics carry the
+   actual complaint, which is what says WHAT the app is missing. */
+static BOOL CALLBACK dump_child_text(HWND h, LPARAM lp)
+{
+    char buf[512];
+    (void)lp;
+    if (GetWindowTextA(h, buf, sizeof buf) > 0)
+        fprintf(stderr, "  dialog text: %s\n", buf);
     return TRUE;
 }
 
@@ -556,6 +590,7 @@ int main(int argc, char **argv)
     { const char *r = getenv("R2L_REAL"); g_r2l_real = r ? (atoi(r) ? atoi(r) : 1) : 0; }
     g_r2l_stub  = getenv("R2L_STUB")  != NULL;
     g_r2l_passthru = getenv("R2L_PASSTHRU") != NULL;
+    g_msgbox_log   = getenv("MSGBOX_LOG")   != NULL;
     { const char *h = getenv("R2L_HEAPCHECK"); g_heapcheck = h ? (atoi(h) ? atoi(h) : 1) : 0; }
     AddVectoredExceptionHandler(1, veh_diag);
     fprintf(stderr,"[1] start\n");
@@ -565,6 +600,16 @@ int main(int argc, char **argv)
     /* LoadLibrary calls the app makes at runtime (InitInstance pulls in
        encres97.dll) search OUR directory, not the mapped app's. */
     SetDllDirectoryA(g_exedir);
+    /* The lifted CRT parses _acmdln - which is OUR command line, so ENC97 sees
+       our argv as its own parameters and refuses to start ("The command line is
+       improperly formatted"). Give it its own. ENC97_CMDLINE overrides. */
+    if (g_acmdln) {
+        static char cmd[1024];
+        const char *extra = getenv("ENC97_CMDLINE");
+        snprintf(cmd, sizeof cmd, "\"%s\"%s%s", exe, extra ? " " : "", extra ? extra : "");
+        *((char **(*)(void))(uintptr_t)g_acmdln)() = cmd;
+        fprintf(stderr, "app command line: %s\n", cmd);
+    }
     fprintf(stderr,"[2] mapped+wired\n");
     qsort(g_lifted,NLIFTED,sizeof *g_lifted,cmp_entry);
     g_estack=VirtualAlloc(NULL,EMU_STACK,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
@@ -610,9 +655,14 @@ int main(int argc, char **argv)
         if (WaitForSingleObject(th, step) == WAIT_OBJECT_0) break;
         elapsed += step;
         /* did the booting app create a top-level window in our process? */
-        struct winscan wp = { GetCurrentProcessId(), wintitle };
+        struct winscan wp = { GetCurrentProcessId(), wintitle, NULL };
         EnumWindows(find_proc_window, (LPARAM)&wp);
-        if (wintitle[0]) break;
+        if (wintitle[0]) {
+            if (wp.hwnd) {   /* let the dialog finish filling its statics */
+                Sleep(700); EnumChildWindows(wp.hwnd, dump_child_text, 0); fflush(stderr);
+            }
+            break;
+        }
     }
 
     if(g_done)
