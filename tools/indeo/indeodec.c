@@ -7,6 +7,8 @@
  */
 #include "indeo3.h"
 
+int compare_to_reference(const char *avi_path, const char *ref_path);
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,7 +33,7 @@ static int open_or_die(const char *path, avi_file *a)
 
 int main(int argc, char **argv)
 {
-    const char *path = NULL, *outdir = NULL;
+    const char *path = NULL, *outdir = NULL, *refpath = NULL;
     int mode = 0;
     avi_file a;
     size_t i;
@@ -41,8 +43,10 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[k], "-c") && k + 1 < argc) { mode = 'c'; path = argv[++k]; }
         else if (!strcmp(argv[k], "-x") && k + 1 < argc) { mode = 'x'; path = argv[++k]; }
         else if (!strcmp(argv[k], "-o") && k + 1 < argc) { outdir = argv[++k]; }
+        else if (!strcmp(argv[k], "-r") && k + 2 < argc) { mode = 'r'; path = argv[k+1]; refpath = argv[k+2]; k += 2; }
     }
     if (!mode || !path) { usage(argv[0]); return 1; }
+    if (mode == 'r') return compare_to_reference(path, refpath);
     if (!open_or_die(path, &a)) return 1;
 
     printf("%s: %ux%u  %s  %.2f fps  %zu video chunks\n", path, a.width, a.height,
