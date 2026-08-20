@@ -22,6 +22,10 @@
  *   MSGBOX_LOG       log the app's message boxes and answer OK without showing them
  *   NO_PRINTDLG      stub PrintDlgA -> FALSE (the startup printer query can stall)
  *   REG_LOG          log the registry keys/values the app looks for at startup
+ *   WATCH=va,va,...  log dispatches to these original VAs and what they return
+ *   ENC97_PROFILE    "CodePath=...;DATPath=...;BookPath=..." - answer the app's
+ *                    97Options lookups from here instead of the registry, so it
+ *                    can be pointed at content without running Setup
  * Isolation modes for a slot that misbehaves - each removes one layer:
  *   R2L_PASSTHRU     rewritten slot jumps straight at the original (no trampoline)
  *   R2L_STUB         trampoline returns 0 without running the callee
@@ -70,6 +74,11 @@ static int g_r2l_trace;                /* R2L_TRACE: log each real->lifted entry
 static int g_r2l_real;                 /* R2L_REAL: run the ORIGINAL fn on the emulated frame */
 static int g_r2l_stub;                 /* R2L_STUB: return 0 immediately (convention check) */
 static int g_r2l_passthru;             /* R2L_PASSTHRU: rewritten slot jumps to the original */
+static uint32_t g_watch[32]; static int g_nwatch;   /* WATCH: original VAs to log */
+static char g_profile[1024];           /* ENC97_PROFILE: Name=Value;... overlay */
+static const char *g_disp_kind = "call";   /* which dispatch entry point we are in */
+#define TRAIL 16
+static uint32_t g_trail[TRAIL]; static unsigned g_ntrail;   /* recent internal targets */
 /* resolved-address -> "dll!name" for tracing which import the boot is in */
 static struct { uint32_t addr; char name[64]; } g_inames[1024];
 static int g_ninames;
@@ -196,10 +205,38 @@ static void dispatch_inner(CPU *c, uint32_t target)
         ova = target - g_image_delta;                   /* indirect relocated live internal */
     if (ova) {
         g_last = ova;
+        g_trail[g_ntrail++ & (TRAIL - 1)] = ova;   /* recent internal targets */
+        int watched = 0;                 /* WATCH=va,va,...: log these calls + result */
+        for (int w = 0; w < g_nwatch; w++) if (g_watch[w] == ova) { watched = 1; break; }
+        if (watched)
+            fprintf(stderr, "  watch -> 0x%06X(ecx=%08X, %08X, %08X)\n",
+                    ova, c->ecx, rd32(c->esp + 4), rd32(c->esp + 8)), fflush(stderr);
         lfn fn = lookup(ova);
-        if (fn) { fn(c); return; }
-        call_machine(c, ova + g_image_delta);           /* unlifted internal -> real original */
+        if (fn) fn(c); else call_machine(c, ova + g_image_delta);  /* else real original */
+        if (watched)
+            fprintf(stderr, "  watch <- 0x%06X returned %08X\n", ova, c->eax), fflush(stderr);
         return;
+    }
+    if (!target) {   /* indirect call through a null pointer - name the caller */
+        /* the lifted call site pushed its return address, so [esp] is the
+           instruction right after the call that went through the null. */
+        fprintf(stderr, "NULL %s after %lu calls, from call site just before 0x%06X;"
+                " last internal targets:\n", g_disp_kind, g_calls, rd32(c->esp));
+        for (unsigned t = (g_ntrail >= TRAIL ? g_ntrail - TRAIL : 0); t < g_ntrail; t++)
+            fprintf(stderr, "    0x%06X\n", g_trail[t & (TRAIL - 1)]);
+        /* nearly always means the IAT (or a fn-ptr table) got written over */
+        { int zero = 0, seen = 0;
+          for (uint32_t a = 0x58D000; a < 0x58E000; a += 4) {
+              uint32_t v = rd32(a + g_image_delta);
+              if (v) seen++; else zero++;
+          }
+          fprintf(stderr, "  .idata window 0x58D000-0x58E000: %d live, %d zero\n", seen, zero);
+          fprintf(stderr, "  [58D438]=%08X [58D440]=%08X [58168C]=%08X\n",
+                  rd32(0x58D438 + g_image_delta), rd32(0x58D440 + g_image_delta),
+                  rd32(0x58168C + g_image_delta)); }
+        fflush(stderr);
+        printf("RESULT: BAD (null indirect call from 0x%06X)\n", g_last); fflush(stdout);
+        ExitProcess(3);
     }
     g_last_import = target;
     /* Intercept _initterm: walk the C++/CRT init-pointer table and route each
@@ -233,8 +270,8 @@ static void dispatch_inner(CPU *c, uint32_t target)
     }
     call_machine(c, target);                            /* import -> real DLL */
 }
-void dispatch_jmp(CPU *c, uint32_t t){ dispatch(c,t); }
-void dispatch_indirect(CPU *c, uint32_t t){ dispatch(c,t); }
+void dispatch_jmp(CPU *c, uint32_t t){ g_disp_kind = "jmp"; dispatch(c,t); g_disp_kind = "call"; }
+void dispatch_indirect(CPU *c, uint32_t t){ g_disp_kind = "indirect"; dispatch(c,t); g_disp_kind = "call"; }
 
 static uint8_t *g_estack;
 #define EMU_STACK (4u << 20)
@@ -449,7 +486,12 @@ static LONG WINAPI regcreate_hook(HKEY k, LPCSTR sub, DWORD r, LPSTR cls, DWORD 
                                   REGSAM sam, void *sa, PHKEY out, LPDWORD disp)
 {
     LONG rc = real_regcreate(k, sub, r, cls, o, sam, sa, out, disp);
-    fprintf(stderr, "  reg create %-60s -> %ld\n", sub ? sub : "(null)", rc);
+    /* Encarta keeps its install paths under HKLM, which we can neither read
+       (Setup never ran) nor create (no admin). With a profile overlay in play,
+       fall back to HKCU so the open succeeds and the value query reaches it. */
+    if (rc != ERROR_SUCCESS && k == HKEY_LOCAL_MACHINE && g_profile[0])
+        rc = real_regcreate(HKEY_CURRENT_USER, sub, r, cls, o, sam, sa, out, disp);
+    if (g_reg_log) fprintf(stderr, "  reg create %-60s -> %ld\n", sub ? sub : "(null)", rc);
     fflush(stderr); return rc;
 }
 static LONG WINAPI regopen_hook(HKEY k, LPCSTR sub, DWORD o, REGSAM sam, PHKEY out)
@@ -458,11 +500,64 @@ static LONG WINAPI regopen_hook(HKEY k, LPCSTR sub, DWORD o, REGSAM sam, PHKEY o
     fprintf(stderr, "  reg open   %-60s -> %ld\n", sub ? sub : "(null)", rc);
     fflush(stderr); return rc;
 }
+/* ENC97_PROFILE="Name=Value;Name=Value": answer the app's profile lookups from
+   here instead of the registry, so it can be told where its content lives
+   without running Setup or writing anything to the machine. Encarta stores
+   these under 97Options - CodePath, DATPath and BookPath are the ones its
+   startup refuses to run without. */
+static const char *profile_lookup(const char *name)
+{
+    if (!name || !g_profile[0]) return NULL;
+    size_t n = strlen(name);
+    for (const char *p = g_profile; *p; ) {
+        const char *eq = strchr(p, '='), *end = strchr(p, ';');
+        if (!end) end = p + strlen(p);
+        if (eq && eq < end && (size_t)(eq - p) == n && !_strnicmp(p, name, n))
+            { static char v[512]; size_t vl = end - eq - 1;
+              if (vl >= sizeof v) vl = sizeof v - 1;
+              memcpy(v, eq + 1, vl); v[vl] = 0; return v; }
+        p = *end ? end + 1 : end;
+    }
+    return NULL;
+}
+/* Encarta reads CodePath/DATPath/BookPath out of encarta.ini, not the registry,
+   so the overlay has to answer here too - otherwise pointing it at content would
+   mean dropping a file in %WINDIR%. */
+static DWORD (WINAPI *real_getprofstr)(LPCSTR,LPCSTR,LPCSTR,LPSTR,DWORD,LPCSTR);
+static DWORD WINAPI getprofstr_hook(LPCSTR sect, LPCSTR key, LPCSTR def,
+                                    LPSTR ret, DWORD size, LPCSTR file)
+{
+    const char *ov = key ? profile_lookup(key) : NULL;
+    if (ov && ret && size) {
+        size_t n = strlen(ov);
+        if (n >= size) n = size - 1;
+        memcpy(ret, ov, n); ret[n] = 0;
+        if (g_reg_log)
+            fprintf(stderr, "  ini   [%s] %-14s -> profile \"%s\"\n",
+                    sect ? sect : "", key, ret), fflush(stderr);
+        return (DWORD)n;
+    }
+    DWORD rc = real_getprofstr(sect, key, def, ret, size, file);
+    if (g_reg_log)
+        fprintf(stderr, "  ini   [%s] %-14s -> \"%s\" (%s)\n", sect ? sect : "",
+                key ? key : "(all)", ret ? ret : "", file ? file : ""), fflush(stderr);
+    return rc;
+}
+
 static LONG WINAPI regquery_hook(HKEY k, LPCSTR name, LPDWORD res, LPDWORD type,
                                  LPBYTE data, LPDWORD len)
 {
+    const char *ov = profile_lookup(name);
+    if (ov && data && len) {
+        size_t n = strlen(ov) + 1;
+        if (*len < n) { *len = (DWORD)n; return ERROR_MORE_DATA; }
+        memcpy(data, ov, n); *len = (DWORD)n;
+        if (type) *type = REG_SZ;
+        if (g_reg_log) fprintf(stderr, "  reg query  %-30s -> profile \"%s\"\n", name, ov), fflush(stderr);
+        return ERROR_SUCCESS;
+    }
     LONG rc = real_regquery(k, name, res, type, data, len);
-    fprintf(stderr, "  reg query  %-30s -> %ld%s%s\n", name ? name : "(default)", rc,
+    if (g_reg_log) fprintf(stderr, "  reg query  %-30s -> %ld%s%s\n", name ? name : "(default)", rc,
             (rc == 0 && data && type && *type == REG_SZ) ? " = " : "",
             (rc == 0 && data && type && *type == REG_SZ) ? (char *)data : "");
     fflush(stderr); return rc;
@@ -531,7 +626,7 @@ static int map_and_wire(const char *path)
                     if(g_no_printdlg && !(ent&0x80000000u) &&
                        !strncmp((const char*)(base+(ent&0x7FFFFFFF)+2),"PrintDlg",8))
                         iat[i]=(uint32_t)(uintptr_t)printdlg_hook;
-                    if(g_reg_log && !(ent&0x80000000u)){
+                    if((g_reg_log||g_profile[0]) && !(ent&0x80000000u)){
                         const char *n=(const char*)(base+(ent&0x7FFFFFFF)+2);
                         if(!strcmp(n,"RegCreateKeyExA")){ *(void**)&real_regcreate=(void*)p;
                             iat[i]=(uint32_t)(uintptr_t)regcreate_hook; }
@@ -539,6 +634,8 @@ static int map_and_wire(const char *path)
                             iat[i]=(uint32_t)(uintptr_t)regopen_hook; }
                         else if(!strcmp(n,"RegQueryValueExA")){ *(void**)&real_regquery=(void*)p;
                             iat[i]=(uint32_t)(uintptr_t)regquery_hook; }
+                        else if(!strcmp(n,"GetPrivateProfileStringA")){ *(void**)&real_getprofstr=(void*)p;
+                            iat[i]=(uint32_t)(uintptr_t)getprofstr_hook; }
                     }
                     g_ninames++; }
             }
@@ -645,9 +742,17 @@ int main(int argc, char **argv)
     { const char *r = getenv("R2L_REAL"); g_r2l_real = r ? (atoi(r) ? atoi(r) : 1) : 0; }
     g_r2l_stub  = getenv("R2L_STUB")  != NULL;
     g_r2l_passthru = getenv("R2L_PASSTHRU") != NULL;
+    { const char *w = getenv("WATCH");            /* comma/space separated VAs */
+      while (w && *w && g_nwatch < 32) {
+          char *end; uint32_t v = (uint32_t)strtoul(w, &end, 16);
+          if (end == w) break;
+          g_watch[g_nwatch++] = v; w = end; while (*w == ',' || *w == ' ') w++;
+      } }
     g_msgbox_log   = getenv("MSGBOX_LOG")   != NULL;
     g_no_printdlg  = getenv("NO_PRINTDLG")  != NULL;
     g_reg_log      = getenv("REG_LOG")      != NULL;
+    { const char *pf = getenv("ENC97_PROFILE");
+      if (pf) { strncpy(g_profile, pf, sizeof g_profile - 1); g_profile[sizeof g_profile - 1] = 0; } }
     { const char *h = getenv("R2L_HEAPCHECK"); g_heapcheck = h ? (atoi(h) ? atoi(h) : 1) : 0; }
     AddVectoredExceptionHandler(1, veh_diag);
     fprintf(stderr,"[1] start\n");
