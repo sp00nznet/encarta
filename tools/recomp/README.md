@@ -264,18 +264,56 @@ Reentrant (LIFO arena; result+pop returned in `edx:eax`). Validated in isolation
 
 `R2L_VTABLES` then rewrites every `.rdata`/`.data` slot that points at a
 **function start** (so jump tables — whose entries are mid-function — are left
-alone) to such a trampoline: **12,411 slots routed**, after which real MFC
-virtual-dispatches land in lifted code. The boot runs ~1052 lifted dispatches —
-through static init *and into MFC's virtual calls into the app* — before a heap
-corruption from a remaining boundary subtlety; debugging that is the next step.
-Both directions of the lifted↔real boundary now work: import trampoline
-(lifted→real) and this real→lifted path (proven), with `_initterm` already
-running 182 init functions lifted.
+alone) to such a trampoline: **10,432 slots routed**, after which real MFC
+virtual-dispatches land in lifted code. **The full-routing boot now runs clean**
+— no heap corruption — all the way to the app's own UI. Both directions of the
+lifted↔real boundary work: import trampoline (lifted→real) and this real→lifted
+path, with `_initterm` running 182 init functions lifted.
+
+Getting there took two harness fixes, both found by bisecting the routed slot
+range (`R2L_LO`/`R2L_HI`) down to the single slot that broke the boot — slot 597,
+`CWinApp::InitInstance` at `0x4050F0`:
+
+- **`call_machine` never seeded `ebp`.** MSVC emits frameless funclets for SEH
+  unwind and local-object destruction (`lea ecx,[ebp-0x10]; jmp ~CString`) that
+  address the *caller's* frame. When such a funclet isn't in the lifted set the
+  dispatcher falls back to the real original — which then ran against the host's
+  `ebp` and destructed a garbage pointer. That was the heap corruption.
+- **`call_machine` was not reentrant.** It kept the saved host `esp` in a global
+  (`T_sesp`). The boot nests it: the outer call runs `AfxWinMain`, real MFC calls
+  a routed vtable slot, the lifted callee dispatches an import — and the inner
+  `call_machine` overwrote the outer's saved `esp`. `AfxWinMain` then returned
+  onto a wrecked stack. The temporaries are now saved and restored per call.
+
+The isolation switches that separated these from a lift bug are worth keeping:
+`R2L_PASSTHRU` (rewritten slot jumps straight at the original), `R2L_STUB`
+(trampoline returns 0 without running the callee), and `R2L_REAL=1|2` (run the
+*original* code through the trampoline, with and without the esp switch). Those
+three passing while the lifted **and** the real body both failed is what proved
+the fault was in the trampoline, not in the recompiled code.
 
 ```
 cmake --build build --config Release --target recomp_enc97_run   # needs enc97_full.c
 build\tools\recomp\Release\recomp_enc97_run.exe analysis\ENC97.EXE 10000
 ```
+
+#### The recompiled boot reaches Encarta's own UI
+
+With the resource DLL resolvable (the harness adds the mapped app's directory to
+the DLL search path, and resolves ENC97's private imports from there — that alone
+took the IAT from 802/914 to **914/914**), the lifted boot runs CRT + MFC init,
+`AfxWinMain` and `InitInstance`, and puts up **Encarta's own dialog**. Under full
+vtable routing:
+
+```
+routed 10432 of 10432 vtable/fn-ptr slots -> real->lifted
+ENC97 lifted boot: 1183 calls dispatched (182 init fns, 6 real->lifted vtable
+calls), last lifted fn 0x50D1F4 - window: Encarta Encyclopedia cannot start
+```
+
+The dialog is the app's own, not a crash: without installed content and registry
+state Encarta declines to start. Everything up to that point — including the
+virtual dispatches MFC makes back into application code — executes lifted.
 
 ### The real app boots on Windows 11
 
