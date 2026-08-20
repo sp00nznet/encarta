@@ -89,6 +89,35 @@ A 16-entry ramp in steps of ~18, symmetric about the midpoint — the shape of a
 dequantisation/reconstruction table rather than picture data. Plane data starts
 after it.
 
+### Plane regions
+
+Three regions per coded frame, from the offsets above. On a 216x192 clip the
+largest is ~8.7 KB and the other two ~670 bytes each, against pixel counts of
+41,472 luma and 2,592 per chroma plane - so `plane_off[0]` is the luma.
+
+`plane_off[2]` is always 48 and its first 16 bytes are always the constant
+table. Beyond that the plane interior is only partly characterised. One
+recurring 16-byte block turns up at the start of many luma regions and
+correlates with delta frames (45 of 54) but not cleanly - three keyframes carry
+it too, so it is not simply a plane-type marker and is recorded here as an
+observation, not a conclusion.
+
+## Scoring
+
+`ffmpeg` supplies the reference; `indeodec -r` walks it frame by frame against
+our output and reports PSNR, so any change to the decoder is measurable rather
+than a matter of opinion:
+
+```bash
+ffmpeg -i clip.avi -pix_fmt yuv410p -f rawvideo ref.yuv
+indeodec -r clip.avi ref.yuv
+```
+
+The current "decoder" is deliberately the dumbest thing consistent with what is
+established - null frames hold the previous picture, everything else is flat
+mid-grey. On the sample clip that scores **17.50 dB**. It is not a decoder, it
+is the number to beat.
+
 ## Not done
 
 **The pixel decoding.** Indeo 3 codes each plane as a tree of cells with
@@ -101,6 +130,22 @@ Order of attack:
 2. The VQ delta tables, of which the ramp above is likely one.
 3. Intra (keyframe) cells, checked against the reference YUV.
 4. Inter (delta) cells and motion vectors.
+
+### A better route than inference
+
+Deriving a whole codec from its output is slow, and this one has a shortcut
+that fits what this project already does well. `IR32.DLL` on CD1 **is the
+decoder** - it is just a 16-bit NE binary, so it cannot be loaded in-process
+the way `DECO_32.DLL` was.
+
+But it can be *lifted*. pcrecomp carries 16-bit tooling (`tools/lift/lift16.py`,
+`tools/disasm/decode16.py`, `runtime/recomp16/`), and at 151 KB `IR32.DLL` is
+the same order of size as `DECO_32.DLL` (134 KB), which was recompiled to
+byte-exact C. That is the proven playbook here: lift it, run it, and use it
+both as the working decoder and as the oracle that validates a clean-room one.
+
+It also keeps the licensing clean - the result derives from a binary you own,
+not from anyone else's source.
 
 ## Usage
 
