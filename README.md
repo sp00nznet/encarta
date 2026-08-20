@@ -5,8 +5,10 @@ A project to statically recompile Microsoft Encarta 97 Encyclopedia (English, 2-
 **It runs.** ENC97.EXE's 1.3 MB of x86 is mechanically translated to C, and the
 recompiled code drives the real application on Windows 11 - CRT and MFC startup,
 `InitInstance`, the app's `Run()` loop, the Encarta UI library, and article
-rendering. In a 40-second session with the window up: **83,051 dispatched calls,
-10,242 of them real MFC virtual dispatches landing in recompiled code.**
+rendering. Over one interactive session: **18,151,514 dispatched calls, 7,499,024
+of them real MFC virtual dispatches landing in recompiled code** - ending in the
+application's own clean `exit(0)`. Startup, a full session, and shutdown, all
+driven by translated code.
 
 ![Encarta 97 running as recompiled code](docs/encarta97-running.png)
 
@@ -14,6 +16,12 @@ It is not a static screenshot either - the encyclopedia is **navigable**. Below
 is MindMaze, Encarta's trivia game, played from the recompiled binary:
 
 ![MindMaze running from recompiled code](docs/mindmaze.png)
+
+It is playable to the end. Rooms render, the maze map fills in as you explore,
+and scoring accumulates across the run:
+
+![MindMaze, deeper into the maze](docs/mindmaze2.png)
+![MindMaze, a new area of the map](docs/mindmaze3.png)
 
 ### What works when you drive it
 
@@ -25,24 +33,23 @@ From an interactive session against the real CD:
 | Search, Dictionary, the media archive | works |
 | **Audio** - narration clips, background music, MindMaze effects | works |
 | **MindMaze** - category select, levels, scoring, progression | works |
+| Article pictures (SPAM media) | works - see note |
 | Video | **no** - see below |
-| Some article pictures | **no** - see below |
 
-Two things do not, and neither is a defect in the recompilation:
+**Article pictures** initially failed with *"Encarta is not set up properly"*
+(ENCTITLE.DLL string 25). Imagery comes through **SPAM**, Encarta's media
+content system, and its interface DLL statically imports `AM16.DLL` /
+`AMF16.DLL`. Despite the names those are **PE32, not 16-bit** - Setup copies
+them to System32, so an uninstalled copy simply lacks them and ENCTITLE cannot
+load at all. They ship on CD1 at `AAMSSTP\SYSTEM32\`; copy them beside
+`ENC97.EXE` (the harness puts that directory on the DLL search path) and
+pictures resolve.
 
-- **Video.** All 68 clips are **Indeo 3.2** (`IV32`). Microsoft removed the
-  Indeo codecs from Windows years ago; the CD ships only the *16-bit* driver
-  (`AAMSSTP\SYSTEM16\IR32.DLL`), which a 32-bit process cannot use. Fixing this
-  means decoding Indeo ourselves or handing the AVIs to FFmpeg.
-- **Some pictures**, with *"Encarta is not set up properly"* (ENCTITLE.DLL
-  string 25). Article imagery comes through **SPAM**, Encarta's media content
-  system, whose interface DLL statically imports `AM16.DLL` / `AMF16.DLL`.
-  Despite the names those are **PE32, not 16-bit** - Setup copies them to
-  System32 and an uninstalled copy simply lacks them. They live on the CD at
-  `AAMSSTP\SYSTEM32\`; putting them beside the app lets ENCTITLE load. SPAM
-  also wants `E97SPAM.INI`, which on the CD still points at the *install
-  machine's* drive (`e:\encyc97`) and at `e97spam.mdf` rather than the shipped
-  `E97SPAM1.MDF`, so its paths need rewriting for wherever the disc is mounted.
+**Video does not work, and not because of the recompilation.** All 68 clips are
+**Indeo 3.2** (`IV32`). Microsoft removed the Indeo codecs from Windows years
+ago; the CD ships only the *16-bit* driver (`AAMSSTP\SYSTEM16\IR32.DLL`),
+which a 32-bit process cannot use. Fixing it means decoding Indeo ourselves or
+handing the AVIs to FFmpeg.
 
 ## Why?
 
@@ -304,8 +311,7 @@ approach proven on DECO_32, rather than hand-reimplementation:
 - [x] **Driven interactively** — article browsing, search, dictionary, the media
       archive, audio and MindMaze all work from recompiled code
 - [ ] Indeo 3.2 video (no codec on modern Windows; decode it or use FFmpeg)
-- [ ] SPAM media config so every article picture resolves (`AM16`/`AMF16` +
-      `E97SPAM.INI` paths)
+- [x] SPAM media (article pictures) — `AM16.DLL`/`AMF16.DLL` beside the app
 - [ ] Shrink the real-code surface: replace MFC40/EEUIL10 with native equivalents
 
 **Debugging tools** (in `recomp_enc97_run`, see its header for the full list)
@@ -375,9 +381,9 @@ lifter gained `fs:`/SEH and `.reloc`-driven address-immediate relocation, so the
 `InitInstance` → clean `exit`, with `_initterm` routed so 182 static-initializers
 run lifted. A **real→lifted `__thiscall` trampoline** (the inverse of the import
 trampoline) lets real MFC virtual-dispatch into lifted code. With all 10,432
-function-pointer slots routed, **the application runs** — 83,051 dispatched
-calls, 10,242 of them real MFC virtual dispatches landing in recompiled code,
-with Encarta's UI on screen.
+function-pointer slots routed, **the application runs** — 18,151,514 dispatched
+calls in one session, 7,499,024 of them real MFC virtual dispatches landing in
+recompiled code, ending in the app's own clean `exit(0)`.
 
 ENCAPI32.DLL is also lifted and validated against the real Win32 boundary
 (`fGetArticleID`).
