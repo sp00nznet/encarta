@@ -251,10 +251,11 @@ approach proven on DECO_32, rather than hand-reimplementation:
       virtual dispatches; `R2L_PASSTHRU` (real bodies) reaches the same point
 - [x] Lifter: `.reloc`-marked **displacements** inside memory operands are now
       GVA-wrapped too, not just address immediates (`mov dl,[ecx+0x56d902]`)
-- [x] **Encarta 97 starts** — `ENC97_PROFILE` answers the `97Options` profile
+- [x] **Encarta 97 runs** — `ENC97_PROFILE` answers the `97Options` profile
       lookups (`CodePath`/`DATPath`/`BookPath`) the app's Setup would have
-      written, so with CD1 mounted it loads content and opens its main window,
-      "Microsoft Encarta 97 Encyclopedia", without installing anything
+      written, so with CD1 mounted it loads content and puts up its real UI
+      — toolbar, article text, artwork — without installing anything
+      ([screenshot](docs/encarta97-running.png))
 - [x] Lifter: an indirect `call` now resolves its target **before** pushing the
       return address (`call [esp+0x18]` was reading one slot off)
 - [x] `LIFT_LO`/`LIFT_HI` — bisect *which functions run lifted* to pin a bad lift,
