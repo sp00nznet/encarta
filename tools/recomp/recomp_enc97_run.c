@@ -149,13 +149,17 @@ static void call_machine(CPU *c, uint32_t target)
         call dword ptr [T_tgt]
         mov T_fesp, esp
         mov T_eax, eax
+        mov T_edx, edx
         mov esp, T_sesp
         pop ebp
         pop edi
         pop esi
         pop ebx
     }
-    c->eax=T_eax; c->esp=T_fesp;
+    /* edx too: a 64-bit return comes back in edx:eax, and this codebase passes
+       such pairs around constantly (`mov [ebp-8],eax; mov [ebp-4],edx`).
+       Dropping edx silently truncates every one of them. */
+    c->eax=T_eax; c->edx=T_edx; c->esp=T_fesp;
     T_eax=sv_eax; T_ecx=sv_ecx; T_edx=sv_edx; T_ebx=sv_ebx; T_esi=sv_esi;
     T_edi=sv_edi; T_ebp=sv_ebp; T_espp4=sv_espp4; T_tgt=sv_tgt;
     T_fesp=sv_fesp; T_sesp=sv_sesp;
@@ -422,7 +426,10 @@ static int rewrite_fnptr_slots(void)
         if(!memcmp(s[i].Name,".text",5)){ tlo=base+s[i].VirtualAddress;
             thi=tlo+s[i].Misc.VirtualSize; }
     /* A function-start pointer (points into .text at a lifted fn entry). */
-    #define IS_FNPTR(val) ((val)>=tlo && (val)<thi && lookup((val)-g_image_delta))
+    /* lifted_index, not lookup: "is this a function start" must not depend on
+       LIFT_LO/LIFT_HI, or restricting the lifted set would silently change which
+       slots get routed and confound the bisect. */
+    #define IS_FNPTR(val) ((val)>=tlo && (val)<thi && lifted_index((val)-g_image_delta)>=0)
     const int MINVT=3;       /* only rewrite runs of >=3 (real vtables); a run of */
                              /* 3 consecutive valid fn-starts is not coincidence,  */
                              /* so this avoids clobbering data that merely looks    */
@@ -794,6 +801,8 @@ int main(int argc, char **argv)
     }
     fprintf(stderr,"[2] mapped+wired\n");
     qsort(g_lifted,NLIFTED,sizeof *g_lifted,cmp_entry);
+    if(g_lift_hi - g_lift_lo == 1 && g_lift_lo < (int)NLIFTED)
+        fprintf(stderr,"lift index %d = 0x%06X\n", g_lift_lo, g_lifted[g_lift_lo].va);
     g_estack=VirtualAlloc(NULL,EMU_STACK,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
     g_r2l_arena=VirtualAlloc(NULL,R2L_ARENA,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
     g_r2l_top=(uint32_t)(uintptr_t)(g_r2l_arena+R2L_ARENA);
