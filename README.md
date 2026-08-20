@@ -515,9 +515,10 @@ thing — a memory model that isn't "the register is the address".
 - [x] **`|Phrases` phrase dictionary decoded** — 1,808 entries, byte-exact
       against the size its own header declares
 - [x] `|TTLBTREE` titles (31,517), `.RLE` baggage (plain BMPs), FTC/FTT/FIF
-- [ ] **Topic record layout** — the one unsolved format, and the last thing
-      between here and full article prose. Topic entries are formatted records,
-      not a flat text stream; phrase references inside them now expand
-      correctly, so what remains is parsing the record structure
+- [x] **Topic entries are LZ77** — same encoder as `|Phrases`; `mvbtext prose`
+      decompresses them and reads real article text out
+- [ ] **High-index phrase escapes** — the last thing between here and clean
+      prose. Single-byte references (`byte - 0x80`) are confirmed; the encoding
+      above index 48 is not, so some words still come out wrong
 - [ ] Clean-room regeneration of the codec's constant tables (drop DLL-data dep)
 - [ ] `"FIFF"` FIF variant + non-full-resolution scaling paths

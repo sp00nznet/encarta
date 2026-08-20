@@ -14,7 +14,7 @@ image codec is Iterated Systems' fractal codec, licensed into the product.
 | [M20 / MVB container](#m20--mvb-20-container) | the archive everything lives in | **complete** |
 | [`\|Phrases`](#phrases-the-phrase-dictionary) | phrase-compression dictionary | **complete** |
 | [`\|TTLBTREE`](#ttlbtree-article-titles) | article titles | complete |
-| [Topic entries](#topic-entries) | article bodies | **partial** - see caveat |
+| [Topic entries](#topic-entries) | article bodies | **LZ77 solved**, phrase escapes open |
 | [FTC / FTT / FIF](#ftc--ftt--fif-images) | fractal-compressed images | complete (decoder) |
 | [`.RLE` baggage](#rle-baggage-files) | inline article graphics | complete |
 
@@ -187,35 +187,83 @@ py tools/mvbtext/mvbtext.py <extract-dir> grep Einstein
 
 ## Topic entries
 
-**This is the one format here that is not solved.** What is known:
+Article bodies live in the numeric internal files (`_XXXXXXXX`). They are
+**LZ77 compressed**, with phrase references in the decompressed text.
 
-- Topic bodies live in the numeric internal files (`_XXXXXXXX`).
-- They are **formatted records**, not a flat text stream: paragraph and
-  formatting structure interleaved with the text.
-- Text inside them is literal bytes plus the phrase references above, and with
-  the dictionary decoded those references do expand to real English.
-- Whole-file LZ77 is **not** how they are packed - applying it produces
-  expansion into zeroes.
+### Layout
 
-What that yields today: section titles, captions, proper nouns, and the media
-references that tie an article to its pictures - enough to identify an article
-and link its images, not enough to read it.
-
-```bash
-py tools/mvbtext/mvbtext.py <extract-dir> text _00006060     # Russia
+```
+[0 .. N)      header + records (not fully understood)
+[N .. end)    LZ77 stream, same encoder as |Phrases
 ```
 
-Expanding a topic byte-for-byte returns real phrases and real captions
-interleaved with record structure, which places the remaining work squarely on
-**parsing the topic record layout** (WinHelp `TOPICLINK`-style records:
-block size, previous/next, record type, then `LinkData1` formatting and
-`LinkData2` text). That is the next piece of work, and the reference to follow
-is helpdeco / Winterhoff's `helpfile.txt`.
+No header field has been found that points at `N`, so `mvbtext` locates the
+stream by trying each start offset and keeping the one that decompresses
+furthest. A wrong start hits an impossible back-reference within a few bytes,
+so the right one stands out unambiguously - in `_00006060` (Russia) the stream
+begins at 2249 and expands 67,466 input bytes into 94,152. A second, shorter
+stream sits earlier in the file (offset 1209) holding fact-box and caption
+text.
 
-An alternative that mirrors the successful DECO_32 recompilation: use the MVB
+That the same LZ77 decoder byte-exactly reproduces `|Phrases` and also turns
+topic bytes into English is the evidence this is right, and it is what the
+`00` control byte every ninth byte in a run of text looks like:
+
+```
+00 "Great Kr"  00 "emlin Pa"  00 "lace, Mo" ...
+```
+
+### Phrase references in topic text
+
+Bytes `0x20`-`0x7E` are literal. Bytes with the high bit set reference
+`|Phrases`. **Single-byte references are confirmed** - `phrase = byte - 0x80`:
+
+| Bytes | Decodes as | Result |
+|---|---|---|
+| `Sib` `84` `ia` | "Sib" + phrase 4 (`er`) + "ia" | **Siberia** |
+| `ext` `9C` `c` `89` `85` | "ext" + `ra` + "c" + `ti` + `on` | **extraction** |
+
+**High phrase indices are not solved.** All 128 high byte values occur, and the
+most frequent (`0xB0`-`0xB6`, thousands of times each) cannot be their
+single-byte reading: index 54 is `According`, which is not plausible 2,918
+times in one article. Index 48 is exactly where the dictionary stops being
+bigrams and starts being whole words, which is also where decoded output starts
+going wrong - so the break is real, but the escape encoding above it is not yet
+identified. Adjacent high bytes do not resolve it either: a legitimate pair of
+consecutive single-byte references (`ti` + `on`) is indistinguishable from a
+two-byte code by inspection.
+
+### What comes out today
+
+```bash
+py tools/mvbtext/mvbtext.py <extract-dir> prose _00006060     # Russia
+```
+
+Real article prose, with wrong words wherever a high reference appears. From
+the Russia article, verbatim and all independently correct:
+
+> ...25, 1991 ... 6 krays, 10 okrugs ... 49 oblasts ... Rossiyskaya Federatsiya
+> ... Commonwealth of Independent States (CIS) ... 17,075,200 sq km (6,592,800
+> sq mi) ... Moscow (1755), Petersburg (1819), Kazan (1804), Novosibirsk (1959)
+
+Windows of the decoded text reach ~43% common-English-word density against
+~40% for genuine prose, so the text is substantially there; what is missing is
+the correct expansion of the high-index references.
+
+### Remaining work
+
+1. Identify the high-index phrase encoding. The signal to optimise against is
+   the common-word density above - a correct decoder should push the whole
+   document, not just its best window, past 40%.
+2. Parse the pre-stream header so the stream offset is read rather than
+   searched for.
+3. Then the record structure inside the decompressed text: paragraph and
+   formatting boundaries, links, fonts.
+
+An alternative to (1) and (3), mirroring the DECO_32 recompilation: use the MVB
 engine DLLs (`MVBK20N.DLL` / `MVMG20N.DLL`, registered in `|SYSTEM`) as an
-oracle - call them to expand topics and validate a clean-room parser against
-their output.
+oracle - call them to expand topics and validate a clean-room decoder against
+their output, rather than inferring the encoding.
 
 ---
 
