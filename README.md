@@ -245,8 +245,14 @@ approach proven on DECO_32, rather than hand-reimplementation:
       reentrant (a nested call clobbered the outer's saved `esp`)
 - [x] **The recompiled boot reaches Encarta's own UI** — all 10,432 fn-pointer
       slots routed, CRT + MFC init + `InitInstance` lifted, app dialog on screen
-- [ ] Get past Encarta's "cannot start" dialog (installed content + registry
-      state) so the article browser body actually runs
+- [x] **The application body runs recompiled** — `InitInstance` returns TRUE and
+      MFC calls the app's `Run()` lifted: palette, `EEUIL10` UI-library init,
+      startup sound, window classes. 2,200 dispatched calls, 250 real→lifted
+      virtual dispatches; `R2L_PASSTHRU` (real bodies) reaches the same point
+- [x] Lifter: `.reloc`-marked **displacements** inside memory operands are now
+      GVA-wrapped too, not just address immediates (`mov dl,[ecx+0x56d902]`)
+- [ ] Give the app the install state its Setup creates (fonts + content paths),
+      so it gets past "unknown error while initializing" into the article browser
 - [ ] Article browser / search / atlas / MindMaze (emerge from the lifted body)
 
 See `tools/recomp/README.md` for the full ENC97 recompilation writeup.
