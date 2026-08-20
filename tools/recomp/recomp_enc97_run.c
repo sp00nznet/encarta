@@ -23,6 +23,8 @@
  *   NO_PRINTDLG      stub PrintDlgA -> FALSE (the startup printer query can stall)
  *   REG_LOG          log the registry keys/values the app looks for at startup
  *   WATCH=va,va,...  log dispatches to these original VAs and what they return
+ *   LIFT_LO/LIFT_HI  only table indices [LO,HI) run lifted, rest run real -
+ *                    bisect this to find the function whose lift is wrong
  *   ENC97_PROFILE    "CodePath=...;DATPath=...;BookPath=..." - answer the app's
  *                    97Options lookups from here instead of the registry, so it
  *                    can be pointed at content without running Setup
@@ -90,12 +92,25 @@ static const char *imp_name(uint32_t addr)
 
 static int cmp_entry(const void *a, const void *b)
 { uint32_t x=((const entry_t*)a)->va, y=((const entry_t*)b)->va; return (x>y)-(x<y); }
+/* LIFT_LO/LIFT_HI: only functions whose index in the sorted table falls in
+   [LO,HI) run lifted; the rest fall back to the real original. Bisecting this
+   range finds the single function whose LIFT is wrong, the same way R2L_LO/HI
+   finds the slot whose ROUTING is wrong. */
+static int g_lift_lo, g_lift_hi = 1<<30;
 static lfn lookup(uint32_t va)
 {
     size_t lo=0, hi=NLIFTED;
     while (lo<hi){ size_t m=(lo+hi)/2;
-        if (g_lifted[m].va<va) lo=m+1; else if (g_lifted[m].va>va) hi=m; else return g_lifted[m].fn; }
+        if (g_lifted[m].va<va) lo=m+1; else if (g_lifted[m].va>va) hi=m;
+        else return ((int)m >= g_lift_lo && (int)m < g_lift_hi) ? g_lifted[m].fn : NULL; }
     return NULL;
+}
+static int lifted_index(uint32_t va)
+{
+    size_t lo=0, hi=NLIFTED;
+    while (lo<hi){ size_t m=(lo+hi)/2;
+        if (g_lifted[m].va<va) lo=m+1; else if (g_lifted[m].va>va) hi=m; else return (int)m; }
+    return -1;
 }
 
 /* esp-switch trampoline: run real code (import or real internal) on the emulated
@@ -742,6 +757,11 @@ int main(int argc, char **argv)
     { const char *r = getenv("R2L_REAL"); g_r2l_real = r ? (atoi(r) ? atoi(r) : 1) : 0; }
     g_r2l_stub  = getenv("R2L_STUB")  != NULL;
     g_r2l_passthru = getenv("R2L_PASSTHRU") != NULL;
+    { const char *v; if((v=getenv("LIFT_LO"))) g_lift_lo=atoi(v);
+                     if((v=getenv("LIFT_HI"))) g_lift_hi=atoi(v);
+      if(g_lift_lo || g_lift_hi != (1<<30))
+          fprintf(stderr,"lifting only table indices [%d,%d) of %u; rest run real\n",
+                  g_lift_lo, g_lift_hi < (int)NLIFTED ? g_lift_hi : (int)NLIFTED, (unsigned)NLIFTED); }
     { const char *w = getenv("WATCH");            /* comma/space separated VAs */
       while (w && *w && g_nwatch < 32) {
           char *end; uint32_t v = (uint32_t)strtoul(w, &end, 16);
