@@ -310,7 +310,10 @@ approach proven on DECO_32, rather than hand-reimplementation:
       artwork decoded and drawn ([screenshot](docs/encarta97-running.png))
 - [x] **Driven interactively** — article browsing, search, dictionary, the media
       archive, audio and MindMaze all work from recompiled code
-- [ ] Indeo 3.2 video (no codec on modern Windows; decode it or use FFmpeg)
+- [ ] **Indeo 3.2 video** — our own decoder, started in
+      [`tools/indeo`](tools/indeo/README.md). Container and frame header are
+      derived and validated across all 68 clips (9,373 frames, zero
+      violations); the cell/VQ pixel decoding is the remaining bulk
 - [x] SPAM media (article pictures) — `AM16.DLL`/`AMF16.DLL` beside the app
 - [ ] Shrink the real-code surface: replace MFC40/EEUIL10 with native equivalents
 
@@ -359,6 +362,7 @@ cmake --build build --config Release --target m20dump
 | `strdump` | `tools/strdump/` | STR string table dumper | Working |
 | `spamdump` | `tools/spamdump/` | SPAM multimedia format dumper | Working |
 | `datdump` | `tools/datdump/` | DAT configuration dumper | Working |
+| `indeodec` | `tools/indeo/` | Indeo 3 (IV32) demuxer + frame parser; our own decoder, in progress | Container + header verified ([details](tools/indeo/README.md)) |
 | `fifdecode` | `tools/fifdecode/` | Old DLL bridge (wrong export signatures) | Superseded by `decooracle` |
 
 ### Static Recompilation (`tools/recomp`)
