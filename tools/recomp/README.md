@@ -354,6 +354,60 @@ startup to size the default printer, and on this machine that stalls in the
 spooler for ~44 s and takes the process with it. `NO_PRINTDLG` stubs it to FALSE;
 everything above happens in 0.2 s with it set.
 
+#### Encarta 97 starts
+
+The app refused to start with "An unknown error has occurred while
+initializing". Tracing it: `Run()` at `0x405380` maps an init status code to one
+of nine messages, code 7 is the generic one, and `sub_4CBC70` returns 7 when the
+`97Options` profile lookup for **`CodePath`** or **`DATPath`** comes back empty.
+Those are what Setup records. They live under HKLM, which we can neither read
+(Setup never ran) nor create (no admin), so the open failed and the value read as
+absent.
+
+Rather than install anything, the harness answers those lookups itself:
+`ENC97_PROFILE="CodePath=...;DATPath=...;BookPath=..."` overrides the app's
+profile reads (registry *and* `encarta.ini`), and while it is set an HKLM open
+that fails falls back to HKCU. With CD1 mounted and `BookPath` pointed at it, the
+app gets past its install check, loads content, and **opens its main window -
+"Microsoft Encarta 97 Encyclopedia"**. Nothing is written to the machine.
+
+```
+recomp_enc97_run.exe analysis\ENC97.EXE 25000
+  ENC97_PROFILE="CodePath=...\analysis\;DATPath=...\analysis\;BookPath=H:\ENCYC97\"
+  NO_PRINTDLG=1 MSGBOX_LOG=1
+```
+
+#### Two more lifter bugs, found by bisecting the lifted set
+
+Under full vtable routing the app instead ran 31,984 dispatched calls and died
+on a virtual call through a null slot. `LIFT_LO`/`LIFT_HI` - new, and the
+function-level twin of `R2L_LO`/`R2L_HI` - restrict which functions actually use
+their lifted body, so binary-searching the range names the one whose lift is
+wrong. It landed on `sub_4BB6F0`, the very function containing the faulting call:
+
+```asm
+004bb71f: push 4
+004bb721: lea  edx, [esp + 0x18]
+004bb728: push edx
+004bb72b: mov  dword ptr [esp + 0x18], eax   ; stash the fn pointer
+004bb72f: call dword ptr [esp + 0x18]        ; and call through it
+```
+
+The lifter emitted the return-address push *before* evaluating the call target:
+`push32(c, ret); dispatch(c, rd32(c->esp + 0x18))`. Real `call` reads its target
+with the pre-push `esp`, so the lifted version was reading one slot off - a zero.
+Indirect calls now resolve the target into a temporary first.
+
+The same hunt turned up `call_machine` capturing only `eax`: a callee returning a
+64-bit value in `edx:eax` silently lost the high half, and this code passes such
+pairs around constantly (`mov [ebp-8],eax; mov [ebp-4],edx`).
+
+One trap worth recording about the bisect tool itself: `rewrite_fnptr_slots`
+decided "is this a function start?" with the same `lookup()` that `LIFT_LO/HI`
+filters, so restricting the lifted set silently changed which vtable slots got
+routed - and the first bisect blamed a thunk that never executes. It uses an
+unfiltered lookup now.
+
 ### The real app boots on Windows 11
 
 As the end-to-end check of all the above, launching `ENC97.EXE` from `analysis\`
