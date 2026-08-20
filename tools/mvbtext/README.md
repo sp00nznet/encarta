@@ -15,29 +15,49 @@ py mvbtext.py enc_dir text _00006060                # literal text + image refs
 
 - **Titles — complete.** All ~31,517 article titles from `_TTLBTREE`
   (e.g. *Aardvark, Abacus, Einstein Albert, Lincoln, Russia, …*).
-- **Topic bodies — partial (literal text).** Topic entries (`_XXXXXXXX`) are
-  *literal text + phrase references*. The literal stream already yields
+- **Phrase dictionary — complete.** 1,808 phrases, see below.
+- **Topic bodies — partial.** Topic entries (`_XXXXXXXX`) are *text + phrase
+  references* inside formatted records. The extractable stream yields
   identifiable content — proper nouns, section titles, captions, and **media /
   image references** that link an article to its pictures (e.g. `11280A.RLE`,
   `ENCEW MEDIA97 R04 2420`), decodable via [`../recomp`](../recomp). Example:
   `_00006060` = the **Russia** article; `_000071A0` = the **USSR** article.
 
-## What's left: full prose
+## |Phrases: solved
 
-The common words/phrases are compressed via `|Phrases` (2,049 entries; dictionary
-content is readable — months, US states, countries, "Civil War", "President",
-"United States", …). The phrase **offset index** is a packed/segmented MVB
-variant (header bytes `01 08 10 07 00 01 …`; the table near byte 40 holds
-file-offsets `3618, 3620, …` but only part stays in range and entries carry
-formatting control bytes), and it did not yield to the classic WinHelp 3.1
-layout, LZ77, or brute-force base/count search validated by English readability.
+The phrase dictionary **decodes cleanly** - 1,808 phrases, byte-exact against
+the size the header declares. Full field layout in
+[docs/FORMATS.md](../../docs/FORMATS.md); the short version is that the u16
+offset table at 0x28 is relative to 0x28 itself, so `offsets[0] == 2*(count+1)`
+is a free self-check, and the text after it is ordinary WinHelp LZ77.
 
-**Recommended path** (mirrors the successful DECO_32 recompilation): use the MVB
-engine DLLs (`MVBK20N.DLL` / `MVMG20N.DLL`, registered in `_SYSTEM`) as a
-decompression **oracle** — load and call them to expand topics — rather than
-reverse-engineering the packed phrase index by inference. Then parse the
-topic-block / paragraph structure (formatting, links, fonts) for full rendered
-articles. Ref: helpdeco / Winterhoff `helpfile.txt`.
+```bash
+py mvbtext.py enc_dir phrases          # 1,808 entries
+```
+
+Sorted and revealing: the first ~200 entries are the commonest English bigrams
+(`th`, `he`, `in`, `re`, `er`, ...), the rest whole words alphabetically
+(`fundamental` ... `young`), each carrying its own punctuation so `government`,
+`government,` and `government.` are separate entries.
+
+`text` now expands references instead of eliding them.
+
+## What's left: topic records
+
+Expanding a topic byte-for-byte yields real phrases and real captions, but
+interleaved with record structure rather than as running prose - the topic
+entries are **formatted records**, not a flat text stream, and whole-file LZ77
+is not how they are packed (it expands into zeroes).
+
+So the blocker has moved: it is no longer the dictionary, it is parsing the
+topic record layout (WinHelp `TOPICLINK`-style: block size, prev/next, record
+type, then `LinkData1` formatting and `LinkData2` text). Ref: helpdeco /
+Winterhoff `helpfile.txt`.
+
+**Alternative path**, mirroring the DECO_32 recompilation: use the MVB engine
+DLLs (`MVBK20N.DLL` / `MVMG20N.DLL`, registered in `_SYSTEM`) as an oracle -
+call them to expand topics and validate a clean-room parser against their
+output.
 
 ## Inline images are plain BMPs
 

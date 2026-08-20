@@ -510,6 +510,14 @@ ours to change.
 is 32-bit because lifted registers hold real host pointers. Both need the same
 thing — a memory model that isn't "the register is the address".
 
-**Still open from the format work**
+**Formats** — documented in **[docs/FORMATS.md](docs/FORMATS.md)**
+- [x] M20/MVB 2.0 container, B-tree directory, internal file layout
+- [x] **`|Phrases` phrase dictionary decoded** — 1,808 entries, byte-exact
+      against the size its own header declares
+- [x] `|TTLBTREE` titles (31,517), `.RLE` baggage (plain BMPs), FTC/FTT/FIF
+- [ ] **Topic record layout** — the one unsolved format, and the last thing
+      between here and full article prose. Topic entries are formatted records,
+      not a flat text stream; phrase references inside them now expand
+      correctly, so what remains is parsing the record structure
 - [ ] Clean-room regeneration of the codec's constant tables (drop DLL-data dep)
-- [ ] Full M20/MVB format documentation; `"FIFF"` FIF variant + scaling paths
+- [ ] `"FIFF"` FIF variant + non-full-resolution scaling paths
