@@ -368,8 +368,11 @@ Rather than install anything, the harness answers those lookups itself:
 `ENC97_PROFILE="CodePath=...;DATPath=...;BookPath=..."` overrides the app's
 profile reads (registry *and* `encarta.ini`), and while it is set an HKLM open
 that fails falls back to HKCU. With CD1 mounted and `BookPath` pointed at it, the
-app gets past its install check, loads content, and **opens its main window -
-"Microsoft Encarta 97 Encyclopedia"**. Nothing is written to the machine.
+app gets past its install check, loads content, and **runs** - toolbar,
+article text, and its illuminated-manuscript artwork decoded and drawn.
+Nothing is written to the machine.
+
+![Encarta 97 running under the recompilation harness](../docs/encarta97-running.png)
 
 ```
 recomp_enc97_run.exe analysis\ENC97.EXE 25000

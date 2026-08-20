@@ -21,6 +21,7 @@
  *   RUN_TRACE=N      log the first N import calls
  *   MSGBOX_LOG       log the app's message boxes and answer OK without showing them
  *   NO_PRINTDLG      stub PrintDlgA -> FALSE (the startup printer query can stall)
+ *   HOLD             keep running after the app's window appears (to look at it)
  *   REG_LOG          log the registry keys/values the app looks for at startup
  *   WATCH=va,va,...  log dispatches to these original VAs and what they return
  *   LIFT_LO/LIFT_HI  only table indices [LO,HI) run lifted, rest run real -
@@ -848,7 +849,7 @@ int main(int argc, char **argv)
         /* did the booting app create a top-level window in our process? */
         struct winscan wp = { GetCurrentProcessId(), wintitle, NULL };
         EnumWindows(find_proc_window, (LPARAM)&wp);
-        if (wintitle[0]) {
+        if (wintitle[0] && !getenv("HOLD")) {
             if (wp.hwnd) {   /* let the dialog finish filling its statics */
                 Sleep(700); EnumChildWindows(wp.hwnd, dump_child_text, 0); fflush(stderr);
             }
