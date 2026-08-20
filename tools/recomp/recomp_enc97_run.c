@@ -23,6 +23,7 @@
  *   NO_PRINTDLG      stub PrintDlgA -> FALSE (the startup printer query can stall)
  *   HOLD             keep running after the app's window appears (to look at it)
  *   REG_LOG          log the registry keys/values the app looks for at startup
+ *   FILE_LOG         log files the app FAILS to open (=all logs successes too)
  *   WATCH=va,va,...  log dispatches to these original VAs and what they return
  *   LIFT_LO/LIFT_HI  only table indices [LO,HI) run lifted, rest run real -
  *                    bisect this to find the function whose lift is wrong
@@ -475,6 +476,49 @@ static HMODULE load_for(const char *dll)
     if (!_stricmp(dll,"MSVCRT40.dll")) return LoadLibraryA("msvcrt.dll");
     return LoadLibraryA(dll);
 }
+/* FILE_LOG: log the files the app opens, and loudly the ones it fails to find.
+   An old application that says "not installed properly" is nearly always
+   looking for a path its installer would have written; this says which. Set
+   FILE_LOG=all to see successes too. */
+static int g_file_log;
+static HANDLE (WINAPI *real_createfile)(LPCSTR,DWORD,DWORD,void*,DWORD,DWORD,HANDLE);
+static HFILE  (WINAPI *real_openfile)(LPCSTR,OFSTRUCT*,UINT);
+static HFILE  (WINAPI *real_lopen)(LPCSTR,int);
+static HANDLE (WINAPI *real_findfirst)(LPCSTR,LPWIN32_FIND_DATAA);
+
+static void file_note(const char *api, const char *name, int ok)
+{
+    if (!name) return;
+    if (ok && g_file_log < 2) return;             /* misses only, unless FILE_LOG=all */
+    fprintf(stderr, "  %s %-9s %s\n", ok ? "file  " : "MISS >", api, name);
+    fflush(stderr);
+}
+static HANDLE WINAPI createfile_hook(LPCSTR name, DWORD acc, DWORD share, void *sa,
+                                     DWORD disp, DWORD flags, HANDLE tmpl)
+{
+    HANDLE h = real_createfile(name, acc, share, sa, disp, flags, tmpl);
+    file_note("CreateFile", name, h != INVALID_HANDLE_VALUE);
+    return h;
+}
+static HFILE WINAPI openfile_hook(LPCSTR name, OFSTRUCT *of, UINT style)
+{
+    HFILE h = real_openfile(name, of, style);
+    file_note("OpenFile", name, h != HFILE_ERROR);
+    return h;
+}
+static HFILE WINAPI lopen_hook(LPCSTR name, int mode)
+{
+    HFILE h = real_lopen(name, mode);
+    file_note("_lopen", name, h != HFILE_ERROR);
+    return h;
+}
+static HANDLE WINAPI findfirst_hook(LPCSTR name, LPWIN32_FIND_DATAA fd)
+{
+    HANDLE h = real_findfirst(name, fd);
+    file_note("FindFirst", name, h != INVALID_HANDLE_VALUE);
+    return h;
+}
+
 /* MSGBOX_LOG: log the app's message boxes and answer OK without showing them.
    Encarta's startup failures are reported this way, and the text names exactly
    what it thinks is missing - which a modal dialog under a watchdog does not. */
@@ -646,6 +690,17 @@ static int map_and_wire(const char *path)
                     if(g_msgbox_log && !(ent&0x80000000u) &&
                        !strncmp((const char*)(base+(ent&0x7FFFFFFF)+2),"MessageBox",10))
                         iat[i]=(uint32_t)(uintptr_t)msgbox_hook;
+                    if(g_file_log && !(ent&0x80000000u)){
+                        const char *fn=(const char*)(base+(ent&0x7FFFFFFF)+2);
+                        if(!strcmp(fn,"CreateFileA")){ *(void**)&real_createfile=(void*)p;
+                            iat[i]=(uint32_t)(uintptr_t)createfile_hook; }
+                        else if(!strcmp(fn,"OpenFile")){ *(void**)&real_openfile=(void*)p;
+                            iat[i]=(uint32_t)(uintptr_t)openfile_hook; }
+                        else if(!strcmp(fn,"_lopen")){ *(void**)&real_lopen=(void*)p;
+                            iat[i]=(uint32_t)(uintptr_t)lopen_hook; }
+                        else if(!strcmp(fn,"FindFirstFileA")){ *(void**)&real_findfirst=(void*)p;
+                            iat[i]=(uint32_t)(uintptr_t)findfirst_hook; }
+                    }
                     if(g_no_printdlg && !(ent&0x80000000u) &&
                        !strncmp((const char*)(base+(ent&0x7FFFFFFF)+2),"PrintDlg",8))
                         iat[i]=(uint32_t)(uintptr_t)printdlg_hook;
@@ -778,6 +833,8 @@ int main(int argc, char **argv)
       } }
     g_msgbox_log   = getenv("MSGBOX_LOG")   != NULL;
     g_no_printdlg  = getenv("NO_PRINTDLG")  != NULL;
+    { const char *fl = getenv("FILE_LOG");
+      g_file_log = fl ? (!strcmp(fl, "all") ? 2 : 1) : 0; }
     g_reg_log      = getenv("REG_LOG")      != NULL;
     { const char *pf = getenv("ENC97_PROFILE");
       if (pf) { strncpy(g_profile, pf, sizeof g_profile - 1); g_profile[sizeof g_profile - 1] = 0; } }
