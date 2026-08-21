@@ -15,6 +15,9 @@ Usage:
 """
 import sys, os, argparse, collections
 
+# prefix bytes: seg overrides, operand/addr size, lock/rep, and FWAIT
+PREFIXES = {0x26,0x2E,0x36,0x3E,0x64,0x65,0x66,0x67,0xF0,0xF2,0xF3,0x9B}
+
 
 def load_tools(pcrecomp):
     sys.path.insert(0, os.path.join(pcrecomp, "tools", "disasm"))
@@ -62,7 +65,16 @@ def main():
                 continue
             m = (getattr(ins, "mnemonic", "") or "").lower()
             if m in ("", "???", "bad", "invalid", "db"):
-                failures["unknown opcode %02X" % code[pos]] += 1
+                # Report the OPCODE, not the first byte: an instruction that
+                # starts with a prefix would otherwise be blamed on the prefix
+                # and make a handled prefix look unsupported.
+                q = pos
+                while q < len(code) and code[q] in PREFIXES:
+                    q += 1
+                if q < len(code) and code[q] == 0x0F and q + 1 < len(code):
+                    failures["0F %02X" % code[q + 1]] += 1
+                elif q < len(code):
+                    failures["%02X" % code[q]] += 1
                 pos += ins.length
                 continue
             good += ins.length
