@@ -167,26 +167,40 @@ reaches 39 of 40 segments (112 KB of 115 KB), because the VFW driver entry
 dispatches everything - decompress, compress and configuration alike. Narrowing
 to just the decode path needs the ICM message dispatch understood first.
 
-### What the 0.79% is
+### What the missing fraction was
 
-Not random. The failures cluster on opcodes a 16-bit decoder would not expect:
+Not random, and not what it first looked like. The initial survey blamed the
+*first byte* of each failed instruction, which is a prefix - so handled
+prefixes appeared unsupported and the real culprit was hidden. Corrected, the
+answer was specific:
 
-| Opcode | Count | What |
+```
+64 89 2E 06 00        mov fs:[6],bp      -> FAIL (len 1)
+67 64 89 2E 06 00     mov fs:[dword 6],bp-> FAIL
+67 8B 06 34 12        mov ax,[dword]     -> ok      (addr32 alone is fine)
+89 2E 06 00           mov [6],bp         -> ok      (plain is fine)
+```
+
+`decode16.py` handled ES/CS/SS/DS overrides and the `66`/`67` size prefixes,
+but **not FS/GS** (`0x64`/`0x65`). Those are 386 additions that 16-bit code is
+not supposed to need - except IR32 keeps decoder state in an FS-addressed block
+and reaches it constantly. With `0x64` unrecognised the sweep resynced one byte
+in, and the resulting misalignment then blamed perfectly ordinary `mov`s
+(`8B`, `8A`, `A1`) that happened to follow. Every one of those decodes fine in
+isolation.
+
+Two prefix cases in `pcrecomp/tools/disasm/decode16.py` fixed it:
+
+| | before | after |
 |---|---|---|
-| `0F` | 279 | two-byte (286/386+) opcodes |
-| `66` | 101 | operand-size prefix - 32-bit ops in 16-bit code |
-| `67` | 97 | address-size prefix |
-| `64`/`65` | 147 | FS/GS segment prefixes |
+| whole DLL | 99.21% | **99.70%** |
+| seg 2 | 95.0% | **100%** |
+| seg 3 (main compute) | 97.8% | **100%** |
 
-That is a codec written for speed: a 1995 video decoder doing per-pixel work
-would reach for 386 32-bit registers via `66` prefixes rather than stay in
-16-bit arithmetic. Some of these will be linear-sweep misalignment on embedded
-data, but the concentration in the compute segments says most are real.
-
-So the concrete next step is not a lifter change - it is teaching
-`pcrecomp/tools/disasm/decode16.py` the `66`/`67` prefixes and the `0F` opcode
-map. That closes the gap for this binary and for any other performance-minded
-16-bit code the toolbox meets later.
+What still fails is data, not instructions: segment 40's residue is runs of
+literal `0F 0F 0F 0F ...`, a table embedded in a code segment. Linear sweep
+cannot tell that from code, and does not need to - lifting will use the call
+graph rather than a sweep.
 
 ### After that
 
