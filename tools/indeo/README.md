@@ -238,7 +238,7 @@ make no calls and carry almost no relocations. Half of that was wrong.
 | seg | bytes | entropy | `ret` | prologues | verdict |
 |-----|-------|---------|-------|-----------|---------|
 | 1 | 8,571 | 7.15 | 103 | 58 | code |
-| 3 | 20,851 | 6.03 | 95 | 0 | code, frameless |
+| 3 | 20,851 | 6.03 | 95 | 0 | code |
 | **40** | **17,952** | **3.83** | **0** | 0 | **DATA - do not lift** |
 
 **Segment 40 is a lookup table, not code.** 17,952 bytes holding 42 distinct
@@ -251,86 +251,136 @@ That is good news twice over: a third of the supposed decode core does not need
 lifting at all, and an 18 KB table of small values is very likely the VQ and
 reconstruction tables our own decoder needs anyway.
 
-**Segment 3 is real code but frameless** - 95 returns and not one
-`push bp; mov bp,sp`. Optimised codec inner loops do not keep a frame pointer,
-which is why prologue scanning finds no function boundaries in it.
+### The decode core is 32-bit, and nothing in the file says so
 
-Two things this does not yet solve:
+The name is literal. `IR32.DLL` is an NE - a 16-bit container - but the codec
+inside it is 32-bit, and the segment table does not record which segments are
+which. There is no USE32 bit to read. NE flag `0x1000` is **DISCARDABLE**, not
+32-bit; every segment in this DLL sets it, including ones that are certainly
+16-bit.
 
-### Carving functions by control flow
+So bitness has to be measured. `segment_bitness()` decodes each segment both
+ways and counts the tells - bytes that decode to nothing, and instructions whose
+bytes are all zero, which is what the top half of a 32-bit operand looks like
+when something reads it as 16-bit:
 
-Frameless code has no prologue to split on, so the driver now finds function
-extents by **recursive descent**: walk from an entry, branch at conditionals,
-stop at a return or an indirect transfer, and treat near-call targets as new
-functions. Segment 3 goes from one 6,900-instruction blob to real functions.
+| seg | as 16-bit (junk rate) | as 32-bit (junk rate) | verdict |
+|-----|----------------------|-----------------------|---------|
+| 1 | 0.016 | 0.027 | 16-bit |
+| **2** | 0.057 | **0.000** | **32-bit** |
+| **3** | 0.176 | **0.062** | **32-bit** |
+| **13** | 0.002 | **0.001** | **32-bit** |
+| 5 | 0.000 | 0.021 | 16-bit |
 
-It also comes with a number that is worth being careful about. Descent from the
-entry points we can actually find reaches:
+**Three segments - 2, 3 and 13, about 26 KB - are the 32-bit decode core.** The
+other 37 are 16-bit driver scaffolding: `DriverProc`, the VFW `ICM_*` message
+handlers, the dialogs.
 
-| segment | reachable | functions |
-|---------|-----------|-----------|
-| 5 | 82.1% | 6 |
-| 1 | 51.3% | 40 |
-| **3 (decode core)** | **5.8%** | **3** |
+Segment 1 is the useful counter-example. It sets exactly the same flags as
+segment 3, so a flag-based reading calls both 32-bit, but its own code settles
+it - `8B 46 06` is `mov ax, [bp+6]`, the standard 16-bit far-call argument
+fetch, and it ends `lea sp, [bp-2]` / `pop ds` / `retf 4`.
 
-Seeding fresh roots into the leftovers reports 100% coverage and 145 functions
-for segment 3. That number is a lie. A code segment holds tables too, and
-disassembling those manufactures very convincing functions - a run of `00`
-bytes becomes `add [bx+si], al`, and one of the invented functions contains an
-`int 0x0` in the middle of what is supposed to be a video decoder. Segment 3
-has 4,846 zero bytes, which is where 142 imaginary functions came from.
+### What reading it at the wrong width did to the analysis
 
-So seeding is opt-in (`--seed-unreached`) and the default reports what it could
-not reach instead of papering over it.
-
-### Segment 3 dispatches through jump tables
-
-The missing entry points are not an external dispatch table - they are internal.
-Segment 3 contains **36 indirect jumps**, and the tables they read sit in the
-code segment itself:
+Decoding 32-bit code as 16-bit does not fail. It resyncs, and produces
+confident nonsense. `mov eax, [edi+0x20c]` (`89 87 0C 02 00 00`) splits into
+`mov ax, [bx+0x20c]` plus `add [bx+si], al` on the abandoned high half. Read
+correctly, segment 3 at 0x0F24 is an ordinary plane copy:
 
 ```
-@0x0DB0  jmp word cs:[bx+si+0xDB8]
-   table@0x0DB8:  0DF0 0000 0E68 0000 1BB0 0000 ...
+0x0F3D  8B 87 50 FF FF FF   mov eax, dword ptr [edi - 0xb0]
+0x0F45  89 07               mov dword ptr [edi], eax
+0x0F47  89 87 B0 00 00 00   mov dword ptr [edi + 0xb0], eax
+0x0F4D  8D 7F 04            lea edi, [edi + 4]
 ```
 
-Entries alternate with a zero word, and the non-zero values are valid
-instruction addresses. This is one switch-dispatched decoder, which is exactly
-the shape an Indeo cell decoder should have - a jump on the cell opcode into
-per-case handlers.
+Three earlier conclusions in this file were artifacts of the wrong width, and
+are retracted:
 
-Resolving them **during** descent changes nothing, and the reason is worth
-recording: the tables live inside the functions that cannot be reached, so
-control flow never arrives to read them. They have to be harvested statically,
-by scanning every `jmp [mem]` with a constant displacement across the whole
-segment and taking whatever its table points at.
+- **"Segment 3 is frameless - 95 returns and not one `push bp; mov bp,sp`."**
+  It has neither the returns nor the prologues attributed to it; those counts
+  came from a misaligned sweep.
+- **"Segment 3 has 4,846 zero bytes"** - 23% of the segment, against ~5%
+  everywhere else. Those are not padding or tables. They are the high halves of
+  32-bit displacements and immediates. Read as 32-bit the anomaly disappears.
+- **"Segment 3 dispatches through jump tables whose entries alternate with a
+  zero word."** The tables are real, but the entries are 4 bytes, not 2 - the
+  "alternating zero word" was the top half of each. The reported gain from
+  harvesting them (5.8% -> 19.3% reachable) was measured on a mis-decoded
+  segment and does not carry over.
 
-That recovers 26 targets and takes segment 3 from **5.8% to 19.3%** reachable,
-3 functions to 17.
+The decode-coverage table further up has the same defect for its seg 2 and seg 3
+rows, which were measured 16-bit. The FS/GS prefix fix it describes is still
+real and still needed - there are 37 genuinely 16-bit segments here - but those
+two rows do not mean what they say.
 
-The remaining 80% is still out of reach. Ten of the 36 indirect jumps take
-their table address from a register (`jmp word cs:[si]`), so the table cannot be
-found without tracking what `si` held - that needs light dataflow, not more
-pattern matching. That is the next step.
+### Finding entry points
 
-**5.8% was the state before jump tables; 19.3% is the state now.** Segment 3 is genuinely code -
-95 returns, entropy 6.03 - so the missing 94% is not table; it is functions
-whose entry points we have not found. They are not near calls, not far calls,
-not entry-table exports and not relocation targets, which leaves indirect calls
-through a function-pointer table. Finding that table is the next step, and it
-is now a single well-defined question rather than a vague one.
+Reading the width correctly fixes the disassembly but not the boundaries. A
+segment is entered by FAR call from other segments, so scanning one segment for
+near calls finds almost nothing - segment 1 yielded zero. Four sources, in order
+of yield:
 
-- **Segment 3 previously lifted as one 6,900-instruction blob.** Its entry points are
-  not direct far calls: the callers build a far pointer from an immediate pair
-  (`mov [bp-1A], off` then `mov [bp-18], seg`, the fixup landing on the segment
-  half), which the driver now reads - but that yields only a couple of entries.
-  Being frameless, it needs call-graph-driven boundaries rather than prologue
-  or relocation scanning.
-- **Data inside code segments gets lifted as code.** Segment 1's output
-  contains a far call to `0000:FFFF` and an `int 0x21` - a DOS interrupt in a
-  Windows DLL, which is a table being disassembled, not a function. The
-  boundary pass needs to be call-graph driven rather than "split the linear
-  sweep at known starts".
+**Far calls, via relocation chains.** The pair that names a callee is split
+across two places: a SELECTOR relocation names the target *segment*, and the
+call instruction's own immediate holds the *offset*.
+
+```
+9A 64 04 FF FF      call far <seg 9>:0x0464
+```
+
+Two details matter. `FF FF` is an end-of-chain marker, not a selector - NE
+chains several fixup sites per relocation record through the patched words, so
+following the chain finds **334 sites behind 112 records**. And a SELECTOR fixup
+is not always a call: `B8`/`B9`/`BB imm16` is `mov reg, <selector>`, an ordinary
+data-segment load. Only sites preceded by `9A` are entry points. That yields
+**285 entry points across 34 segments**.
+
+**The entry table.** Six exported ordinals - `DriverProc`, `LibMain`, `WEP`,
+`DriverDialogProc`, `AboutDialogProc`, `___ExportedStub`. Small, but they are
+the roots the driver is actually called through.
+
+**Prologues.** `55 8B EC` at an address the sweep already decodes as an
+instruction. Worth nothing in the 32-bit core, which keeps no frame pointer, but
+segment 1 has 50 of them and that is most of its coverage.
+
+**Descent, bounded.** Walk from each entry, branch at conditionals, stop at a
+return, at padding, or at another known entry. The last of those matters:
+without it a walk runs off the end of one function into the next, and 11
+"functions" in segment 3 all reported ~1,300 instructions because they had
+swallowed their neighbours. Padding is zero fill or MSVC's `int3`.
+
+### Where it stands
+
+| segment | bits | reachable | functions |
+|---------|------|-----------|-----------|
+| 1 | 16 | 68.2% | 84 |
+| 2 | 32 | 100% | 2 |
+| **3 (decode core)** | **32** | **33.4%** | **20** |
+| 5 | 16 | 98.7% | 7 |
+| 13 | 32 | 100% | 1 |
+
+**32 of the 40 code segments now reach 90% or better.** The 16-bit driver half
+is essentially solved. What is left is the part that matters: segment 3, the
+largest piece of the 32-bit core, still reaches only a third. It has no
+prologues to seed from and only 4 far-call entries, so its interior is reached
+by indirect call through a table this pass has not found yet.
+
+`--stats` reports a carve-quality check alongside the coverage number, because
+recovering a fake entry point is not a loud failure - the lifter emits confident
+C for it just the same. It flags any function whose body is more than 5%
+zero-fill or junk opcodes. That check is what caught the mis-decoded segments in
+the first place: 10 of 16 segment-3 "functions" were flagged before the width
+was corrected, and none are now.
+
+Still open:
+
+- **Segment 3's indirect dispatch.** Its jump tables are 4-byte entries in the
+  code segment, harvested when the table sits just past the jump that reads it.
+  Tables held in a register (`jmp [esi]`) need light dataflow to resolve.
+- **Data inside code segments still lifts as code** where descent reaches it.
+  Segment 40 is excluded by classification, but smaller tables are not.
 
 ### After that
 
