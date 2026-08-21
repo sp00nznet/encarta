@@ -409,46 +409,69 @@ sweep, stopping when it rejoins, took segment 3 from 46% to 81% on its own.
 
 ### The 32-bit segments have their own entry signature
 
-A 32-bit function callable from this DLL's 16-bit half begins with the thunk
-that converts the caller's frame:
+A 32-bit function callable from this DLL's 16-bit half opens with a thunk that
+converts the caller's frame and loads GS with the bitstream selector:
 
 ```
-66 33 C0           xor ax, ax
-B8 CC CC CC CC     mov eax, 0xCCCCCCCC     <- load-time fixup placeholder
-66 8B EC           mov bp, sp
-66 8E 6D 08        mov gs, word ptr [ebp + 8]   <- the bitstream segment
+66 33 C0            xor ax, ax
+B8 CC CC CC CC      mov eax, <load-time fixup placeholder>
+8C DB / 8E C3       mov ebx, ds / mov es, ebx
+8B D5 / 33 ED       mov edx, ebp / xor ebp, ebp
+66 8B EC            mov bp, sp
+66 8E 6D 08         mov gs, word ptr [ebp + 8]
 ```
 
-Segment 3 has exactly nine. Four are the far-call entries already known; the
-other four - 0x2800, 0x2FB0, 0x3CC0, 0x41F0 - sit inside a 10 KB run that
-nothing else referenced at all: no branch, no jump table, no relocation, no
-export. That run was the single largest unreached region in the file.
+Match the **body**, not the placeholder. Searching for `B8 CC CC CC CC` finds
+nine entries, four of which were already known - and misses two that are
+identical except for the placeholder, `mov eax, 0xF8F70000` at 0x2C10 and
+0x3640. Those two turned out to be the entries to the last two unreached code
+runs, worth 11 points of coverage between them. Neither pattern is a superset of
+the other, so the driver takes both.
+
+Reaching that code also settled what it is. The two runs were briefly written
+off as data on the strength of their first 56 bytes, which really are a table -
+each function is followed by one, a 16-byte header and then 8-byte records
+pointing back into the function itself. Measuring pointer density across the
+whole run rather than eyeballing its head showed only 14% of dwords were
+plausible addresses, so the bulk was something else. It is the pixel
+interpolation:
+
+```
+0x3B07   xor ecx, edi
+0x3B09   and ecx, 0x78787878     <- four 4-bit lanes packed in a dword
+0x3B0F   add ecx, edi
+```
 
 ### Where it stands
 
 | segment | bits | bytes | covered | functions | lines | unhandled |
 |---------|------|-------|---------|-----------|-------|-----------|
 | 1 | 16 | 8,571 | 77.2% | 97 | 3,856 | 3 |
-| 2 | 32 | 2,222 | **100%** | 2 | 870 | 0 |
-| **3 (decode core)** | **32** | **20,851** | **81.2%** | **105** | **11,962** | **0** |
+| 2 | 32 | 2,222 | **100%** | 2 | 870 | 11 |
+| **3 (decode core)** | **32** | **20,851** | **92.5%** | **108** | **12,539** | **130** |
 | 5 | 16 | 6,920 | 99.6% | 7 | 2,541 | 1 |
-| 13 | 32 | 3,071 | **100%** | 1 | 1,414 | 0 |
+| 13 | 32 | 3,071 | **100%** | 1 | 1,414 | 65 |
 
 Coverage is reported in **bytes**, not instructions. Resync adds instructions
 the sweep never had, so "instructions reached / instructions swept" compares two
 different denominators and drifts upward on its own. Bytes cannot.
 
-Of the 40 code segments, 28 are above 99% and the whole 32-bit core is above
-80%. The stragglers are segment 39 (5.1%) and segment 40 (6.3%), both of which
-are tables rather than code, and segments 10, 28 and 6, which are entered in
-ways not yet identified.
+The largest unreached runs in segment 3 are now the pointer tables themselves -
+304 bytes at 0x4E10 and 195 at 0x3BFD, both 100% dwords that are zero or a valid
+address - which is exactly what should not be lifted. `--stats` reports that
+density per run rather than a verdict, because two earlier attempts to classify
+code against data automatically, one by entropy and one by counting small
+dwords, each got a known case backwards.
 
-`--stats` carries a carve-quality check, because recovering a fake entry point
-is not a loud failure - the lifter emits confident C for it just the same. It
-flags any function whose body is more than 5% zero fill or junk opcodes. That
-check is what caught the mis-decoded segments: 10 of 16 segment-3 functions were
-flagged before the width was corrected, and none are now. One 16-instruction
-function in segment 4 still trips it.
+The unhandled counts are real and were briefly reported as zero. The 16-bit
+lifter marks a gap with the token `UNHANDLED`; `lift32_cpu` marks it
+`/* TODO */ abort();`, and the driver was only counting the former, so the
+32-bit output looked perfect while carrying 130 gaps. What it is missing in
+segment 3: `rol` (24), `lds` (22), `shld` (12), `retf` (12), `les` (2). The far
+pointer loads are the interesting ones - `lds`/`les` are what segmented 32-bit
+code does and a flat PE never needed. The remainder - 16 `int1`, 7 `aaa`, 4
+`aas`, 3 `sldt` - are not real instructions but the residue of a few carved
+regions that are still misaligned.
 
 ### Lifting
 
