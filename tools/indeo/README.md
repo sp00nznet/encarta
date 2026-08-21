@@ -374,33 +374,99 @@ zero-fill or junk opcodes. That check is what caught the mis-decoded segments in
 the first place: 10 of 16 segment-3 "functions" were flagged before the width
 was corrected, and none are now.
 
-### The 32-bit core lifts
+### Three ways a linear sweep lies
+
+Coverage sat at a third of the decode core for a while, and every remaining
+obstacle turned out to be the same mistake in a different costume: trusting the
+linear sweep to say where instructions begin. A sweep is misaligned wherever it
+crosses a table, and it stays misaligned until it happens to resync.
+
+**The jump table is not at the displacement.** Segment 3 has 34 indirect jumps
+and no indirect calls at all. Twenty-six of them look like this:
+
+```
+0x1C32   jmp dword ptr cs:[edx*4 + 0x185C]
+```
+
+Read 0x185C as the table and you get garbage, which is why they were written off
+as needing dataflow. The table is at **0x1C3C** - eight bytes of instruction,
+two bytes of `mov eax, eax` alignment padding, then the entries. The
+displacement is a base the loader fixes up and means nothing statically. Looking
+just past each jump instead resolves **32 of 34 tables, 103 targets**.
+
+**A target need not be in the sweep.** Validating those entries by membership in
+the linear sweep truncated the tables - the one at 0x1C3C appeared to start at
+0x1C44, losing its first two entries, because the sweep was misaligned across
+exactly that region. Decoding *at* the candidate address instead settles it
+honestly.
+
+**A root that is not in the sweep was silently dropped.** This was the
+expensive one. `carve_functions` skipped any root the sweep did not already list
+as an instruction boundary, so entries recovered at real cost - thunk prologues,
+jump-table targets - were discarded without a word. Seeding 0x2800 did nothing
+whatsoever. Re-decoding forward from the entry and splicing the result into the
+sweep, stopping when it rejoins, took segment 3 from 46% to 81% on its own.
+
+### The 32-bit segments have their own entry signature
+
+A 32-bit function callable from this DLL's 16-bit half begins with the thunk
+that converts the caller's frame:
+
+```
+66 33 C0           xor ax, ax
+B8 CC CC CC CC     mov eax, 0xCCCCCCCC     <- load-time fixup placeholder
+66 8B EC           mov bp, sp
+66 8E 6D 08        mov gs, word ptr [ebp + 8]   <- the bitstream segment
+```
+
+Segment 3 has exactly nine. Four are the far-call entries already known; the
+other four - 0x2800, 0x2FB0, 0x3CC0, 0x41F0 - sit inside a 10 KB run that
+nothing else referenced at all: no branch, no jump table, no relocation, no
+export. That run was the single largest unreached region in the file.
+
+### Where it stands
+
+| segment | bits | bytes | covered | functions | lines | unhandled |
+|---------|------|-------|---------|-----------|-------|-----------|
+| 1 | 16 | 8,571 | 77.2% | 97 | 3,856 | 3 |
+| 2 | 32 | 2,222 | **100%** | 2 | 870 | 0 |
+| **3 (decode core)** | **32** | **20,851** | **81.2%** | **105** | **11,962** | **0** |
+| 5 | 16 | 6,920 | 99.6% | 7 | 2,541 | 1 |
+| 13 | 32 | 3,071 | **100%** | 1 | 1,414 | 0 |
+
+Coverage is reported in **bytes**, not instructions. Resync adds instructions
+the sweep never had, so "instructions reached / instructions swept" compares two
+different denominators and drifts upward on its own. Bytes cannot.
+
+Of the 40 code segments, 28 are above 99% and the whole 32-bit core is above
+80%. The stragglers are segment 39 (5.1%) and segment 40 (6.3%), both of which
+are tables rather than code, and segments 10, 28 and 6, which are entered in
+ways not yet identified.
+
+`--stats` carries a carve-quality check, because recovering a fake entry point
+is not a loud failure - the lifter emits confident C for it just the same. It
+flags any function whose body is more than 5% zero fill or junk opcodes. That
+check is what caught the mis-decoded segments: 10 of 16 segment-3 functions were
+flagged before the width was corrected, and none are now. One 16-instruction
+function in segment 4 still trips it.
+
+### Lifting
 
 32-bit segments emit through pcrecomp's `lift32_cpu` - the same lifter that
 produced the Encarta executable - rather than `lift16`. It is written against a
 PE but only loosely: `read_va` is injectable and the image bounds are plain
-attributes, so a 64K NE segment can pose as a tiny image based at 0.
-
-| segment | functions | lines | unhandled |
-|---------|-----------|-------|-----------|
-| 2 | 2 | 870 | 0 |
-| 3 | 20 | 3,672 | 0 |
-| 13 | 1 | 1,414 | 0 |
-| 5 (16-bit, for comparison) | 7 | 2,541 | 1 |
-
-Three things had to be fixed to get there, and each was silent rather than
-loud:
+attributes, so a 64K NE segment can pose as a tiny image based at 0. Three
+things had to be fixed, each silent rather than loud:
 
 - **Segment registers.** 23 functions failed outright on `mov ds, ax` - a flat
   PE never touches DS, so `lift32_cpu` had no case for it. They are now stored
   on the CPU struct, and `cpu.h` records the limit: stored, not used in address
   computation. Code that switches DS to reach another segment's data needs a
   selector-to-base mapping the runtime does not have.
-- **Displacements were being GVA-wrapped.** The base class decides whether a
-  displacement is an absolute address from the PE `.reloc` table and falls back
-  to a range check, which here caught every small constant - `lea edi, [edi+4]`
-  came out as `edi + GVA(4)`. An NE segment is its own 0..64K space, so the NE
-  driver overrides that to always false.
+- **Displacements were being GVA-wrapped.** The base class decides that from the
+  PE `.reloc` table and falls back to a range check, which caught every small
+  constant here - `lea edi, [edi+4]` became `edi + GVA(4)`. An NE segment is its
+  own 0..64K space, so the NE driver overrides that to false.
 - **Functions were named from the wrong address.** Naming and slicing from the
   lowest address descent reached, rather than the entry, emitted one shared
   region 16 times under the same name. Descent follows backward jumps, so
@@ -422,11 +488,15 @@ virtual addresses. The generated file says so in its own header.
 
 Still open:
 
-- **Segment 3's indirect dispatch.** Its jump tables are 4-byte entries in the
-  code segment, harvested when the table sits just past the jump that reads it.
-  Tables held in a register (`jmp [esi]`) need light dataflow to resolve.
+- **The last fifth of segment 3.** What remains is reached through a dispatch
+  table the DLL builds at init - the thunk at 0x2800 reads `[eax*4 + 8]` in the
+  data segment after loading GS with the bitstream selector. That table is
+  written by code, not present in the image, so finding it statically means
+  following what segment 3's own initialisation stores.
+- **No NE 32-bit runtime.** Segment registers, `GVA()`, and far calls between
+  segments all need one before any of this executes.
 - **Data inside code segments still lifts as code** where descent reaches it.
-  Segment 40 is excluded by classification, but smaller tables are not.
+  Segments 39 and 40 are excluded by classification; smaller tables are not.
 
 ### After that
 

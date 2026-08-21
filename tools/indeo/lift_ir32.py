@@ -255,6 +255,84 @@ COND_JUMPS = {'jo','jno','jb','jae','je','jne','jbe','ja','js','jns','jp','jnp',
 STOPS = {'ret', 'retf', 'iret', 'retn', 'iretd'}
 
 
+def make_validator(code, is32, decode16):
+    """Does an address look like the start of real instructions?
+
+    Membership in the linear sweep is the obvious test and the wrong one: a
+    sweep is misaligned wherever it crosses a table, so a perfectly good jump
+    target need not be one of its instruction boundaries. That is what hid the
+    first two entries of the table at 0x1C3C. Decode AT the address instead."""
+    cache = {}
+    if is32:
+        from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+        md = Cs(CS_ARCH_X86, CS_MODE_32)
+
+        def probe(v):
+            n = b = 0
+            for ins in md.disasm(code[v:v + 32], v):
+                n += 1
+                b += ins.size
+                if n >= 3:
+                    break
+            return n >= 3 and b >= 6
+    else:
+        def probe(v):
+            n = b = pos = 0
+            while n < 3 and pos < 32 and v + pos < len(code):
+                d = decode16.Decoder(code, 0)
+                d.pos = v + pos
+                try:
+                    ins = d.decode_one()
+                except Exception:
+                    return False
+                if not ins or ins.length <= 0:
+                    return False
+                n += 1
+                b += ins.length
+                pos += ins.length
+            return n >= 3 and b >= 6
+
+    def valid(v):
+        if v not in cache:
+            cache[v] = bool(0 < v < len(code)) and probe(v)
+        return cache[v]
+    return valid
+
+
+def table_after_jump(code, ins, esize, valid, maxpad=16, limit=64):
+    """The jump table an indirect jump reads, which follows the jump itself.
+
+    The displacement is not where the table is. In segment 3
+
+        0x1C32  jmp dword ptr cs:[edx*4 + 0x185C]
+
+    reads a table at 0x1C3C - eight bytes of instruction, two bytes of
+    `mov eax, eax` alignment padding, then the entries. The displacement is a
+    base the loader fixes up elsewhere and means nothing to us; the table's
+    real location is "just past the jump, aligned". So scan forward for the
+    aligned offset that begins the longest run of valid targets.
+    """
+    end = ins.address + ins.length
+    best = []
+    for pad in range(maxpad + 1):
+        off = end + pad
+        if off % esize:
+            continue
+        run = []
+        for k in range(limit):
+            q = off + esize * k
+            if q + esize > len(code):
+                break
+            v = int.from_bytes(code[q:q + esize], "little")
+            if valid(v):
+                run.append(v)
+            else:
+                break
+        if len(run) > len(best):
+            best = run
+    return best if len(best) >= 2 else []
+
+
 def jump_table_targets(code, by_addr, disp, limit=256, esize=2):
     """Read a jump table at `disp` and return the targets it holds.
 
@@ -282,7 +360,8 @@ def jump_table_targets(code, by_addr, disp, limit=256, esize=2):
     return out
 
 
-def trace(by_addr, start, decode16, code=None, esize=2, boundaries=()):
+def trace(by_addr, start, decode16, code=None, esize=2, boundaries=(),
+          valid=None):
     """Recursive descent from one entry. Returns (addresses in this function,
     near-call targets it makes).
 
@@ -318,14 +397,11 @@ def trace(by_addr, start, decode16, code=None, esize=2, boundaries=()):
                 if rel and op1.disp in by_addr:
                     a = op1.disp          # keep walking, same function
                     continue
-                if (code is not None and op1 is not None
+                if (code is not None and valid is not None and op1 is not None
                         and getattr(op1, 'type', None) == decode16.OpType.MEM):
                     # switch dispatch: the cases belong to this function
-                    d = getattr(op1, 'disp', 0)
-                    if 0 < d < len(code):
-                        work.extend(t for t in jump_table_targets(code, by_addr, d,
-                                                                  esize=esize)
-                                    if t not in body)
+                    work.extend(t for t in table_after_jump(code, ins, esize, valid)
+                                if t not in body and t in by_addr)
                 break                     # indirect or far: flow leaves us
             if m in COND_JUMPS:
                 if rel and op1.disp in by_addr:
@@ -341,8 +417,61 @@ def trace(by_addr, start, decode16, code=None, esize=2, boundaries=()):
     return body, calls
 
 
+def resync(code, by_addr, start, esize, decode16, limit=4096):
+    """Re-decode from a known entry point and splice it into the sweep.
+
+    A linear sweep is misaligned wherever it runs through a table, and stays
+    misaligned until it happens to resync. Every entry we recover - a thunk
+    prologue, a jump-table target, a far-call offset - is better evidence of an
+    instruction boundary than the sweep is, but `carve_functions` used to drop
+    any root the sweep did not already know, so seeding 0x2800 as a root did
+    nothing at all: it was not one of the sweep's boundaries, so it was
+    discarded and its whole function stayed unreached.
+
+    Decode forward from the entry instead, adding instructions the sweep does
+    not have, and stop on rejoining it - from there the sweep is right again.
+    """
+    added = 0
+    if esize == 4:
+        from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+        md = Cs(CS_ARCH_X86, CS_MODE_32)
+        md.detail = True
+        from capstone.x86 import X86_OP_IMM, X86_OP_MEM
+        for ins in md.disasm(code[start:start + limit], start):
+            if ins.address in by_addr:
+                break
+            op1 = None
+            ops = ins.operands or []
+            if ops:
+                o = ops[0]
+                if o.type == X86_OP_IMM:
+                    op1 = _Op(decode16.OpType.REL16, o.imm & 0xFFFFFFFF)
+                elif o.type == X86_OP_MEM:
+                    op1 = _Op(decode16.OpType.MEM, o.mem.disp & 0xFFFFFFFF)
+            by_addr[ins.address] = _Ins32(ins.address, ins.size, ins.mnemonic,
+                                          ins.op_str, op1)
+            added += 1
+    else:
+        pos = start
+        while pos < min(len(code), start + limit):
+            if pos in by_addr:
+                break
+            d = decode16.Decoder(code, 0)
+            d.pos = pos
+            try:
+                ins = d.decode_one()
+            except Exception:
+                break
+            if not ins or ins.length <= 0:
+                break
+            by_addr[ins.address] = ins
+            added += 1
+            pos += ins.length
+    return added
+
+
 def carve_functions(decode16, instructions, seg_len, roots, seed_unreached=False,
-                    code=None, esize=2):
+                    code=None, esize=2, valid=None):
     """Recursive descent from every known entry.
 
     By default it stops there and reports what it could not reach. Seeding new
@@ -359,10 +488,15 @@ def carve_functions(decode16, instructions, seg_len, roots, seed_unreached=False
     while True:
         while work:
             r = work.pop(0)
-            if r in claimed or r not in by_addr:
+            if r in claimed:
+                continue
+            if r not in by_addr and code is not None:
+                # a real entry the sweep missed: realign on it
+                resync(code, by_addr, r, esize, decode16)
+            if r not in by_addr:
                 continue
             body, calls = trace(by_addr, r, decode16, code=code,
-                                esize=esize, boundaries=bounds)
+                                esize=esize, boundaries=bounds, valid=valid)
             if not body:
                 continue
             funcs[r] = body
@@ -451,41 +585,50 @@ def main():
     # segment 1 has 58 of them and near-call scanning finds almost nothing.
     # Only counted at an address the sweep already decodes as an instruction,
     # so the byte pattern occurring inside a longer instruction is ignored.
+    # The 32-bit segments have their own entry signature. A 32-bit function
+    # callable from this DLL's 16-bit half starts with the thunk that converts
+    # the caller's frame:
+    #
+    #     66 33 C0           xor ax, ax
+    #     B8 CC CC CC CC     mov eax, 0xCCCCCCCC   <- load-time fixup placeholder
+    #
+    # Segment 3 has exactly nine. Four are the far-call entries already known,
+    # and the other four sit inside a 10 KB run that nothing else referenced at
+    # all - no branch, no jump table, no relocation.
+    thunks = set()
+    if is32:
+        import re as _re
+        pat = bytes((0x66, 0x33, 0xC0, 0xB8, 0xCC, 0xCC, 0xCC, 0xCC))
+        thunks = set(m.start() for m in _re.finditer(_re.escape(pat), code))
+        extra |= thunks
+
     decoded_at = set(i.address for i in insns)
     prologues = set(o for o in range(len(code) - 2)
                     if code[o] == 0x55 and code[o + 1] == 0x8B and code[o + 2] == 0xEC
                     and o in decoded_at)
     extra |= prologues
-    print("entries: %d far-call, %d exported, %d selector-reloc, %d prologue"
-          % (len(far_entries), len(exported), len(reloc_entries), len(prologues)))
+    print("entries: %d far-call, %d exported, %d selector-reloc, %d prologue, "
+          "%d thunk" % (len(far_entries), len(exported), len(reloc_entries),
+                        len(prologues), len(thunks)))
 
     by_all = {i.address: i for i in insns}
 
-    # Jump tables in code descent has NOT verified, accepted only when the table
-    # sits just past the jump that reads it:
-    #
-    #     jmp word cs:[bx+si+0xDB8]   at 0x0DB0, 5 bytes -> table at 0x0DB8
-    #
-    # Measured across segment 3 the gap is consistently +3 to +5 (alignment
-    # padding), never 0. That is the compiler's switch idiom, and it separates a
-    # real dispatch from a misaligned byte pair that merely decodes as
-    # `jmp [mem]`. Harvesting without the test pulled in 26 targets that a later
-    # fixpoint pass showed lay in no verified code at all - noise, and every one
-    # would have become a fake function. Two jumps here point at tables ~1 KB
-    # BEHIND them; those stay rejected until something corroborates them.
-    inline_jt = set()
+    # Every indirect jump's table, harvested up front. They cannot be found by
+    # descent alone: the tables sit inside functions nothing reaches yet, so
+    # control flow never arrives to read them.
+    valid = make_validator(code, is32, decode16)
+    inline_jt, resolved = set(), 0
     for ins in insns:
         if (ins.mnemonic or '').lower() != 'jmp' or ins.op1 is None:
             continue
         if getattr(ins.op1, 'type', None) != decode16.OpType.MEM:
             continue
-        d = getattr(ins.op1, 'disp', 0)
-        gap = d - (ins.address + ins.length)
-        if d and 0 <= gap <= 8 and d < len(code):
-            inline_jt.update(jump_table_targets(code, by_all, d, esize=esize))
+        t = table_after_jump(code, ins, esize, valid)
+        if t:
+            resolved += 1
+            inline_jt.update(t)
     if inline_jt:
-        print("inline jump tables: %d targets (table directly after the jump)"
-              % len(inline_jt))
+        print("jump tables: %d resolved -> %d targets" % (resolved, len(inline_jt)))
     extra |= inline_jt
     starts = find_function_starts(decode16, insns, len(code), extra)
     print("function starts: %d (%d from relocations, %d from near calls)"
@@ -507,7 +650,7 @@ def main():
         rounds += 1
         fmap, claimed, by_addr = carve_functions(decode16, insns, len(code), starts,
                                                  seed_unreached=a.seed_unreached,
-                                                 code=code, esize=esize)
+                                                 code=code, esize=esize, valid=valid)
         found = set()
         for addr in claimed:
             ins = by_addr.get(addr)
@@ -515,9 +658,7 @@ def main():
                 continue
             if getattr(ins.op1, 'type', None) != decode16.OpType.MEM:
                 continue
-            d = getattr(ins.op1, 'disp', 0)
-            if 0 < d < len(code):
-                found.update(jump_table_targets(code, by_addr, d, esize=esize))
+            found.update(table_after_jump(code, ins, esize, valid))
         fresh = {t for t in found if t not in claimed and t in by_addr
                  and t not in tried}
         tried |= fresh
@@ -531,12 +672,21 @@ def main():
         body = [by_addr[a] for a in sorted(fmap[start])]
         if body:
             funcs.append((start, body))
-    pct = 100.0 * len(claimed) / max(1, len(insns))
-    print("carved %d functions from %d instructions reachable of %d (%.1f%%)"
-          % (len(funcs), len(claimed), len(insns), pct))
+    # Report BYTES covered, not instructions reached. Resync adds instructions
+    # the linear sweep never had, so "reached / swept" silently compares two
+    # different denominators and drifts upward on its own. Bytes cannot.
+    covered = bytearray(len(code))
+    for _s, _body in funcs:
+        for _i in _body:
+            for _k in range(_i.address, min(len(code), _i.address + _i.length)):
+                covered[_k] = 1
+    nb = sum(covered)
+    pct = 100.0 * nb / max(1, len(code))
+    print("carved %d functions covering %d of %d bytes (%.1f%%)"
+          % (len(funcs), nb, len(code), pct))
     if not a.seed_unreached and pct < 90.0:
-        print("   %d instructions unreached - tables, or entry points we have not"
-              % (len(insns) - len(claimed)))
+        print("   %d bytes unreached - tables, or entry points we have not"
+              % (len(code) - nb))
         print("   found yet (indirect calls). Not lifted; --seed-unreached forces it.")
 
     if a.stats:
