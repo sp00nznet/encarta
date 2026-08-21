@@ -257,7 +257,40 @@ which is why prologue scanning finds no function boundaries in it.
 
 Two things this does not yet solve:
 
-- **Segment 3 still lifts as one 6,900-instruction blob.** Its entry points are
+### Carving functions by control flow
+
+Frameless code has no prologue to split on, so the driver now finds function
+extents by **recursive descent**: walk from an entry, branch at conditionals,
+stop at a return or an indirect transfer, and treat near-call targets as new
+functions. Segment 3 goes from one 6,900-instruction blob to real functions.
+
+It also comes with a number that is worth being careful about. Descent from the
+entry points we can actually find reaches:
+
+| segment | reachable | functions |
+|---------|-----------|-----------|
+| 5 | 82.1% | 6 |
+| 1 | 51.3% | 40 |
+| **3 (decode core)** | **5.8%** | **3** |
+
+Seeding fresh roots into the leftovers reports 100% coverage and 145 functions
+for segment 3. That number is a lie. A code segment holds tables too, and
+disassembling those manufactures very convincing functions - a run of `00`
+bytes becomes `add [bx+si], al`, and one of the invented functions contains an
+`int 0x0` in the middle of what is supposed to be a video decoder. Segment 3
+has 4,846 zero bytes, which is where 142 imaginary functions came from.
+
+So seeding is opt-in (`--seed-unreached`) and the default reports what it could
+not reach instead of papering over it.
+
+**5.8% is the real state of the decode core.** Segment 3 is genuinely code -
+95 returns, entropy 6.03 - so the missing 94% is not table; it is functions
+whose entry points we have not found. They are not near calls, not far calls,
+not entry-table exports and not relocation targets, which leaves indirect calls
+through a function-pointer table. Finding that table is the next step, and it
+is now a single well-defined question rather than a vague one.
+
+- **Segment 3 previously lifted as one 6,900-instruction blob.** Its entry points are
   not direct far calls: the callers build a far pointer from an immediate pair
   (`mov [bp-1A], off` then `mov [bp-18], seg`, the fixup landing on the segment
   half), which the driver now reads - but that yields only a couple of entries.
