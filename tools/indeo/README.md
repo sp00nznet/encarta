@@ -131,7 +131,66 @@ Order of attack:
 3. Intra (keyframe) cells, checked against the reference YUV.
 4. Inter (delta) cells and motion vectors.
 
-### A better route than inference
+## Lifting IR32.DLL
+
+`IR32.DLL` **is** the decoder; it is simply a 16-bit NE binary, so it cannot be
+loaded in-process the way `DECO_32.DLL` was. It can be lifted instead, which is
+the method that already produced a byte-exact `DECO_32`. First question: does
+the 16-bit decoder in pcrecomp understand this binary?
+
+`ir32_scan.py` answers it - a linear sweep over every code segment, reporting
+what decodes and what does not:
+
+```bash
+py tools/indeo/ir32_scan.py H:\AAMSSTP\SYSTEM16\IR32.DLL
+```
+
+**99.21%** - 114,386 of 115,298 bytes, 45,996 instructions across all 40 code
+segments. Most segments decode completely; the weakest are the big compute
+segments (3 at 97.8%, 40 at 98.6%).
+
+### Shape of the binary
+
+| | |
+|---|---|
+| Segments | 47 (40 code, 7 data), 115,298 bytes of code |
+| Relocations | 943 (112 internal, 831 imports) |
+| Imports | WIN87EM, KERNEL, GDI, USER, MMSYSTEM |
+| Entry points | `DRIVERPROC`, `LIBMAIN`, `WEP`, `IR32`, two dialog procs |
+
+Segments **3** (20.8 KB, 4 relocations) and **40** (18 KB, none) make no calls
+at all - leaf compute, which is the shape of pixel inner loops. Together they
+are a third of the code.
+
+There is no shortcut through the call graph: the closure from `DRIVERPROC`
+reaches 39 of 40 segments (112 KB of 115 KB), because the VFW driver entry
+dispatches everything - decompress, compress and configuration alike. Narrowing
+to just the decode path needs the ICM message dispatch understood first.
+
+### What the 0.79% is
+
+Not random. The failures cluster on opcodes a 16-bit decoder would not expect:
+
+| Opcode | Count | What |
+|---|---|---|
+| `0F` | 279 | two-byte (286/386+) opcodes |
+| `66` | 101 | operand-size prefix - 32-bit ops in 16-bit code |
+| `67` | 97 | address-size prefix |
+| `64`/`65` | 147 | FS/GS segment prefixes |
+
+That is a codec written for speed: a 1995 video decoder doing per-pixel work
+would reach for 386 32-bit registers via `66` prefixes rather than stay in
+16-bit arithmetic. Some of these will be linear-sweep misalignment on embedded
+data, but the concentration in the compute segments says most are real.
+
+So the concrete next step is not a lifter change - it is teaching
+`pcrecomp/tools/disasm/decode16.py` the `66`/`67` prefixes and the `0F` opcode
+map. That closes the gap for this binary and for any other performance-minded
+16-bit code the toolbox meets later.
+
+### After that
+
+
 
 Deriving a whole codec from its output is slow, and this one has a shortcut
 that fits what this project already does well. `IR32.DLL` on CD1 **is the
