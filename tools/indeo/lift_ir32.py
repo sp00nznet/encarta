@@ -90,6 +90,90 @@ def entries_from_relocations(ne, seg_index):
     return hits
 
 
+COND_JUMPS = {'jo','jno','jb','jae','je','jne','jbe','ja','js','jns','jp','jnp',
+              'jl','jge','jle','jg','jcxz','loop','loopz','loopnz'}
+STOPS = {'ret', 'retf', 'iret', 'retn'}
+
+
+def trace(by_addr, start, decode16):
+    """Recursive descent from one entry. Returns (addresses in this function,
+    near-call targets it makes).
+
+    Segment 3 has 95 returns and not one `push bp; mov bp,sp` - optimised codec
+    code keeps no frame pointer - so prologue scanning finds nothing and the
+    whole segment lifts as a single blob. Following control flow finds the real
+    extent instead: walk from an entry, branch at conditionals, stop at a
+    return or an indirect/far transfer."""
+    body, calls, work = set(), set(), [start]
+    while work:
+        a = work.pop()
+        while a in by_addr and a not in body:
+            body.add(a)
+            ins = by_addr[a]
+            m = (ins.mnemonic or '').lower()
+            op1 = ins.op1
+            rel = op1 is not None and getattr(op1, 'type', None) in (
+                decode16.OpType.REL8, decode16.OpType.REL16)
+            if m in STOPS:
+                break
+            if m == 'jmp':
+                if rel and op1.disp in by_addr:
+                    a = op1.disp          # keep walking, same function
+                    continue
+                break                     # indirect or far: flow leaves us
+            if m in COND_JUMPS:
+                if rel and op1.disp in by_addr:
+                    work.append(op1.disp)
+                a += ins.length
+                continue
+            if m == 'call':
+                if rel:
+                    calls.add(op1.disp)   # a separate function
+                a += ins.length
+                continue
+            a += ins.length
+    return body, calls
+
+
+def carve_functions(decode16, instructions, seg_len, roots, seed_unreached=False):
+    """Recursive descent from every known entry.
+
+    By default it stops there and reports what it could not reach. Seeding new
+    roots into the leftovers reaches 100% "coverage", but a code segment holds
+    tables too, and disassembling those manufactures convincing functions out
+    of nothing - a run of 00 bytes becomes `add [bx+si], al` and an `int 0x0`.
+    Segment 3 carves into 3 real functions and 142 imaginary ones that way. A
+    number that only looks good is worse than a small honest one, so seeding is
+    opt-in."""
+    by_addr = {ins.address: ins for ins in instructions}
+    ordered = sorted(by_addr)
+    funcs, claimed, work = {}, set(), list(roots)
+    while True:
+        while work:
+            r = work.pop(0)
+            if r in claimed or r not in by_addr:
+                continue
+            body, calls = trace(by_addr, r, decode16)
+            if not body:
+                continue
+            funcs[r] = body
+            claimed |= body
+            for c in calls:
+                if c not in funcs and c in by_addr:
+                    work.append(c)
+        # Nothing reachable left. Restart at the first unclaimed instruction,
+        # which is usually the head of a function only ever entered indirectly.
+        # (Doing this in the inner loop skipped seeding whenever a root was
+        # already claimed, and the whole carve terminated early.)
+        if not seed_unreached:
+            break
+        nxt = next((a for a in ordered if a not in claimed), None)
+        if nxt is None:
+            break
+        work.append(nxt)
+    return funcs, claimed, by_addr
+
+
 def find_function_starts(decode16, instructions, seg_len, extra):
     """Offset 0, any near-call target inside the segment, and anything the
     caller passed in (relocation-derived entries or -entry)."""
@@ -114,6 +198,8 @@ def main():
     ap.add_argument("--seg", type=int, required=True)
     ap.add_argument("-o", "--out")
     ap.add_argument("--stats", action="store_true")
+    ap.add_argument("--seed-unreached", action="store_true",
+                    help="also lift code no entry point reaches (will lift data as code)")
     ap.add_argument("--entry", action="append", default=[],
                     help="extra function start, hex offset (repeatable)")
     a = ap.parse_args()
@@ -138,16 +224,22 @@ def main():
     print("function starts: %d (%d from relocations, %d from near calls)"
           % (len(starts), len(reloc_entries), len(starts) - len(reloc_entries & set(starts)) - 1))
 
-    # split the instruction stream at function starts
-    by_addr = {}
-    for ins in insns:
-        by_addr.setdefault(ins.address, ins)
+    # carve functions by following control flow, not by cutting the linear
+    # sweep at known starts - frameless code has no prologue to cut at
+    fmap, claimed, by_addr = carve_functions(decode16, insns, len(code), starts,
+                                             seed_unreached=a.seed_unreached)
     funcs = []
-    for i, s in enumerate(starts):
-        end = starts[i + 1] if i + 1 < len(starts) else len(code)
-        body = [ins for ins in insns if s <= ins.address < end]
+    for start in sorted(fmap):
+        body = [by_addr[a] for a in sorted(fmap[start])]
         if body:
-            funcs.append((s, body))
+            funcs.append((start, body))
+    pct = 100.0 * len(claimed) / max(1, len(insns))
+    print("carved %d functions from %d instructions reachable of %d (%.1f%%)"
+          % (len(funcs), len(claimed), len(insns), pct))
+    if not a.seed_unreached and pct < 90.0:
+        print("   %d instructions unreached - tables, or entry points we have not"
+              % (len(insns) - len(claimed)))
+        print("   found yet (indirect calls). Not lifted; --seed-unreached forces it.")
 
     if a.stats:
         sizes = sorted((len(b) for _, b in funcs), reverse=True)
