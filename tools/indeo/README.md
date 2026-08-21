@@ -272,9 +272,14 @@ when something reads it as 16-bit:
 | **13** | 0.002 | **0.001** | **32-bit** |
 | 5 | 0.000 | 0.021 | 16-bit |
 
-**Three segments - 2, 3 and 13, about 26 KB - are the 32-bit decode core.** The
-other 37 are 16-bit driver scaffolding: `DriverProc`, the VFW `ICM_*` message
-handlers, the dialogs.
+**Segments 2 and 3, about 23 KB, are the 32-bit decode core.** The rest are
+16-bit driver scaffolding: `DriverProc`, the VFW `ICM_*` message handlers, the
+dialogs.
+
+Segment 13 also scores 32-bit here, and should be read with suspicion: 0.002
+against 0.001 is not a verdict, it is a coin landing on edge. It is not code at
+all - see the zero-return check below - and a test that has to choose between
+two widths will always return one of them for data.
 
 Segment 1 is the useful counter-example. It sets exactly the same flags as
 segment 3, so a flag-based reading calls both 32-bit, but its own code settles
@@ -351,106 +356,36 @@ without it a walk runs off the end of one function into the next, and 11
 "functions" in segment 3 all reported ~1,300 instructions because they had
 swallowed their neighbours. Padding is zero fill or MSVC's `int3`.
 
-### Where it stands
+### A code segment returns
 
-| segment | bits | reachable | functions |
-|---------|------|-----------|-----------|
-| 1 | 16 | 68.2% | 84 |
-| 2 | 32 | 100% | 2 |
-| **3 (decode core)** | **32** | **33.4%** | **20** |
-| 5 | 16 | 98.7% | 7 |
-| 13 | 32 | 100% | 1 |
+Segment 13 carved into one function covering 100% of the segment, which reads
+as the best row in the table. It is data.
 
-**32 of the 40 code segments now reach 90% or better.** The 16-bit driver half
-is essentially solved. What is left is the part that matters: segment 3, the
-largest piece of the 32-bit core, still reaches only a third. It has no
-prologues to seed from and only 4 far-call entries, so its interior is reached
-by indirect call through a table this pass has not found yet.
+The signal that gives it away is blunt: **not one `ret` in 3,071 bytes**. Code
+returns. Optimised code, frameless code, hand-written assembly - all of it
+returns. A blob of data, meanwhile, carves into exactly one enormous "function"
+spanning the whole segment, because descent never meets a return to stop at, and
+that is indistinguishable from success if you only read the coverage column.
 
-`--stats` reports a carve-quality check alongside the coverage number, because
-recovering a fake entry point is not a loud failure - the lifter emits confident
-C for it just the same. It flags any function whose body is more than 5%
-zero-fill or junk opcodes. That check is what caught the mis-decoded segments in
-the first place: 10 of 16 segment-3 "functions" were flagged before the width
-was corrected, and none are now.
+The lift confirmed it after the fact. Segment 13's unhandled instructions were
+`daa`, `das`, `aaa`, `aas`, `bound`, `arpl`, `lldt`, `ltr`, `insb`, `outsb`,
+`packuswb` - BCD, string and system opcodes that no video codec emits. The
+carve-quality check missed it because at 65 junk instructions in 1,385 the
+density is 4.7%, just under its 5% threshold. The zero-return test does not care
+about thresholds.
 
-### Three ways a linear sweep lies
-
-Coverage sat at a third of the decode core for a while, and every remaining
-obstacle turned out to be the same mistake in a different costume: trusting the
-linear sweep to say where instructions begin. A sweep is misaligned wherever it
-crosses a table, and it stays misaligned until it happens to resync.
-
-**The jump table is not at the displacement.** Segment 3 has 34 indirect jumps
-and no indirect calls at all. Twenty-six of them look like this:
-
-```
-0x1C32   jmp dword ptr cs:[edx*4 + 0x185C]
-```
-
-Read 0x185C as the table and you get garbage, which is why they were written off
-as needing dataflow. The table is at **0x1C3C** - eight bytes of instruction,
-two bytes of `mov eax, eax` alignment padding, then the entries. The
-displacement is a base the loader fixes up and means nothing statically. Looking
-just past each jump instead resolves **32 of 34 tables, 103 targets**.
-
-**A target need not be in the sweep.** Validating those entries by membership in
-the linear sweep truncated the tables - the one at 0x1C3C appeared to start at
-0x1C44, losing its first two entries, because the sweep was misaligned across
-exactly that region. Decoding *at* the candidate address instead settles it
-honestly.
-
-**A root that is not in the sweep was silently dropped.** This was the
-expensive one. `carve_functions` skipped any root the sweep did not already list
-as an instruction boundary, so entries recovered at real cost - thunk prologues,
-jump-table targets - were discarded without a word. Seeding 0x2800 did nothing
-whatsoever. Re-decoding forward from the entry and splicing the result into the
-sweep, stopping when it rejoins, took segment 3 from 46% to 81% on its own.
-
-### The 32-bit segments have their own entry signature
-
-A 32-bit function callable from this DLL's 16-bit half opens with a thunk that
-converts the caller's frame and loads GS with the bitstream selector:
-
-```
-66 33 C0            xor ax, ax
-B8 CC CC CC CC      mov eax, <load-time fixup placeholder>
-8C DB / 8E C3       mov ebx, ds / mov es, ebx
-8B D5 / 33 ED       mov edx, ebp / xor ebp, ebp
-66 8B EC            mov bp, sp
-66 8E 6D 08         mov gs, word ptr [ebp + 8]
-```
-
-Match the **body**, not the placeholder. Searching for `B8 CC CC CC CC` finds
-nine entries, four of which were already known - and misses two that are
-identical except for the placeholder, `mov eax, 0xF8F70000` at 0x2C10 and
-0x3640. Those two turned out to be the entries to the last two unreached code
-runs, worth 11 points of coverage between them. Neither pattern is a superset of
-the other, so the driver takes both.
-
-Reaching that code also settled what it is. The two runs were briefly written
-off as data on the strength of their first 56 bytes, which really are a table -
-each function is followed by one, a 16-byte header and then 8-byte records
-pointing back into the function itself. Measuring pointer density across the
-whole run rather than eyeballing its head showed only 14% of dwords were
-plausible addresses, so the bulk was something else. It is the pixel
-interpolation:
-
-```
-0x3B07   xor ecx, edi
-0x3B09   and ecx, 0x78787878     <- four 4-bit lanes packed in a dword
-0x3B0F   add ecx, edi
-```
+`--stats` now warns on it. Across the file it fires on segments 13, 39 and 40 -
+exactly the three that other evidence already called data.
 
 ### Where it stands
 
 | segment | bits | bytes | covered | functions | lines | unhandled |
 |---------|------|-------|---------|-----------|-------|-----------|
 | 1 | 16 | 8,571 | 77.2% | 97 | 3,856 | 3 |
-| 2 | 32 | 2,222 | **100%** | 2 | 870 | 11 |
-| **3 (decode core)** | **32** | **20,851** | **92.5%** | **108** | **12,539** | **130** |
+| 2 | 32 | 2,222 | **100%** | 2 | 870 | **0** |
+| **3 (decode core)** | **32** | **20,851** | **92.5%** | **108** | **12,539** | **58** |
 | 5 | 16 | 6,920 | 99.6% | 7 | 2,541 | 1 |
-| 13 | 32 | 3,071 | **100%** | 1 | 1,414 | 65 |
+| 13 | - | 3,071 | *data - do not lift* | | | |
 
 Coverage is reported in **bytes**, not instructions. Resync adds instructions
 the sweep never had, so "instructions reached / instructions swept" compares two
@@ -459,19 +394,14 @@ different denominators and drifts upward on its own. Bytes cannot.
 The largest unreached runs in segment 3 are now the pointer tables themselves -
 304 bytes at 0x4E10 and 195 at 0x3BFD, both 100% dwords that are zero or a valid
 address - which is exactly what should not be lifted. `--stats` reports that
-density per run rather than a verdict, because two earlier attempts to classify
-code against data automatically, one by entropy and one by counting small
-dwords, each got a known case backwards.
+density per run rather than a verdict, because two attempts to classify code
+against data automatically, one by entropy and one by counting small dwords,
+each got a known case backwards.
 
-The unhandled counts are real and were briefly reported as zero. The 16-bit
-lifter marks a gap with the token `UNHANDLED`; `lift32_cpu` marks it
-`/* TODO */ abort();`, and the driver was only counting the former, so the
-32-bit output looked perfect while carrying 130 gaps. What it is missing in
-segment 3: `rol` (24), `lds` (22), `shld` (12), `retf` (12), `les` (2). The far
-pointer loads are the interesting ones - `lds`/`les` are what segmented 32-bit
-code does and a flat PE never needed. The remainder - 16 `int1`, 7 `aaa`, 4
-`aas`, 3 `sldt` - are not real instructions but the residue of a few carved
-regions that are still misaligned.
+Segment 3's remaining 58 unhandled instructions are `int1` (16), `aaa` (7),
+`aas` (4), `sldt` (3), `aam` (2) and `salc` - none of which are real
+instructions. They are the residue of a few regions still carved out of
+alignment, and they are the honest measure of what is left to fix.
 
 ### Lifting
 
