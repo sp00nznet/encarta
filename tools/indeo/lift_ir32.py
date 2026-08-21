@@ -74,9 +74,19 @@ def entries_from_relocations(ne, seg_index):
                 continue
             o = r.offset
             if o >= 3 and o + 2 <= len(d) and d[o - 3] in (0x9A, 0xEA):
+                # `9A off16 seg16` - direct far call, offset precedes the fixup
                 hits.add(struct.unpack_from("<H", d, o - 2)[0])
-            else:
-                hits.add(r.target_off)      # fall back to the recorded offset
+            elif o >= 5 and d[o - 3] == 0xC7 and d[o - 2] == 0x46 and d[o - 8] == 0xC7:
+                # A far pointer assembled in locals, which is how the compute
+                # segments are reached:
+                #     C7 46 e6 40 4F   mov [bp-1A], 0x4F40   <- offset
+                #     C7 46 e8 D5 0B   mov [bp-18], seg      <- fixup lands here
+                # The offset is the immediate of the PREVIOUS store.
+                hits.add(struct.unpack_from("<H", d, o - 5)[0])
+            elif o >= 2 and d[o - 1] in (0xB8, 0xBA, 0xB9, 0xBB):
+                # `mov reg, seg` with the offset pushed separately - the fixup
+                # gives us the segment only, so fall back to the entry table.
+                pass
     return hits
 
 

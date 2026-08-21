@@ -26,16 +26,52 @@ def load_tools(pcrecomp):
     return decode16, ne_parse
 
 
+def classify(ne):
+    """Is a "code" segment really code?
+
+    NE marks a segment CODE, but a codec parks its lookup tables in one too.
+    Lifting a table as code produces thousands of lines of plausible nonsense,
+    so decide first. Three signals separate them cleanly:
+
+      entropy   real code sits around 7 bits/byte; a table is far lower
+      ret count code returns; a table contains no C3/CB by coincidence at scale
+      prologues push bp / mov bp,sp - though optimised leaf code omits them,
+                so a zero here is suggestive, not decisive on its own
+    """
+    import math
+    print("%-5s %-8s %-6s %-6s %-6s  %s" % ("seg", "bytes", "H", "ret", "prol", "verdict"))
+    for seg in ne.code_segments:
+        d = seg.data
+        if not d:
+            continue
+        c = collections.Counter(d); n = len(d)
+        H = -sum((v / n) * math.log2(v / n) for v in c.values())
+        rets = d.count(0xC3) + d.count(0xCB)
+        prol = sum(1 for i in range(len(d) - 2)
+                   if d[i] == 0x55 and d[i + 1] == 0x8B and d[i + 2] == 0xEC)
+        # a table has low entropy AND never returns
+        verdict = "DATA (do not lift)" if (H < 5.0 and rets == 0) else "code"
+        if verdict == "code" and prol == 0 and rets < n / 400:
+            verdict = "code? (frameless / few rets)"
+        print("%-5d %-8d %-6.2f %-6d %-6d  %s" % (seg.index, n, H, rets, prol, verdict))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("ne_file")
     ap.add_argument("--pcrecomp", default=r"G:\recomp\pc\tools")
     ap.add_argument("--seg", type=int, default=0, help="only this segment")
+    ap.add_argument("--classify", action="store_true",
+                    help="code vs data per segment, before lifting anything")
     a = ap.parse_args()
 
     decode16, ne_parse = load_tools(a.pcrecomp)
     ne = ne_parse.parse_ne(a.ne_file)
     data = open(a.ne_file, "rb").read()
+
+    if a.classify:
+        return classify(ne)
     total_bytes = ok_bytes = 0
     total_insns = 0
     failures = collections.Counter()
