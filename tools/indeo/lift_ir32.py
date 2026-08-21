@@ -576,12 +576,32 @@ def main():
     parts, unhandled = [], 0
     if is32:
         import lift32_cpu
-        lifter = lift32_cpu.Lifter(a.ne_file, len(code),
-                                   read_va=lambda va, n: code[va:va + n])
+
+        class _NELifter(lift32_cpu.Lifter):
+            def disp_is_addr(self, insn, d):
+                """In an NE segment a displacement is never an image address.
+
+                The base class decides this from the PE .reloc table and falls
+                back to a range check, which here wraps every small constant:
+                `lea edi, [edi+4]` came out as `edi + GVA(4)`. A segment is its
+                own 0..64K space and its data lives in other segments reached
+                through DS, so no displacement wants wrapping."""
+                return False
+
+        lifter = _NELifter(a.ne_file, len(code),
+                           read_va=lambda va, n: code[va:va + n])
         lifter.image_lo, lifter.image_hi = 0, len(code)
+        emitted = set()
         for start, body in funcs:
-            lo = body[0].address
-            hi = body[-1].address + body[-1].length
+            # Name and slice from the ENTRY, not from the lowest address the
+            # body reached. Descent follows backward jumps, so body[0] can sit
+            # far below the entry - keying on it emitted one shared region 16
+            # times under the same name, and the file would not have compiled.
+            lo = start
+            hi = max(i.address + i.length for i in body)
+            if hi <= lo or (lo, hi) in emitted:
+                continue
+            emitted.add((lo, hi))
             try:
                 c = lifter.lift_function(code[lo:hi], lo)
             except Exception as e:
@@ -614,6 +634,16 @@ def main():
                    "32-bit" if is32 else "16-bit",
                    "capstone + lift32_cpu" if is32 else "decode16 + lift16",
                    "recomp32.h" if is32 else "recomp16.h"))
+        if is32:
+            f.write(
+                "/* NOTE: GVA() must be the identity here. The 32-bit\n"
+                " * lifter is written against a PE, where a jump table\n"
+                " * holds virtual addresses; an NE segment's table holds\n"
+                " * plain segment offsets, so wrapping them would make\n"
+                " * every switch miss. There is no NE 32-bit runtime yet:\n"
+                " * this C is the lift result, it does not compile as-is.\n"
+                " */\n\n")
+
         f.write("\n\n".join(parts))
         f.write("\n")
     print("wrote %s: %d functions, %d lines, %d UNHANDLED instructions"

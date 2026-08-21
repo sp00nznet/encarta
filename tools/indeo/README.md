@@ -374,6 +374,52 @@ zero-fill or junk opcodes. That check is what caught the mis-decoded segments in
 the first place: 10 of 16 segment-3 "functions" were flagged before the width
 was corrected, and none are now.
 
+### The 32-bit core lifts
+
+32-bit segments emit through pcrecomp's `lift32_cpu` - the same lifter that
+produced the Encarta executable - rather than `lift16`. It is written against a
+PE but only loosely: `read_va` is injectable and the image bounds are plain
+attributes, so a 64K NE segment can pose as a tiny image based at 0.
+
+| segment | functions | lines | unhandled |
+|---------|-----------|-------|-----------|
+| 2 | 2 | 870 | 0 |
+| 3 | 20 | 3,672 | 0 |
+| 13 | 1 | 1,414 | 0 |
+| 5 (16-bit, for comparison) | 7 | 2,541 | 1 |
+
+Three things had to be fixed to get there, and each was silent rather than
+loud:
+
+- **Segment registers.** 23 functions failed outright on `mov ds, ax` - a flat
+  PE never touches DS, so `lift32_cpu` had no case for it. They are now stored
+  on the CPU struct, and `cpu.h` records the limit: stored, not used in address
+  computation. Code that switches DS to reach another segment's data needs a
+  selector-to-base mapping the runtime does not have.
+- **Displacements were being GVA-wrapped.** The base class decides whether a
+  displacement is an absolute address from the PE `.reloc` table and falls back
+  to a range check, which here caught every small constant - `lea edi, [edi+4]`
+  came out as `edi + GVA(4)`. An NE segment is its own 0..64K space, so the NE
+  driver overrides that to always false.
+- **Functions were named from the wrong address.** Naming and slicing from the
+  lowest address descent reached, rather than the entry, emitted one shared
+  region 16 times under the same name. Descent follows backward jumps, so
+  `body[0]` is not the entry.
+
+The emitted C is a faithful translation - the plane copy at 0x0F3D reads as it
+should:
+
+```c
+c->eax = rd32((c->edi + 0xFFFFFF50u));   /* mov eax, [edi - 0xb0] */
+wr32((c->edi), c->eax);                  /* mov [edi], eax        */
+wr32((c->edi + 0x000000B0u), c->eax);    /* mov [edi + 0xb0], eax */
+c->edi = (c->edi + 0x00000004u);         /* lea edi, [edi + 4]    */
+```
+
+It does not compile yet: there is no NE 32-bit runtime, and `GVA()` has to be
+the identity there because an NE jump table holds segment offsets rather than
+virtual addresses. The generated file says so in its own header.
+
 Still open:
 
 - **Segment 3's indirect dispatch.** Its jump tables are 4-byte entries in the
