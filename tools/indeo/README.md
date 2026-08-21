@@ -283,7 +283,37 @@ has 4,846 zero bytes, which is where 142 imaginary functions came from.
 So seeding is opt-in (`--seed-unreached`) and the default reports what it could
 not reach instead of papering over it.
 
-**5.8% is the real state of the decode core.** Segment 3 is genuinely code -
+### Segment 3 dispatches through jump tables
+
+The missing entry points are not an external dispatch table - they are internal.
+Segment 3 contains **36 indirect jumps**, and the tables they read sit in the
+code segment itself:
+
+```
+@0x0DB0  jmp word cs:[bx+si+0xDB8]
+   table@0x0DB8:  0DF0 0000 0E68 0000 1BB0 0000 ...
+```
+
+Entries alternate with a zero word, and the non-zero values are valid
+instruction addresses. This is one switch-dispatched decoder, which is exactly
+the shape an Indeo cell decoder should have - a jump on the cell opcode into
+per-case handlers.
+
+Resolving them **during** descent changes nothing, and the reason is worth
+recording: the tables live inside the functions that cannot be reached, so
+control flow never arrives to read them. They have to be harvested statically,
+by scanning every `jmp [mem]` with a constant displacement across the whole
+segment and taking whatever its table points at.
+
+That recovers 26 targets and takes segment 3 from **5.8% to 19.3%** reachable,
+3 functions to 17.
+
+The remaining 80% is still out of reach. Ten of the 36 indirect jumps take
+their table address from a register (`jmp word cs:[si]`), so the table cannot be
+found without tracking what `si` held - that needs light dataflow, not more
+pattern matching. That is the next step.
+
+**5.8% was the state before jump tables; 19.3% is the state now.** Segment 3 is genuinely code -
 95 returns, entropy 6.03 - so the missing 94% is not table; it is functions
 whose entry points we have not found. They are not near calls, not far calls,
 not entry-table exports and not relocation targets, which leaves indirect calls
