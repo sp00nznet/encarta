@@ -202,6 +202,44 @@ literal `0F 0F 0F 0F ...`, a table embedded in a code segment. Linear sweep
 cannot tell that from code, and does not need to - lifting will use the call
 graph rather than a sweep.
 
+### The lift driver
+
+`lift_ir32.py` is the NE front end these tools did not have - `decode16` and
+`lift16` had no NE driver, and `generate.py`/`translator.py` are both 32-bit PE.
+It feeds a segment through decode -> `lift16.Lifter.lift_function` -> C.
+
+```bash
+py tools/indeo/lift_ir32.py <IR32.DLL> --seg 1 -o ir32_seg1.c
+py tools/indeo/lift_ir32.py <IR32.DLL> --seg 1 --stats
+```
+
+Segment 1 lifts to **53 functions, 4,504 lines of C**, 15 unhandled
+instructions. So the pipeline works end to end.
+
+**Finding function boundaries is the open problem**, and it has an NE-specific
+cause. Every internal relocation in this DLL is a **SELECTOR** fixup: it patches
+only the segment half of a far pointer, so `target_off` is *not* an entry point.
+Reading it as one finds a single "entry" for a 20 KB segment.
+
+The offsets are immediates in the calling instruction instead - 92 of the 112
+internal relocations sit exactly three bytes past a `9A` (far call direct)
+opcode, so the entry point is the `off16` just before the fixup. Recovering
+them that way yields entry points for 35 segments and gives segment 1 its 53
+functions with believable sizes (611, 217, 198, 181, 163; median 42).
+
+Two things it does not yet solve:
+
+- **Segments 3 and 40 - the decode core - are not reached by any direct far
+  call**, so they still yield one entry point each and lift as a single
+  7,000-9,900 instruction blob. Being moveable segments they are presumably
+  entered through the entry table or by indirect call, and that path has to be
+  followed before the core can be split into functions.
+- **Data inside code segments gets lifted as code.** Segment 1's output
+  contains a far call to `0000:FFFF` and an `int 0x21` - a DOS interrupt in a
+  Windows DLL, which is a table being disassembled, not a function. The
+  boundary pass needs to be call-graph driven rather than "split the linear
+  sweep at known starts".
+
 ### After that
 
 
