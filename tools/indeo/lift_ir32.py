@@ -95,7 +95,32 @@ COND_JUMPS = {'jo','jno','jb','jae','je','jne','jbe','ja','js','jns','jp','jnp',
 STOPS = {'ret', 'retf', 'iret', 'retn'}
 
 
-def trace(by_addr, start, decode16):
+def jump_table_targets(code, by_addr, disp, limit=256):
+    """Read a jump table at `disp` and return the targets it holds.
+
+    Segment 3 dispatches through tables kept in the code segment itself:
+        jmp word cs:[bx+si+0xDB8]
+        table@0xDB8: 0DF0 0000 0E68 0000 1BB0 0000 ...
+    Entries alternate with a zero high word, so the walk skips zeros and stops
+    at the first non-zero value that is not a valid instruction address - which
+    is where the table ends and something else begins."""
+    import struct
+    out, k, misses = [], 0, 0
+    while k < limit and disp + 2 * k + 1 < len(code):
+        v = struct.unpack_from("<H", code, disp + 2 * k)[0]
+        k += 1
+        if v == 0:
+            continue
+        if v in by_addr:
+            out.append(v); misses = 0
+        else:
+            misses += 1
+            if misses >= 2:
+                break
+    return out
+
+
+def trace(by_addr, start, decode16, code=None):
     """Recursive descent from one entry. Returns (addresses in this function,
     near-call targets it makes).
 
@@ -120,6 +145,13 @@ def trace(by_addr, start, decode16):
                 if rel and op1.disp in by_addr:
                     a = op1.disp          # keep walking, same function
                     continue
+                if (code is not None and op1 is not None
+                        and getattr(op1, 'type', None) == decode16.OpType.MEM):
+                    # switch dispatch: the cases belong to this function
+                    d = getattr(op1, 'disp', 0)
+                    if 0 < d < len(code):
+                        work.extend(t for t in jump_table_targets(code, by_addr, d)
+                                    if t not in body)
                 break                     # indirect or far: flow leaves us
             if m in COND_JUMPS:
                 if rel and op1.disp in by_addr:
@@ -135,7 +167,7 @@ def trace(by_addr, start, decode16):
     return body, calls
 
 
-def carve_functions(decode16, instructions, seg_len, roots, seed_unreached=False):
+def carve_functions(decode16, instructions, seg_len, roots, seed_unreached=False, code=None):
     """Recursive descent from every known entry.
 
     By default it stops there and reports what it could not reach. Seeding new
@@ -153,7 +185,7 @@ def carve_functions(decode16, instructions, seg_len, roots, seed_unreached=False
             r = work.pop(0)
             if r in claimed or r not in by_addr:
                 continue
-            body, calls = trace(by_addr, r, decode16)
+            body, calls = trace(by_addr, r, decode16, code)
             if not body:
                 continue
             funcs[r] = body
@@ -220,6 +252,27 @@ def main():
     extra = set(int(x, 16) for x in a.entry)
     reloc_entries = entries_from_relocations(ne, a.seg)
     extra |= reloc_entries
+
+    # Jump tables have to be harvested statically, not during descent: they sit
+    # INSIDE the functions we cannot reach, so waiting until control flow gets
+    # there never happens. Scan every `jmp [mem]` with a constant displacement
+    # and take everything its table points at.
+    by_all = {i.address: i for i in insns}
+    jt = set()
+    for ins in insns:
+        if (ins.mnemonic or '').lower() != 'jmp' or ins.op1 is None:
+            continue
+        if getattr(ins.op1, 'type', None) != decode16.OpType.MEM:
+            continue
+        d = getattr(ins.op1, 'disp', 0)
+        if 0 < d < len(code):
+            jt.update(jump_table_targets(code, by_all, d))
+    if jt:
+        print("jump tables: %d targets recovered from %d indirect jumps"
+              % (len(jt), sum(1 for i in insns
+                              if (i.mnemonic or '').lower() == 'jmp' and i.op1 is not None
+                              and getattr(i.op1, 'type', None) == decode16.OpType.MEM)))
+    extra |= jt
     starts = find_function_starts(decode16, insns, len(code), extra)
     print("function starts: %d (%d from relocations, %d from near calls)"
           % (len(starts), len(reloc_entries), len(starts) - len(reloc_entries & set(starts)) - 1))
@@ -227,7 +280,7 @@ def main():
     # carve functions by following control flow, not by cutting the linear
     # sweep at known starts - frameless code has no prologue to cut at
     fmap, claimed, by_addr = carve_functions(decode16, insns, len(code), starts,
-                                             seed_unreached=a.seed_unreached)
+                                             seed_unreached=a.seed_unreached, code=code)
     funcs = []
     for start in sorted(fmap):
         body = [by_addr[a] for a in sorted(fmap[start])]
