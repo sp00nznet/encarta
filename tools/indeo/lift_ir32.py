@@ -724,6 +724,21 @@ def main():
             frac = (zeros + junk) / float(len(body))
             if frac > 0.05:
                 flagged.append((frac, start, len(body), zeros, junk))
+        # A code segment returns. Zero returns across everything carved is not a
+        # quirk of optimised code, it is the segment not being code - and this
+        # failure is quiet, because a blob of data carves into exactly one
+        # enormous "function" covering 100% of the segment, which reads as the
+        # best result in the table. Segment 13 did precisely that: 1 function,
+        # 100% coverage, and a lift whose only unhandled instructions were daa,
+        # das, aaa, aas, bound, arpl, lldt and packuswb - BCD and system opcodes
+        # that no video codec emits.
+        rets = sum(1 for _s, _b in funcs for _i in _b
+                   if (_i.mnemonic or '').lower() in ('ret', 'retf', 'retn',
+                                                      'iret', 'iretd'))
+        if rets == 0 and funcs:
+            print("WARNING: not one return in %d carved functions - this segment"
+                  % len(funcs))
+            print("         is almost certainly data, not code. Do not lift it.")
         if flagged:
             print("suspect functions (>5%% zero-fill or junk opcodes):")
             for frac, start, n, z, j in sorted(flagged, reverse=True):
