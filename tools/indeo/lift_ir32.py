@@ -674,8 +674,32 @@ def main():
             if getattr(ins.op1, 'type', None) != decode16.OpType.MEM:
                 continue
             found.update(table_after_jump(code, ins, esize, valid))
+        # Also: a branch that leaves its own function needs the target to BE a
+        # function. The lifter emits `goto` for a target inside the function it
+        # is lifting and `dispatch(target)` for one outside, and dispatch can
+        # only reach an entry - so a block two functions share, entered by a
+        # branch from the one that does not contain it, has nowhere to land.
+        # Eight of these showed up as unresolved dispatches the first time the
+        # runtime ran the whole entry table. Splitting a function at such a
+        # target costs nothing: it is a basic-block boundary either way.
+        for _st, _body in fmap.items():
+            _lo = _st
+            _hi = max(by_addr[x].address + by_addr[x].length for x in _body)
+            for _addr in _body:
+                _ins = by_addr[_addr]
+                _o = _ins.op1
+                if _o is None or getattr(_o, 'type', None) != decode16.OpType.REL16:
+                    continue
+                _m = (_ins.mnemonic or '').lower()
+                if not (_m == 'jmp' or _m == 'call' or _m in COND_JUMPS):
+                    continue
+                if _o.disp in by_addr and not (_lo <= _o.disp < _hi):
+                    found.add(_o.disp)
+
         fresh = {t for t in found if t not in claimed and t in by_addr
                  and t not in tried}
+        fresh |= {t for t in found if t in by_addr and t not in fmap
+                  and t not in tried}
         tried |= fresh
         if not fresh or rounds > 12:
             break
@@ -789,10 +813,47 @@ def main():
     # but only loosely: `read_va` is injectable and the image bounds are plain
     # attributes, so a 64K NE segment can pose as a tiny image based at 0.
     parts, unhandled = [], 0
+    emitted_entries = []
+    import re as _re
+    _re_name = _re.compile(chr(92)+'bL_([0-9A-F]{8})'+chr(92)+'b')
     if is32:
         import lift32_cpu
 
         class _NELifter(lift32_cpu.Lifter):
+            # Memory in a segmented build is not flat, and the base class has
+            # two assumptions that only hold for a PE:
+            #
+            #   fs: is the thread block, so fs-relative access becomes
+            #       __readfsdword. Here FS is one of the DLL's own data
+            #       segments - IR32 keeps decoder state there - and the
+            #       intrinsic would read the host thread's TIB instead.
+            #   everything else is flat, so the segment is simply ignored.
+            #       Here DS, ES and GS are three different objects: the DLL's
+            #       data, the output frame, and the compressed bitstream, the
+            #       last two handed in by the caller.
+            #
+            # So every access carries its segment, and the runtime turns a
+            # selector into a base. Default is DS, or SS when the operand is
+            # addressed through EBP or ESP, which is the x86 rule and matters
+            # here because the 32-bit half reads its arguments off the 16-bit
+            # caller's stack as `[ebp+6]`.
+            def _seg_of(self, op):
+                s = self.seg_name(op)
+                if s:
+                    return s
+                m = op.mem
+                base = self.md.reg_name(m.base) if m.base else None
+                return "ss" if base in ("ebp", "esp", "bp", "sp") else "ds"
+
+            def rd(self, insn, op):
+                a = "SEGB(c->%s) + %s" % (self._seg_of(op), self.seg_off(insn, op))
+                return {1: "rd8(%s)", 2: "rd16(%s)", 4: "rd32(%s)"}[op.size] % a
+
+            def wr(self, insn, op, val):
+                a = "SEGB(c->%s) + %s" % (self._seg_of(op), self.seg_off(insn, op))
+                return {1: "wr8(%s, %s);", 2: "wr16(%s, %s);",
+                        4: "wr32(%s, %s);"}[op.size] % (a, val)
+
             def disp_is_addr(self, insn, d):
                 """In an NE segment a displacement is never an image address.
 
@@ -824,7 +885,12 @@ def main():
                 continue
             if isinstance(c, list):
                 c = "\n".join(c)
+            # lift32_cpu names functions L_<addr> from the segment-relative
+            # address, so segment 2's L_00000000 and segment 3's are the same
+            # symbol. Prefix per segment or they collide at link time.
+            c = _re_name.sub(lambda m: "L_s%d_%s" % (a.seg, m.group(1)), c)
             unhandled += c.count("UNHANDLED") + c.count("abort()")
+            emitted_entries.append(lo)
             parts.append(c)
     else:
         lifter = lift16.Lifter()
@@ -851,16 +917,29 @@ def main():
                    "recomp32.h" if is32 else "recomp16.h"))
         if is32:
             f.write(
-                "/* NOTE: GVA() must be the identity here. The 32-bit\n"
-                " * lifter is written against a PE, where a jump table\n"
-                " * holds virtual addresses; an NE segment's table holds\n"
-                " * plain segment offsets, so wrapping them would make\n"
-                " * every switch miss. There is no NE 32-bit runtime yet:\n"
-                " * this C is the lift result, it does not compile as-is.\n"
+                "/* Segmented 32-bit NE code. Every memory access carries its\n"
+                " * segment: SEGB(sel) is the runtime's selector -> base map.\n"
+                " * DS is the DLL's own data, ES the output frame, GS the\n"
+                " * compressed bitstream - the last two supplied by the caller.\n"
+                " * GVA() must be the identity: an NE jump table holds segment\n"
+                " * offsets, not virtual addresses.\n"
                 " */\n\n")
 
         f.write("\n\n".join(parts))
         f.write("\n")
+        if is32 and emitted_entries:
+            # The runtime resolves an indirect target - a jump-table entry, a
+            # far call from the 16-bit half - by looking the offset up here.
+            # Sorted, so the lookup can binary-search.
+            f.write("\n/* entry table: segment offset -> lifted function */\n")
+            for off in sorted(set(emitted_entries)):
+                f.write("void L_s%d_%08X(CPU *c);\n" % (a.seg, off))
+            f.write("\nconst ne_entry ir32_seg%d_entries[] = {\n" % a.seg)
+            for off in sorted(set(emitted_entries)):
+                f.write("    { 0x%08Xu, L_s%d_%08X },\n" % (off, a.seg, off))
+            f.write("};\nconst unsigned ir32_seg%d_entry_count =\n"
+                    "    sizeof(ir32_seg%d_entries)/sizeof(ir32_seg%d_entries[0]);\n"
+                    % (a.seg, a.seg, a.seg))
     print("wrote %s: %d functions, %d lines, %d UNHANDLED instructions"
           % (out, len(parts), sum(p.count("\n") for p in parts), unhandled))
     return 0
