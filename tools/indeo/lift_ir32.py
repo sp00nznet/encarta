@@ -585,21 +585,36 @@ def main():
     # segment 1 has 58 of them and near-call scanning finds almost nothing.
     # Only counted at an address the sweep already decodes as an instruction,
     # so the byte pattern occurring inside a longer instruction is ignored.
-    # The 32-bit segments have their own entry signature. A 32-bit function
-    # callable from this DLL's 16-bit half starts with the thunk that converts
-    # the caller's frame:
+    # The 32-bit segments announce their own entries. A 32-bit function
+    # callable from this DLL's 16-bit half opens with a thunk that converts the
+    # caller's frame and loads GS with the bitstream selector:
     #
-    #     66 33 C0           xor ax, ax
-    #     B8 CC CC CC CC     mov eax, 0xCCCCCCCC   <- load-time fixup placeholder
+    #     66 33 C0            xor ax, ax
+    #     B8 CC CC CC CC      mov eax, <fixup placeholder>
+    #     8C DB / 8E C3       mov ebx, ds / mov es, ebx
+    #     8B D5 / 33 ED       mov edx, ebp / xor ebp, ebp
+    #     66 8B EC            mov bp, sp
+    #     66 8E 6D 08         mov gs, word ptr [ebp + 8]
     #
-    # Segment 3 has exactly nine. Four are the far-call entries already known,
-    # and the other four sit inside a 10 KB run that nothing else referenced at
-    # all - no branch, no jump table, no relocation.
+    # Match the BODY, not the placeholder. Matching `B8 CC CC CC CC` finds nine
+    # entries and misses two more that are identical but for the placeholder
+    # (0xF8F70000 at 0x2C10 and 0x3640) - and those two are the entries to the
+    # last two unreached code runs in segment 3. Neither pattern is a superset
+    # of the other, so take both.
     thunks = set()
     if is32:
         import re as _re
+        for pat in (bytes((0x8C, 0xDB, 0x8E, 0xC3, 0x8B, 0xD5, 0x33, 0xED)),
+                    bytes((0x8B, 0xD5, 0x33, 0xED, 0x66, 0x8B, 0xEC))):
+            for m in _re.finditer(_re.escape(pat), code):
+                q = m.start()
+                if q >= 5 and code[q - 5] == 0xB8:      # back up over mov eax, imm32
+                    q -= 5
+                    if q >= 3 and code[q - 3:q] == bytes((0x66, 0x33, 0xC0)):
+                        q -= 3                          # ...and the leading xor ax, ax
+                thunks.add(q)
         pat = bytes((0x66, 0x33, 0xC0, 0xB8, 0xCC, 0xCC, 0xCC, 0xCC))
-        thunks = set(m.start() for m in _re.finditer(_re.escape(pat), code))
+        thunks |= set(m.start() for m in _re.finditer(_re.escape(pat), code))
         extra |= thunks
 
     decoded_at = set(i.address for i in insns)
@@ -717,6 +732,41 @@ def main():
             print("   ^ these entry points are probably not real code")
         else:
             print("no function shows zero-fill or junk-opcode density: carve looks clean")
+
+        # What is left over? "81% covered" means very different things
+        # depending on whether the rest is code we cannot reach or data we must
+        # never lift, so report the evidence instead of a verdict - earlier
+        # attempts to classify this by entropy or by counting small dwords each
+        # got a known case backwards.
+        #
+        # The one solid signal: a table of code pointers is mostly dwords that
+        # are either zero or a valid address in this segment. Real code is not.
+        runs, i = [], 0
+        while i < len(code):
+            if covered[i]:
+                i += 1; continue
+            j = i
+            while j < len(code) and not covered[j]:
+                j += 1
+            runs.append((i, j - i)); i = j
+        if runs:
+            runs.sort(key=lambda r: -r[1])
+            print("%d unreached runs, largest:" % len(runs))
+            for off, n in runs[:6]:
+                tot = ptr = zero = 0
+                for k in range(off, off + n - (esize - 1), esize):
+                    v = int.from_bytes(code[k:k + esize], "little")
+                    tot += 1
+                    if v == 0:
+                        zero += 1
+                    elif valid(v):
+                        ptr += 1
+                pct = 100.0 * (ptr + zero) / max(1, tot)
+                ends = "ends at a known entry" if (off + n) in starts else ""
+                print("   0x%04X  %5d bytes  %3.0f%% of %s are 0 or a valid "
+                      "address (%d pointers)  %s"
+                      % (off, n, pct, "dwords" if esize == 4 else "words",
+                         ptr, ends))
         return 0
 
     # 32-bit segments go through pcrecomp's 32-bit lifter - the same one that
@@ -759,7 +809,7 @@ def main():
                 continue
             if isinstance(c, list):
                 c = "\n".join(c)
-            unhandled += c.count("UNHANDLED")
+            unhandled += c.count("UNHANDLED") + c.count("abort()")
             parts.append(c)
     else:
         lifter = lift16.Lifter()
@@ -772,7 +822,7 @@ def main():
                 continue
             if isinstance(c, list):
                 c = "\n".join(c)
-            unhandled += c.count("UNHANDLED")
+            unhandled += c.count("UNHANDLED") + c.count("abort()")
             parts.append(c)
 
     out = a.out or ("ir32_seg%d.c" % a.seg)
