@@ -46,3 +46,4 @@ tools/recomp/deco32_data.c
 # Python bytecode
 __pycache__/
 *.pyc
+tools/indeo/runtime/build/

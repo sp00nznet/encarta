@@ -439,17 +439,96 @@ It does not compile yet: there is no NE 32-bit runtime, and `GVA()` has to be
 the identity there because an NE jump table holds segment offsets rather than
 virtual addresses. The generated file says so in its own header.
 
+### The runtime: it runs
+
+`runtime/` is what turns the lifted C into a program. `build.bat <IR32.DLL>`
+lifts both 32-bit segments and links them against it.
+
+```
+loaded 47 segments; auto-data is segment 47
+segment 3: 20851 bytes at 016A5BA0, 217 lifted entries
+entry table: sorted and complete
+sweep: 191 of 217 entries returned, 26 faulted
+dispatch: 6 misses, 6 distinct targets with no lifted entry
+```
+
+**Memory is the whole design.** A PE has one address space; an NE has one per
+segment, and a register here holds an *offset within a segment*, not an
+address. `mov eax, [0xE1A8]` means offset 0xE1A8 in DS. `mov bh, gs:[ebp+1]`
+means an offset in whatever GS the caller passed - which for IR32 is the
+compressed bitstream, while ES is the output frame and DS is the decoder's own
+state. So every lifted access carries its segment and resolves through a
+selector table:
+
+```c
+rd32(SEGB(c->ds) + offset)
+```
+
+`SEGB` is a 64K-entry array mapping selector to the host address the segment
+was loaded at. The build is 32-bit - the assumption `cpu.h` already documents -
+so a host address fits in `uint32_t` and the existing `rd`/`wr` dereference it
+directly. No emulated address space; one array lookup per access.
+
+That also fixed a real error in what the lifter emitted. pcrecomp maps `fs:`
+to `__readfsdword`, correct for a PE where FS is the thread block and used for
+SEH prologues. IR32 keeps decoder state in an FS-addressed *segment*, so those
+301 accesses would have read the host thread's TIB. The NE lifter overrides
+the whole `rd`/`wr` path rather than special-casing FS.
+
+**The stack is a segment too**, and finding that out took running the code.
+The first design gave SS a base of zero so `cpu.h`'s `push32`/`pop32` - which
+use `c->esp` raw - would agree with `[ebp+6]` accesses going through `SEGB`.
+That works right up until the callee does `mov bp, sp`, which truncates ESP to
+16 bits: fine for an offset, fatal for a host address. So SS gets a real base
+like everything else, ESP is a small number, and `STACK_BASE` is now a hook in
+`cpu.h` that defaults to zero for flat builds.
+
+### What the sweep is for
+
+Calling every entry with a blank machine measures the runtime, not the decoder.
+Most of these functions want arguments - a bitstream, an output frame - and
+without them an access through an unset selector lands near null, which is
+exactly what the selector table is designed to make loud. What it establishes
+is that dispatch resolves, that the segment bases hold, and that nothing
+corrupts the machine badly enough to take the process down. Before it existed,
+"it links" was the entire body of evidence.
+
+Its first run found something worth having. Fourteen dispatch targets had no
+lifted entry, and they split cleanly in two:
+
+- **Six land on an `int3`.** They are jump-table entries for the invalid index
+  - a trap, deliberately. Descent stops at padding, so no function is emitted,
+  and dispatching to one aborts. That is the correct behaviour and they are
+  left alone.
+- **Eight are real code**, shared blocks entered by a branch from a function
+  that does not contain them. The lifter emits `goto` for a target inside the
+  function it is lifting and `dispatch()` for one outside, and dispatch can only
+  reach an *entry* - so those blocks had nowhere to land. Feeding cross-function
+  branch targets back as roots fixes it, and splitting a function at one costs
+  nothing since it is a basic-block boundary either way.
+
+That last change was worth more than the miss it fixed. Segment 3 went from 108
+functions to 217 and from **12,520 lines to 5,333** - the old extents overlapped
+heavily and lifted the same code repeatedly - and its unhandled count went from
+52 to **zero**, because the fragments no longer straddle the misaligned regions
+that were producing `int1` and `aaa`.
+
+| segment | bits | bytes | covered | functions | lines | unhandled |
+|---------|------|-------|---------|-----------|-------|-----------|
+| 2 | 32 | 2,222 | 100% | 2 | 870 | 0 |
+| **3 (decode core)** | **32** | **20,851** | **92.5%** | **217** | **5,333** | **0** |
+
 Still open:
 
-- **The last fifth of segment 3.** What remains is reached through a dispatch
-  table the DLL builds at init - the thunk at 0x2800 reads `[eax*4 + 8]` in the
-  data segment after loading GS with the bitstream selector. That table is
-  written by code, not present in the image, so finding it statically means
-  following what segment 3's own initialisation stores.
-- **No NE 32-bit runtime.** Segment registers, `GVA()`, and far calls between
-  segments all need one before any of this executes.
-- **Data inside code segments still lifts as code** where descent reaches it.
-  Segments 39 and 40 are excluded by classification; smaller tables are not.
+- **Nothing decodes a frame yet.** The 26 entries that fault are the thunks,
+  and they fault because nobody has handed them a bitstream. The next step is
+  a caller that fills GS, ES and the argument frame the way the 16-bit half
+  does, which means reading how `DriverProc` sets up an `ICM_DECOMPRESS`.
+- **The 16-bit half is not lifted.** 37 segments of driver scaffolding, at
+  99%+ carve coverage but going through `lift16`, which needs its own runtime.
+- **Selectors are ours, not the loader's.** `ne_map` assigns selector == segment
+  number. Code that reads a selector out of its own data - the DLL's fixups
+  patch real ones at load time - has nothing to read yet.
 
 ### After that
 
