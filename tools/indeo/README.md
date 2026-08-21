@@ -227,13 +227,42 @@ opcode, so the entry point is the `off16` just before the fixup. Recovering
 them that way yields entry points for 35 segments and gives segment 1 its 53
 functions with believable sizes (611, 217, 198, 181, 163; median 42).
 
-Two things it does not yet solve:
+### Classify before lifting
 
-- **Segments 3 and 40 - the decode core - are not reached by any direct far
-  call**, so they still yield one entry point each and lift as a single
-  7,000-9,900 instruction blob. Being moveable segments they are presumably
-  entered through the entry table or by indirect call, and that path has to be
-  followed before the core can be split into functions.
+A late correction to the plan above. Segments 3 and 40 were called "the decode
+core - leaf compute, the shape of pixel inner loops" because they are large,
+make no calls and carry almost no relocations. Half of that was wrong.
+
+`ir32_scan.py --classify` weighs three signals per segment:
+
+| seg | bytes | entropy | `ret` | prologues | verdict |
+|-----|-------|---------|-------|-----------|---------|
+| 1 | 8,571 | 7.15 | 103 | 58 | code |
+| 3 | 20,851 | 6.03 | 95 | 0 | code, frameless |
+| **40** | **17,952** | **3.83** | **0** | 0 | **DATA - do not lift** |
+
+**Segment 40 is a lookup table, not code.** 17,952 bytes holding 42 distinct
+values in the range 0..187, no `ret` anywhere, and 75.8% of bytes equal to the
+byte two positions later. NE marks it CODE because that is where the linker put
+it; lifting it would have produced ~10,000 lines of plausible nonsense. It is
+also where the earlier `0F 0F 0F 0F` decode "failures" came from.
+
+That is good news twice over: a third of the supposed decode core does not need
+lifting at all, and an 18 KB table of small values is very likely the VQ and
+reconstruction tables our own decoder needs anyway.
+
+**Segment 3 is real code but frameless** - 95 returns and not one
+`push bp; mov bp,sp`. Optimised codec inner loops do not keep a frame pointer,
+which is why prologue scanning finds no function boundaries in it.
+
+Two things this does not yet solve:
+
+- **Segment 3 still lifts as one 6,900-instruction blob.** Its entry points are
+  not direct far calls: the callers build a far pointer from an immediate pair
+  (`mov [bp-1A], off` then `mov [bp-18], seg`, the fixup landing on the segment
+  half), which the driver now reads - but that yields only a couple of entries.
+  Being frameless, it needs call-graph-driven boundaries rather than prologue
+  or relocation scanning.
 - **Data inside code segments gets lifted as code.** Segment 1's output
   contains a far call to `0000:FFFF` and an `int 0x21` - a DOS interrupt in a
   Windows DLL, which is a table being disassembled, not a function. The
