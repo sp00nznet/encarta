@@ -518,17 +518,98 @@ that were producing `int1` and `aaa`.
 | 2 | 32 | 2,222 | 100% | 2 | 870 | 0 |
 | **3 (decode core)** | **32** | **20,851** | **92.5%** | **217** | **5,333** | **0** |
 
+### Relocations, and where they have to be applied
+
+Copying the segments into memory is not loading them. Every selector in the
+code is a placeholder until a loader fills it in - the init routine's
+
+```
+B8 FF FF 00 00     mov eax, 0xFFFF
+66 8E D8           mov ds, ax
+```
+
+does not mean selector 0xFFFF. `FFFF` is the end-of-chain marker sitting in an
+unpatched fixup slot, and NE chains its sites: the word at one holds the offset
+of the next taking the same value, so the link has to be read before it is
+overwritten.
+
+The part worth stating plainly is **where** the patch belongs. A loader patches
+the image and the CPU executes the patched bytes; lifting compiles the bytes
+into C, so an immediate becomes a constant. `mov eax, 0xFFFF` lifts to
+`c->eax = 0xFFFFu;`, and no amount of patching the loaded segment afterwards
+changes it. Code fixups are applied in `lift_ir32.py` **before** decoding; data
+fixups are applied by the runtime at load, because data really is read from
+memory. Both are needed and neither substitutes for the other.
+
+With that in place `mov eax, 0xFFFF` lifts as `mov eax, 0x29` - segment 41,
+which is where the decoder's tables live.
+
+### It initialises
+
+`ir32_run <IR32.DLL> init` runs 3:0000, the decoder's own initialisation. It is
+the one entry that needs nothing but somewhere to work: its only argument is the
+selector of an instance segment. Everything else in the 32-bit core wants
+structures the 16-bit driver owns.
+
+```
+applied 334 selector fixups
+instance segment 0200 at 008C5FE8 (65536 bytes)
+calling 3:0000 (init) ...
+fill at 0xE20C: 176 of 176 bytes are 0x40404040
+pointers written: [0x0C]=0000E2C0 [0x18]=0000E2EC
+instance segment: 6213 of 65536 bytes written
+dispatch: every target resolved
+init check: matches the disassembly
+```
+
+Those numbers were **predicted from the instructions before the code was run**,
+which is what makes them worth anything:
+
+```
+mov ebx, 0xE20C / mov ecx, 0xB0
+loop: store 8 bytes, ebx += 8, ecx -= 8, jg loop   ->  ebx = 0xE20C + 176 = 0xE2BC
+add ebx, 4      -> 0xE2C0    mov es:[0x0C], ebx
+add ebx, 0x2C   -> 0xE2EC    mov es:[0x18], ebx
+```
+
+`init` asserts them and returns non-zero on mismatch, so it is a regression test
+rather than a demo. If the segment bases, the stack base or the selector fixups
+break, these are the first things to go.
+
+### The calling convention, for whatever comes next
+
+Segment 3 is entered two ways, and the difference is visible in the frame:
+
+| caller | return frame | first argument |
+|--------|--------------|----------------|
+| 16-bit segment (`9A off16 seg16`) | 4 bytes | `[bp+4]` |
+| segment 2 (32-bit) | 6 bytes | `[bp+6]` |
+
+The real decode entry is 3:0610, called from segment 5 with 28 bytes of
+arguments. Its first act is telling:
+
+```
+mov ax, [bp+0x1E]     ; a selector
+mov es, ax
+mov ax, es:[ecx]      ; ecx = [bp+4]; read a word through it
+mov ds, ax            ; that word IS the instance's data selector
+```
+
+So the argument is a far pointer to a slot holding the instance's selector: the
+decoder is instance-based and the 16-bit half owns the structures. That is why
+`init` is as far as this goes without lifting the other half - not because the
+32-bit core is incomplete, but because its caller is.
+
 Still open:
 
-- **Nothing decodes a frame yet.** The 26 entries that fault are the thunks,
-  and they fault because nobody has handed them a bitstream. The next step is
-  a caller that fills GS, ES and the argument frame the way the 16-bit half
-  does, which means reading how `DriverProc` sets up an `ICM_DECOMPRESS`.
-- **The 16-bit half is not lifted.** 37 segments of driver scaffolding, at
-  99%+ carve coverage but going through `lift16`, which needs its own runtime.
-- **Selectors are ours, not the loader's.** `ne_map` assigns selector == segment
-  number. Code that reads a selector out of its own data - the DLL's fixups
-  patch real ones at load time - has nothing to read yet.
+- **Nothing decodes a frame yet.** 3:0610 wants an instance structure built by
+  the 16-bit driver, with fields at +0x452, +0x3002 and +0x3016. Fabricating one
+  by hand is possible and a bad idea: wrong guesses produce plausible garbage
+  rather than errors. The honest route is lifting the 16-bit half.
+- **The 16-bit half is not lifted.** 37 segments, carved at 99%+ but going
+  through `lift16`, which needs a runtime of its own.
+- **Imports are not resolved.** `ne_map` deliberately leaves KERNEL/USER fixups
+  alone; nothing in the paths exercised so far calls out.
 
 ### After that
 
