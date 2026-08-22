@@ -255,6 +255,47 @@ COND_JUMPS = {'jo','jno','jb','jae','je','jne','jbe','ja','js','jns','jp','jnp',
 STOPS = {'ret', 'retf', 'iret', 'retn', 'iretd'}
 
 
+def apply_selector_fixups(ne, seg_index, code):
+    """Patch a code segment's selector fixups before it is lifted.
+
+    This has to happen here rather than in the runtime, and the reason is easy
+    to get wrong. A loader patches the image and the CPU then executes the
+    patched bytes. Lifting compiles the bytes into C, so an immediate becomes a
+    constant: `mov eax, 0xFFFF` lifts to `c->eax = 0xFFFFu;` and no amount of
+    patching the loaded segment afterwards will change it.
+
+    The init routine at 3:0000 does exactly that - `mov eax, 0xFFFF / mov ds,
+    ax` - and 0xFFFF is not a selector, it is the end-of-chain marker sitting
+    in an unpatched fixup slot. Lifted unpatched, DS becomes a selector nothing
+    is mapped at.
+
+    NE chains its fixup sites: the word at one holds the offset of the next
+    taking the same value. Read the link before overwriting it.
+
+    Selector == NE segment number, which is a convention the runtime's ne_map
+    has to agree with, and does.
+    """
+    import struct
+    out = bytearray(code)
+    segs = [x for x in ne.segments if x.index == seg_index]
+    if not segs:
+        return bytes(out), 0
+    n = 0
+    for r in segs[0].relocations:
+        if r.src_type != 2 or (r.flags & 3) != 0:
+            continue
+        off, guard = r.offset, 0
+        while 0 <= off + 1 < len(out) and guard < 4096:
+            guard += 1
+            nxt = struct.unpack_from("<H", out, off)[0]
+            struct.pack_into("<H", out, off, r.target_seg & 0xFFFF)
+            n += 1
+            if nxt == 0xFFFF:
+                break
+            off = nxt
+    return bytes(out), n
+
+
 def make_validator(code, is32, decode16):
     """Does an address look like the start of real instructions?
 
@@ -558,6 +599,9 @@ def main():
 
     bitness = segment_bitness(a.ne_file, ne)
     is32 = bitness.get(a.seg, False)
+    code, nfix = apply_selector_fixups(ne, a.seg, code)
+    if nfix:
+        print("applied %d selector fixups before lifting" % nfix)
     esize = 4 if is32 else 2
     if is32:
         insns, bad = decode_segment32(code, decode16)

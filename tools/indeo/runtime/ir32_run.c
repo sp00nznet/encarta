@@ -12,6 +12,7 @@
  *   ir32_run <IR32.DLL>            check the plumbing, run no code
  *   ir32_run <IR32.DLL> <offset>   call the lifted entry at that offset
  *   ir32_run <IR32.DLL> sweep      call every entry, report what survives
+ *   ir32_run <IR32.DLL> init       run the decoder's own initialisation
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -87,8 +88,65 @@ static int load_ne(const char *path)
         ne_map((uint16_t)(i + 1), mem, size);
     }
     g_nseg = count;
+    /* Selector == segment number here, so a fixup naming segment N writes N -
+     * which is only true because ne_map assigned it that way. */
+    unsigned fixed = apply_relocs(img, neoff, count, segtab, shift);
+    printf("applied %u selector fixups\n", fixed);
     free(img);
     return 1;
+}
+
+/* Apply the segment's relocations.
+ *
+ * Without this the image is not loaded, only copied. Every selector in the
+ * code is a placeholder until a loader fills it in: `mov eax, 0xFFFF / mov ds,
+ * ax` in the init routine does not mean selector 0xFFFF, it means "whatever
+ * segment the fixup names". Run it unpatched and DS becomes an unmapped
+ * selector whose base is 0, and the next access reads near null.
+ *
+ * NE chains the sites: the word at a fixup holds the offset of the next site
+ * that takes the same value, and 0xFFFF ends the chain. That is also why the
+ * placeholder looks like 0xFFFF everywhere - it is the terminator, not a
+ * value.
+ *
+ * Only internal SELECTOR fixups are applied here. Imports (KERNEL, USER, and
+ * the rest) are left alone deliberately: nothing calls out of the 32-bit core
+ * in the paths being exercised, and a wrong address there would be far harder
+ * to notice than an unpatched one. */
+static unsigned apply_relocs(const unsigned char *img, uint32_t neoff,
+                             unsigned count, uint32_t segtab, unsigned shift)
+{
+    unsigned applied = 0;
+    for (unsigned i = 0; i < count; i++) {
+        const unsigned char *e = img + segtab + i * 8;
+        uint32_t sector = rd16f(e), len = rd16f(e + 2), flags = rd16f(e + 4);
+        if (!(flags & 0x0100) || !sector)     /* no relocation records */
+            continue;
+        if (len == 0) len = 65536;
+        const unsigned char *rel = img + ((uint32_t)sector << shift) + len;
+        unsigned nrel = rd16f(rel);
+        rel += 2;
+        unsigned char *seg = g_seg[i + 1].data;
+        uint32_t seglen = g_seg[i + 1].size;
+        for (unsigned r = 0; r < nrel; r++, rel += 8) {
+            unsigned src = rel[0], typ = rel[1];
+            uint32_t off = rd16f(rel + 2);
+            uint32_t tseg = rd16f(rel + 4);
+            if (src != 2 || (typ & 3) != 0)   /* SELECTOR, internal ref only */
+                continue;
+            /* walk the chain */
+            for (unsigned guard = 0; guard < 4096; guard++) {
+                if (off + 2 > seglen) break;
+                uint32_t next = (uint32_t)seg[off] | ((uint32_t)seg[off + 1] << 8);
+                seg[off] = (unsigned char)(tseg & 0xFF);
+                seg[off + 1] = (unsigned char)(tseg >> 8);
+                applied++;
+                if (next == 0xFFFF) break;
+                off = next;
+            }
+        }
+    }
+    return applied;
 }
 
 /* Which segment is the DLL's default data segment? The NE header names it. */
@@ -155,6 +213,74 @@ int main(int argc, char **argv)
     if (argc < 3) {
         printf("no entry requested; not running any lifted code\n");
         return bad != 0;
+    }
+
+    if (!strcmp(argv[2], "init")) {
+        /* 3:0000 is the decoder's initialisation, and it is the one entry that
+         * needs nothing but a place to work: its only argument is the selector
+         * of an instance segment. Everything else in the 32-bit core wants
+         * structures the 16-bit driver owns.
+         *
+         * What it should do is checkable without knowing the format: fill from
+         * 0xE20C with 0x40404040 for 0xB0 bytes, then walk a pointer forward in
+         * 0x2C steps storing it at 0x0C, 0x18 and on. If the segment model is
+         * wrong in any way - bases, stack, selector fixups - this writes
+         * somewhere else or faults, and either way says so. */
+        enum { INST_SEL = 0x0200, INST_SIZE = 0x10000 };
+        unsigned char *inst = (unsigned char *)calloc(1, INST_SIZE);
+        ne_map(INST_SEL, inst, INST_SIZE);
+
+        CPU c = {0};
+        c.cs = 3;
+        c.ds = ds ? ds : 41;
+        c.es = INST_SEL;
+        c.ss = ss;
+        c.esp = 0xFF00u;
+        /* A 16-bit far call leaves 4 bytes of return address, so the first
+         * argument sits at [bp+4]. Nothing returns to it here - the lifted
+         * function returns to us - so the slot itself can stay zero. */
+        wr16(SEGB(c.ss) + c.esp + 4, INST_SEL);
+        c.ebp = c.esp;
+
+        printf("instance segment %04X at %08X (%d bytes)\n",
+               INST_SEL, SEGB(INST_SEL), INST_SIZE);
+        printf("calling 3:0000 (init) ...\n");
+        dispatch(&c, 0x00000000u);
+
+        unsigned fill = 0;
+        for (unsigned o = 0xE20C; o + 4 <= 0xE20C + 0xB0; o += 4)
+            if (inst[o] == 0x40 && inst[o+1] == 0x40 &&
+                inst[o+2] == 0x40 && inst[o+3] == 0x40)
+                fill += 4;
+        printf("fill at 0xE20C: %u of %u bytes are 0x40404040\n", fill, 0xB0);
+        printf("pointers written: [0x0C]=%08X [0x18]=%08X [0x24]=%08X\n",
+               *(uint32_t *)(inst + 0x0C), *(uint32_t *)(inst + 0x18),
+               *(uint32_t *)(inst + 0x24));
+        unsigned nonzero = 0;
+        for (unsigned o = 0; o < INST_SIZE; o++)
+            if (inst[o]) nonzero++;
+        printf("instance segment: %u of %u bytes written\n", nonzero, INST_SIZE);
+        ne_report_misses();
+
+        /* These are not observations, they are predictions read off the
+         * instructions before the code was ever run, which is what makes them
+         * worth asserting:
+         *
+         *   mov ebx, 0xE20C / mov ecx, 0xB0
+         *   loop: store 8 bytes, ebx += 8, ecx -= 8, jg loop  -> ebx = 0xE2BC
+         *   add ebx, 4     -> 0xE2C0   mov es:[0x0C], ebx
+         *   add ebx, 0x2C  -> 0xE2EC   mov es:[0x18], ebx
+         *
+         * If the segment model, the stack base or the selector fixups are
+         * wrong, these are the first things to go. */
+        int wrong = 0;
+        if (fill != 0xB0)                            wrong |= 1;
+        if (*(uint32_t *)(inst + 0x0C) != 0xE2C0u)   wrong |= 2;
+        if (*(uint32_t *)(inst + 0x18) != 0xE2ECu)   wrong |= 4;
+        if (g_dispatch_misses)                       wrong |= 8;
+        printf("init check: %s\n",
+               wrong ? "FAILED" : "matches the disassembly");
+        return wrong;
     }
 
     if (!strcmp(argv[2], "sweep")) {
