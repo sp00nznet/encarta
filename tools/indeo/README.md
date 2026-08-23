@@ -557,72 +557,75 @@ registers, with `eax` holding 0x0302 - the selector of the *input* buffer we
 passed in - so it is returning early rather than decoding, and the 16-bit half
 turns that into ICERR_UNSUPPORTED.
 
-### It decodes
+### It does not decode - a retraction
 
-The question that mattered was not what `ICM_DECOMPRESS` returned but whether
-anything had been decoded anywhere, and an empty output buffer cannot tell those
-apart. Scanning the driver's own GlobalAlloc'd buffers after the call answers it:
+The previous version of this file said "the lifted codec decodes the frame",
+on the strength of this:
 
 ```
 selector 0403: 56667 of 65536 bytes non-zero
 selector 0404: 56667 of 65536 bytes non-zero
-selector 0405: 17257 of 65536 bytes non-zero
-selector 0406: 17153 of 65536 bytes non-zero
 ```
 
-**The lifted codec decodes the frame.** Two buffers with identical non-zero
-counts are a decoded plane and its reference copy; the smaller pair are the
-subsampled chroma planes. For 216x192 YUV410 that is the right shape and the
-right sizes.
+That was wrong. Those buffers begin `66 33 C0 B8 CC CC CC CC 8B D5 33 ED` -
+segment 3's thunk prologue - and they are **verbatim copies of the codec's own
+code**, 20,841 of 20,851 bytes identical to segment 3, the difference being the
+ten bytes the loader patches. A 16:32 codec copies its 32-bit code into a
+selector it can execute, and that is what those non-zero bytes are.
 
-What does not happen is the conversion out to the caller's buffer.
+The conclusion was drawn from byte counts without checking what the bytes were.
+It is the exact failure this file keeps warning about, arrived at by the exact
+route it warns against, and the check that would have caught it immediately -
+compare against a decoder known to be right - was the one thing not done.
 
-### The output format is not a formality
+### The check, now that it exists
 
-Asking for each depth in turn is a direct question to the driver, and it
-answers clearly:
+`verify_decode.py` compares the dumped buffers against ffmpeg's decode of the
+same frame. Nothing about the codec's internal layout is assumed: a correctly
+decoded plane has to contain ffmpeg's rows verbatim somewhere, so finding one
+fixes the offset and the stride follows from the next.
 
-| output | result |
-|--------|--------|
-| 8 bpp | **ICERR_OK** |
-| 16 bpp | **ICERR_OK** |
-| 24 bpp | ICERR_UNSUPPORTED |
-| 32 bpp | ICERR_ERROR |
+```
+ffmpeg -i T010532A.AVI -frames:v 1 -pix_fmt yuv410p -f rawvideo ref.yuv
+IR32_DUMP=buf ir32_run IR32.DLL decode frame0.bin 216 192 nul 8
+py verify_decode.py buf ref.yuv 216 192
+```
 
-This build converts to palettised and 16-bit output and not to 24-bit RGB,
-which is what a 1994 codec would be expected to do and not what the harness had
-been asking for. The earlier `-1` was the driver correctly refusing a format,
-not a fault in the recompilation.
+No exact row appears in any buffer. The nearest approach is a mean absolute
+difference of 6.31 on a chroma row, which the tool reports next to the
+buffer's own distribution precisely so it is not mistaken for a hit: chroma
+rows are near-constant, the buffer has runs of near-constant `7D`, and the
+rows after it score 44 at the best stride. There is no plane structure. The
+frame is not decoded, in any layout, anywhere in those buffers.
 
-At 8 and 16 bpp it returns `ICERR_OK` and still writes nothing to `lpOutput`.
-So the decode is done and the hand-back is not, which is a much narrower
-problem than it was: the codec keeps the frame in its own buffers and something
-about how it is being asked for the result is wrong, rather than anything about
-decoding it.
-
-### Where it stands
+### What is actually established
 
 | | |
 |---|---|
-| `init` | passes - runs 3:0000 and matches the disassembly |
+| `init` | 3:0000 runs and its output matches the disassembly |
 | `sweep` | 191 of 217 32-bit entries return |
 | `driver` | DRV_LOAD, DRV_ENABLE, DRV_OPEN all succeed |
-| `decode` | decodes into the codec's buffers; ICERR_OK at 8 and 16 bpp |
+| `decode` | all six messages return; ICERR_OK at 8 and 16 bpp; **nothing decoded** |
 
-`decode` takes an output depth now, and `IR32_TRACE=1` prints every crossing
-into the 32-bit core with the registers each one returns.
+The output-depth result stands on its own evidence and is unaffected: 8 and 16
+bpp return `ICERR_OK` where 24 returns `ICERR_UNSUPPORTED` and 32 returns
+`ICERR_ERROR`, which says this build converts to palettised and 16-bit output.
+So does the crossing trace - the driver calls 3:0610 three times, which is the
+decode entry.
+
+What is not established is that any of it produces pixels. The driver reaches
+its decoder, the decoder returns, and no frame comes out of it.
 
 Still open:
 
-- **Getting the frame out.** `ICERR_OK` with an untouched output buffer means
-  the codec is holding the result rather than failing to produce it. The next
-  thing to check is whether this driver expects the caller to fetch it - the
-  ICM draw path rather than the decompress path - or whether the `lpOutput` far
-  pointer is not being consumed the way the harness assumes.
+- **Why the decoder returns without decoding.** It is reached, its selector
+  chain resolves, and it returns immediately with the input selector in EAX.
+  Tracing inside 3:0610 rather than around it is the next step.
 - **`retf N` across the bridge**: the callee's argument pop is not carried, so
-  SP is left low by a known-unknown amount after every crossing.
-- **KERNEL.132 and .197**, reached and still unidentified; both now announce
-  that their argument size is unknown rather than assuming zero.
+  SP is left low by a known-unknown amount after every crossing. This is a
+  candidate cause rather than a loose end - a decoder reading its arguments
+  from the wrong stack slots would behave exactly like this.
+- **KERNEL.132 and .197**, reached and still unidentified.
 
 ### After that
 

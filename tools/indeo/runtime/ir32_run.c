@@ -323,6 +323,30 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
     if (!any)
         printf("   (none - nothing decoded anywhere, not just not copied out)\n");
 
+    /* IR32_DUMP=<prefix> writes each of those buffers out.
+     *
+     * The point is to check the decode against a known-good decoder rather than
+     * against itself. ffmpeg decodes the same frame to yuv410p, and if the
+     * planes the lifted codec produced are in here, they will match it - which
+     * is the difference between "it ran and wrote plausible bytes" and "it
+     * decoded the frame". Layout inside the buffer is unknown, so dump whole
+     * and let the comparison find the planes. */
+    const char *dump = getenv("IR32_DUMP");
+    if (dump) {
+        for (uint16_t sel = 0x0400; sel < 0x0420; sel++) {
+            if (!g_segoff[sel])
+                continue;
+            char path[512];
+            snprintf(path, sizeof path, "%s_%04X.bin", dump, sel);
+            FILE *o = fopen(path, "wb");
+            if (o) {
+                fwrite(g_arena + g_segoff[sel], 1, 0x10000u, o);
+                fclose(o);
+                printf("   dumped %s\n", path);
+            }
+        }
+    }
+
     if (out_ppm && nonzero && outbits == 24) {
         FILE *o = fopen(out_ppm, "wb");
         if (o) {
