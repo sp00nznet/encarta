@@ -361,6 +361,33 @@ def make_validator(code, is32, decode16):
     return valid
 
 
+def table_at_disp(code, ins, esize, valid, limit=256):
+    """The table a 16-bit indirect jump reads, which is AT its displacement.
+
+    The two halves differ here, and it is not a detail. 16-bit code addresses
+    its table directly - `jmp word cs:[bx+0x4A]` means the table is at 0x4A,
+    with BX already scaled - so the displacement is the answer. The 32-bit core
+    does the opposite: its displacement is a base the loader fixes up and means
+    nothing statically, and the table is parked just past the jump instead.
+    Applying either rule to the other half finds nothing.
+    """
+    import struct
+    d = getattr(ins.op1, 'disp', 0) if ins.op1 is not None else 0
+    if not (0 < d < len(code)):
+        return []
+    out = []
+    for k in range(limit):
+        q = d + esize * k
+        if q + esize > len(code):
+            break
+        v = int.from_bytes(code[q:q + esize], "little")
+        if valid(v):
+            out.append(v)
+        else:
+            break
+    return out if len(out) >= 2 else []
+
+
 def table_after_jump(code, ins, esize, valid, maxpad=16, limit=64):
     """The jump table an indirect jump reads, which follows the jump itself.
 
@@ -704,6 +731,8 @@ def main():
         if getattr(ins.op1, 'type', None) != decode16.OpType.MEM:
             continue
         t = table_after_jump(code, ins, esize, valid)
+        if not t and not is32:
+            t = table_at_disp(code, ins, esize, valid)
         if t:
             resolved += 1
             inline_jt.update(t)
@@ -739,6 +768,8 @@ def main():
             if getattr(ins.op1, 'type', None) != decode16.OpType.MEM:
                 continue
             found.update(table_after_jump(code, ins, esize, valid))
+            if not is32:
+                found.update(table_at_disp(code, ins, esize, valid))
         # Also: a branch that leaves its own function needs the target to BE a
         # function. The lifter emits `goto` for a target inside the function it
         # is lifting and `dispatch(target)` for one outside, and dispatch can
@@ -963,6 +994,12 @@ def main():
             parts.append(c)
     else:
         lifter = lift16.Lifter()
+        # Without this an indirect jump emits a comment and falls through to
+        # whatever follows. DriverProc dispatches its messages through
+        # `jmp word cs:[bx+0x4A]`, so with it commented out the driver runs off
+        # the end of its own switch and into unrelated code - which is how the
+        # first driver call ended up somewhere no near call could explain.
+        lifter.dispatch = True
         # lift16 emits a direct call to `far_SSSS_OOOO` for a far transfer,
         # which suits a DOS binary where SSSS is a real paragraph. Here SSSS is
         # the target's NE segment number - the selector fixups above put it
@@ -973,9 +1010,14 @@ def main():
             r"\bres_[0-9A-Fa-f]{6}\(cpu\);(\s*)/\* call 0x([0-9A-Fa-f]+) \*/")
         enter_hook = _re.compile(
             r"void ir32_s%d_([0-9A-F]{4})\(CPU \*cpu\)\n\{" % a.seg)
+        # The `tail-jmp 0xNNNNNN` value is the lifter's base PLUS the target,
+        # exactly like `res_<n>` - 0x017D + 0x04B6 = 0x000633. It only looked
+        # right in DriverProc, whose base is 0. The instruction's own comment,
+        # emitted last, carries the real target.
         tail_jmp = _re.compile(
             r"recomp_dispatch\(cpu, 0x[0-9A-Fa-f]+, 0x[0-9A-Fa-f]+\); return;"
-            r"(?=\s*\}?\s*/\* tail-(?:jcc|jmp) 0x([0-9A-Fa-f]{6}) \*/)")
+            r"(?=\s*\}?\s*/\* tail-(?:jcc|jmp) 0x[0-9A-Fa-f]{6} \*/"
+            r" /\* \w+ 0x([0-9A-Fa-f]+) \*/)")
         for start, body in funcs:
             name = "ir32_s%d_%04X" % (a.seg, start)
             try:

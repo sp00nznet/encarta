@@ -377,359 +377,62 @@ about thresholds.
 `--stats` now warns on it. Across the file it fires on segments 13, 39 and 40 -
 exactly the three that other evidence already called data.
 
-### Where it stands
-
-| segment | bits | bytes | covered | functions | lines | unhandled |
-|---------|------|-------|---------|-----------|-------|-----------|
-| 1 | 16 | 8,571 | 77.2% | 97 | 3,856 | 3 |
-| 2 | 32 | 2,222 | **100%** | 2 | 870 | **0** |
-| **3 (decode core)** | **32** | **20,851** | **92.5%** | **108** | **12,539** | **58** |
-| 5 | 16 | 6,920 | 99.6% | 7 | 2,541 | 1 |
-| 13 | - | 3,071 | *data - do not lift* | | | |
-
-Coverage is reported in **bytes**, not instructions. Resync adds instructions
-the sweep never had, so "instructions reached / instructions swept" compares two
-different denominators and drifts upward on its own. Bytes cannot.
-
-The largest unreached runs in segment 3 are now the pointer tables themselves -
-304 bytes at 0x4E10 and 195 at 0x3BFD, both 100% dwords that are zero or a valid
-address - which is exactly what should not be lifted. `--stats` reports that
-density per run rather than a verdict, because two attempts to classify code
-against data automatically, one by entropy and one by counting small dwords,
-each got a known case backwards.
-
-Segment 3's remaining 58 unhandled instructions are `int1` (16), `aaa` (7),
-`aas` (4), `sldt` (3), `aam` (2) and `salc` - none of which are real
-instructions. They are the residue of a few regions still carved out of
-alignment, and they are the honest measure of what is left to fix.
-
-### Lifting
-
-32-bit segments emit through pcrecomp's `lift32_cpu` - the same lifter that
-produced the Encarta executable - rather than `lift16`. It is written against a
-PE but only loosely: `read_va` is injectable and the image bounds are plain
-attributes, so a 64K NE segment can pose as a tiny image based at 0. Three
-things had to be fixed, each silent rather than loud:
-
-- **Segment registers.** 23 functions failed outright on `mov ds, ax` - a flat
-  PE never touches DS, so `lift32_cpu` had no case for it. They are now stored
-  on the CPU struct, and `cpu.h` records the limit: stored, not used in address
-  computation. Code that switches DS to reach another segment's data needs a
-  selector-to-base mapping the runtime does not have.
-- **Displacements were being GVA-wrapped.** The base class decides that from the
-  PE `.reloc` table and falls back to a range check, which caught every small
-  constant here - `lea edi, [edi+4]` became `edi + GVA(4)`. An NE segment is its
-  own 0..64K space, so the NE driver overrides that to false.
-- **Functions were named from the wrong address.** Naming and slicing from the
-  lowest address descent reached, rather than the entry, emitted one shared
-  region 16 times under the same name. Descent follows backward jumps, so
-  `body[0]` is not the entry.
-
-The emitted C is a faithful translation - the plane copy at 0x0F3D reads as it
-should:
-
-```c
-c->eax = rd32((c->edi + 0xFFFFFF50u));   /* mov eax, [edi - 0xb0] */
-wr32((c->edi), c->eax);                  /* mov [edi], eax        */
-wr32((c->edi + 0x000000B0u), c->eax);    /* mov [edi + 0xb0], eax */
-c->edi = (c->edi + 0x00000004u);         /* lea edi, [edi + 4]    */
-```
-
-It does not compile yet: there is no NE 32-bit runtime, and `GVA()` has to be
-the identity there because an NE jump table holds segment offsets rather than
-virtual addresses. The generated file says so in its own header.
-
-### The runtime: it runs
-
-`runtime/` is what turns the lifted C into a program. `build.bat <IR32.DLL>`
-lifts both 32-bit segments and links them against it.
+### The driver loads
 
 ```
-loaded 47 segments; auto-data is segment 47
-segment 3: 20851 bytes at 016A5BA0, 217 lifted entries
-entry table: sorted and complete
-sweep: 191 of 217 entries returned, 26 faulted
-dispatch: 6 misses, 6 distinct targets with no lifted entry
+DRV_LOAD    -> 00000001
+DRV_ENABLE  -> 00000001
+DRV_OPEN    -> 00003FB8      <- a live driver instance
+imports reached (8 distinct): KERNEL 132, 197, 16, 15, 18; GDI 52, 80, 68
 ```
 
-**Memory is the whole design.** A PE has one address space; an NE has one per
-segment, and a register here holds an *offset within a segment*, not an
-address. `mov eax, [0xE1A8]` means offset 0xE1A8 in DS. `mov bh, gs:[ebp+1]`
-means an offset in whatever GS the caller passed - which for IR32 is the
-compressed bitstream, while ES is the output frame and DS is the decoder's own
-state. So every lifted access carries its segment and resolves through a
-selector table:
+Three more things had to be right, and each was a small correction rather than
+new machinery.
 
-```c
-rd32(SEGB(c->ds) + offset)
-```
+**The jump table in a 16-bit segment is AT the displacement.** The two halves
+are opposites here. 16-bit code addresses its table directly - `jmp word
+cs:[bx+0x4A]` means the table is at 0x4A, BX already scaled - while the 32-bit
+core's displacement is a base the loader fixes up and the table sits just past
+the jump. Applying either rule to the other half finds nothing, and DriverProc
+dispatches its messages through exactly such a table.
 
-`SEGB` is a 64K-entry array mapping selector to the host address the segment
-was loaded at. The build is 32-bit - the assumption `cpu.h` already documents -
-so a host address fits in `uint32_t` and the existing `rd`/`wr` dereference it
-directly. No emulated address space; one array lookup per access.
+**lift16 emitted a comment where a dispatch belonged.** Its indirect-jump
+handling is off by default, so `jmp word cs:[bx+0x4A]` became
+`/* needs dispatch */` and execution fell through the switch into whatever
+followed. That is why the first driver call ended up somewhere no near call
+could explain.
 
-That also fixed a real error in what the lifter emitted. pcrecomp maps `fs:`
-to `__readfsdword`, correct for a PE where FS is the thread block and used for
-SEH prologues. IR32 keeps decoder state in an FS-addressed *segment*, so those
-301 accesses would have read the host thread's TIB. The NE lifter overrides
-the whole `rd`/`wr` path rather than special-casing FS.
+**`tail-jmp 0xNNNNNN` is base + target too**, exactly like `res_<n>`:
+0x017D + 0x04B6 = 0x000633. It only looked right in DriverProc, whose base is
+0. Reading the instruction's own trailing comment instead took segment 6 from
+42 stubbed targets to one, and the whole DLL to zero.
 
-**The stack is a segment too**, and finding that out took running the code.
-The first design gave SS a base of zero so `cpu.h`'s `push32`/`pop32` - which
-use `c->esp` raw - would agree with `[ebp+6]` accesses going through `SEGB`.
-That works right up until the callee does `mov bp, sp`, which truncates ESP to
-16 bits: fine for an offset, fatal for a host address. So SS gets a real base
-like everything else, ESP is a small number, and `STACK_BASE` is now a hook in
-`cpu.h` that defaults to zero for flat builds.
+### DPMI, and a fact arriving from the other direction
 
-### What the sweep is for
-
-Calling every entry with a blank machine measures the runtime, not the decoder.
-Most of these functions want arguments - a bitstream, an output frame - and
-without them an access through an unset selector lands near null, which is
-exactly what the selector table is designed to make loud. What it establishes
-is that dispatch resolves, that the segment bases hold, and that nothing
-corrupts the machine badly enough to take the process down. Before it existed,
-"it links" was the entire body of evidence.
-
-Its first run found something worth having. Fourteen dispatch targets had no
-lifted entry, and they split cleanly in two:
-
-- **Six land on an `int3`.** They are jump-table entries for the invalid index
-  - a trap, deliberately. Descent stops at padding, so no function is emitted,
-  and dispatching to one aborts. That is the correct behaviour and they are
-  left alone.
-- **Eight are real code**, shared blocks entered by a branch from a function
-  that does not contain them. The lifter emits `goto` for a target inside the
-  function it is lifting and `dispatch()` for one outside, and dispatch can only
-  reach an *entry* - so those blocks had nowhere to land. Feeding cross-function
-  branch targets back as roots fixes it, and splitting a function at one costs
-  nothing since it is a basic-block boundary either way.
-
-That last change was worth more than the miss it fixed. Segment 3 went from 108
-functions to 217 and from **12,520 lines to 5,333** - the old extents overlapped
-heavily and lifted the same code repeatedly - and its unhandled count went from
-52 to **zero**, because the fragments no longer straddle the misaligned regions
-that were producing `int1` and `aaa`.
-
-| segment | bits | bytes | covered | functions | lines | unhandled |
-|---------|------|-------|---------|-----------|-------|-----------|
-| 2 | 32 | 2,222 | 100% | 2 | 870 | 0 |
-| **3 (decode core)** | **32** | **20,851** | **92.5%** | **217** | **5,333** | **0** |
-
-### Relocations, and where they have to be applied
-
-Copying the segments into memory is not loading them. Every selector in the
-code is a placeholder until a loader fills it in - the init routine's
+Running DRV_LOAD reaches `int 31h`, and what it does there is worth recording:
 
 ```
-B8 FF FF 00 00     mov eax, 0xFFFF
-66 8E D8           mov ds, ax
+mov bx, [bp+6]        ; a selector
+lea di, [bp-8]        ; an 8-byte descriptor buffer
+mov es, ax            ; ES:DI = buffer
+mov ax, 0x000B        ; DPMI get descriptor
+int 31h
+or byte [bp-2], 0x40  ; byte 6, bit 6 - the D/B bit
+mov ax, 0x000C        ; DPMI set descriptor
+int 31h
 ```
 
-does not mean selector 0xFFFF. `FFFF` is the end-of-chain marker sitting in an
-unpatched fixup slot, and NE chains its sites: the word at one holds the offset
-of the next taking the same value, so the link has to be read before it is
-overwritten.
+The driver is **marking its own segments 32-bit at load time**. That is the
+same fact the lift had to establish by decoding every segment both ways and
+comparing junk rates, arriving from the opposite direction - and it explains
+why nothing in the file records the width statically. There is nothing to
+record. The DLL sets it itself, at run time, which is why NE flag 0x1000 was
+never going to be the answer.
 
-The part worth stating plainly is **where** the patch belongs. A loader patches
-the image and the CPU executes the patched bytes; lifting compiles the bytes
-into C, so an immediate becomes a constant. `mov eax, 0xFFFF` lifts to
-`c->eax = 0xFFFFu;`, and no amount of patching the loaded segment afterwards
-changes it. Code fixups are applied in `lift_ir32.py` **before** decoding; data
-fixups are applied by the runtime at load, because data really is read from
-memory. Both are needed and neither substitutes for the other.
-
-With that in place `mov eax, 0xFFFF` lifts as `mov eax, 0x29` - segment 41,
-which is where the decoder's tables live.
-
-### It initialises
-
-`ir32_run <IR32.DLL> init` runs 3:0000, the decoder's own initialisation. It is
-the one entry that needs nothing but somewhere to work: its only argument is the
-selector of an instance segment. Everything else in the 32-bit core wants
-structures the 16-bit driver owns.
-
-```
-applied 334 selector fixups
-instance segment 0200 at 008C5FE8 (65536 bytes)
-calling 3:0000 (init) ...
-fill at 0xE20C: 176 of 176 bytes are 0x40404040
-pointers written: [0x0C]=0000E2C0 [0x18]=0000E2EC
-instance segment: 6213 of 65536 bytes written
-dispatch: every target resolved
-init check: matches the disassembly
-```
-
-Those numbers were **predicted from the instructions before the code was run**,
-which is what makes them worth anything:
-
-```
-mov ebx, 0xE20C / mov ecx, 0xB0
-loop: store 8 bytes, ebx += 8, ecx -= 8, jg loop   ->  ebx = 0xE20C + 176 = 0xE2BC
-add ebx, 4      -> 0xE2C0    mov es:[0x0C], ebx
-add ebx, 0x2C   -> 0xE2EC    mov es:[0x18], ebx
-```
-
-`init` asserts them and returns non-zero on mismatch, so it is a regression test
-rather than a demo. If the segment bases, the stack base or the selector fixups
-break, these are the first things to go.
-
-### The calling convention, for whatever comes next
-
-Segment 3 is entered two ways, and the difference is visible in the frame:
-
-| caller | return frame | first argument |
-|--------|--------------|----------------|
-| 16-bit segment (`9A off16 seg16`) | 4 bytes | `[bp+4]` |
-| segment 2 (32-bit) | 6 bytes | `[bp+6]` |
-
-The real decode entry is 3:0610, called from segment 5 with 28 bytes of
-arguments. Its first act is telling:
-
-```
-mov ax, [bp+0x1E]     ; a selector
-mov es, ax
-mov ax, es:[ecx]      ; ecx = [bp+4]; read a word through it
-mov ds, ax            ; that word IS the instance's data selector
-```
-
-So the argument is a far pointer to a slot holding the instance's selector: the
-decoder is instance-based and the 16-bit half owns the structures. That is why
-`init` is as far as this goes without lifting the other half - not because the
-32-bit core is incomplete, but because its caller is.
-
-### Both halves
-
-`build.bat <IR32.DLL>` now lifts the whole DLL - `lift_all.py` walks every code
-segment - and links the two halves together.
-
-```
-lifted 35 16-bit and 2 32-bit segments; skipped 3 as data (13, 39, 40)
-applied 334 selector fixups in the loaded image
-loaded 47 segments; auto-data is segment 47
-```
-
-**One arena, two views.** The halves address memory differently: lifted 32-bit
-code computes a host address (`rd32(SEGB(c->ds) + off)`), lifted 16-bit code
-indexes a flat array (`cpu->mem[SEG_OFF(seg, off)]`). They have to mean the same
-bytes, or a pointer the driver builds and hands to the decoder points somewhere
-else. So `ne_mem.h` owns one arena and both tables into it - `g_segoff` for the
-16-bit view, `g_selbase` for the 32-bit one. The first 64K is left unmapped, so
-an unset selector faults instead of quietly returning whatever is at the start.
-
-**The two runtimes can never share a translation unit.** pcrecomp's 16-bit and
-32-bit `cpu.h` each define a struct called `CPU` and a function called `push32`.
-That is not a problem to solve, it is a constraint to build around: `ne_mem.h`
-names no CPU type, registration is split into `ir32_reg16.c` and `ir32_reg32.c`,
-and the bridge between halves is a plain function crossing the boundary. Even
-the include had to be disambiguated by directory, since both files are called
-`cpu.h` and an include path that sees both picks whichever comes first.
-
-**Imports become addresses.** A Win16 import is a relocation, and unpatched it
-reads as a call to `0000:FFFF` - the chain terminator, not an address. The
-fixup pass gives each a synthetic selector `0xF0mm` (module index) with the
-ordinal as the offset, so `recomp_dispatch(cpu, 0xF002, 0x000F)` is legibly
-KERNEL.15, GlobalAlloc. The runtime records every import reached rather than
-implementing all 61 up front: most belong to the dialogs, and guessing which
-matter is how you end up with five wrong implementations and no way to tell.
-`GlobalAlloc` allocates in the arena and returns the selector it bound, which
-is close to what Win16 actually does.
-
-### What running it found
-
-Six things, none of which reading the output would have shown:
-
-- **A near call reaching code descent never carved.** Segment 1 is 77% covered
-  and calls into the rest. Those were unresolved externals, so nothing linked
-  at all - one segment's gap blocking the other 34 from being testable. They
-  are stubbed now, and a stub names its own offset when called.
-- **Declarations after definitions.** C gives an undeclared call an implicit
-  `int f()`, which then conflicts with the real `void f(CPU *)` later in the
-  same file. Functions in a segment call each other in whatever order the code
-  sits, so declarations have to come first.
-- **`res_<offset>`**, lift16's name for a near-call target, is its own
-  convention from a flat DOS image and does not match ours.
-- **The data guard only ran under `--stats`**, which is not the path that
-  generates the build - so segment 13 was lifted as code again. It decides
-  whether to lift at all, so it runs everywhere now.
-- **`bind`** as a static helper collides with winsock's.
-- **Buffered stdout** loses everything printed before a fault, which is exactly
-  the part that says how far it got.
-
-### Where it stands
-
-| | |
-|---|---|
-| `ir32_run <DLL> init` | passes - runs 3:0000 and matches the disassembly |
-| `ir32_run <DLL> sweep` | 191 of 217 32-bit entries return |
-| `ir32_run <DLL> driver` | faults inside DriverProc |
-
-DriverProc is called with an empty frame, which is not a real driver message,
-so faulting is the expected answer to the wrong question rather than a defect
-in the lift. What it does establish is that 37 lifted segments load, register
-and begin executing.
-
-### Calling it the way Video for Windows does
-
-`ir32_run <DLL> driver` issues the real installable-driver sequence -
-`DRV_LOAD`, `DRV_ENABLE`, `DRV_OPEN` - rather than poking at an entry point.
-The frame is not guesswork: DriverProc is `FAR PASCAL`, and the lifted code
-confirms the layout itself, doing `enter 0x2A` and then reading
-
-```
-[bp+0x12] dwDriverID   [bp+0x0E] msg      [bp+0x06] lParam2
-[bp+0x10] hDriver      [bp+0x0A] lParam1
-```
-
-which is exactly 16 bytes of arguments above a 4-byte far return address. The
-result comes back in DX:AX.
-
-```
-DRV_LOAD               -> 00003FB8
-DRV_ENABLE             -> 00000000
-DRV_OPEN               -> 00000000
-```
-
-### Two bugs that ran
-
-Getting there meant finding two defects that neither compiled nor crashed at
-the point of the mistake. Both were in how lift16's output was being read.
-
-**A tail jump is near, and was being made far.** lift16 splits a jump target
-into a real-mode paragraph pair:
-
-```c
-{ recomp_dispatch(cpu, 0x5, 0xE); return; }   /* tail-jcc 0x00005E */
-```
-
-0x005E is an offset in the same segment, not `0005:000E`. Sent to segment 5, it
-lands in unrelated code that can jump back the same way - and lifted calls are
-real C calls, so a cycle exhausts the host stack rather than looping.
-
-**A near call was going to the wrong function.** lift16 names the target
-`res_<n>` where n is its own base *plus* the target. A call to offset 0 from a
-function based at 0x00E4 is named `res_0000E4`, so reading the name as an offset
-sends it to 0x00E4 - which in that case is the calling function itself:
-
-```c
-ir32_s9_00E4(cpu);      /* call 0x0000 */      <- wrong
-ir32_s9_0000(cpu);      /* call 0x0000 */      <- right
-```
-
-The instruction settles it. At 0x00F5 the bytes are `E8 08 FF`, a `call rel16`
-of -248, and the next instruction is at 0x00F8, so the target is 0x0000. The
-comment is the decoded target; the name is not.
-
-That one is the reason for the care taken elsewhere in this file about numbers
-that look fine. It linked, it ran, and it called the wrong function - every
-near call in 35 segments, silently.
-
-**Finding them needed a counter, not a debugger.** A cycle in lifted code dies
-by stack overflow, and that death is silent: the fault handler needs stack it no
-longer has, and raising the stack to half a gigabyte only makes it take longer.
-Counting entries and printing the last 32 named the cycle in one run.
+The runtime implements enough DPMI for that (get/set descriptor, allocate
+descriptors, the base and limit calls accepted and ignored, since `g_segoff`
+already says where a segment is). Setting the D/B bit changes no behaviour
+here; refusing the call would stop the driver dead.
 
 ### Where it stands
 
@@ -737,21 +440,19 @@ Counting entries and printing the last 32 named the cycle in one run.
 |---|---|
 | `init` | passes - runs 3:0000 and matches the disassembly |
 | `sweep` | 191 of 217 32-bit entries return |
-| `driver` | DRV_LOAD/ENABLE/OPEN all return; stops at a named gap |
-
-The gap is `seg 6 offset 0633 was never lifted` - one of segment 6's 42
-near-call targets that descent never reached, and 0x0633 is past the end of a
-1,382-byte segment, so the call site itself is in a region carved out of
-alignment. That is the next thread to pull, and it is a coverage problem in one
-16-bit segment rather than anything structural.
+| `driver` | DRV_LOAD, DRV_ENABLE, DRV_OPEN all succeed |
 
 Still open:
 
-- **Segment 6's carve.** 83.6% covered, and the executed path runs into the
-  rest. The stubs name themselves when called, so the work is bounded and
-  visible rather than guessed at.
-- **`ICM_DECOMPRESS` itself**, which needs `DRV_OPEN` to return a real driver
-  ID first.
+- **`ICM_DECOMPRESS`.** The driver ID exists now, so the remaining work is the
+  `ICDECOMPRESS` structure and a real frame - both of which are documented
+  layouts rather than guesses.
+- **Three unresolved far calls**: `0000:0000` twice during load and
+  `0065:0008` during open. A null target usually means a function pointer that
+  something was supposed to fill in; segment 0x65 is past the 47 that exist, so
+  that one is reading a selector from somewhere it should not.
+- **KERNEL.132 and .197** are reached and unimplemented, and the run continues
+  past them - which is worth being suspicious of rather than pleased about.
 - **`retf N` across the bridge**, and import argument counts: both leave SP low
   by a known-unknown number of bytes.
 
