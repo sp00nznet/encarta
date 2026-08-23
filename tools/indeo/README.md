@@ -499,6 +499,64 @@ grows on demand within the 64K a segment can address. Giving the data segment
 the rest of its 64K, which is what a real DGROUP has, took `QUERY` and `BEGIN`
 from `ICERR_BADPARAM` to `ICERR_OK`.
 
+### Identifying the two imports without an ordinal table
+
+There is no Win16 KERNEL on the disc to read an export table from, so the
+ordinals cannot be looked up. They can be read off their call sites, which is
+better evidence anyway - a name would still have to be checked against what the
+code does with it.
+
+The ordinals already confirmed behaviourally (5 LocalAlloc, 15 GlobalAlloc, 16
+GlobalReAlloc, 18 GlobalLock) all agree with the standard table, so the table
+applies; only these two were unclear.
+
+**KERNEL.171 is an alias.** It is handed the selector `GlobalLock` returned one
+line earlier - stored at `es:[bx+0x3038]` - and its result is stored
+immediately after it at `es:[bx+0x303A]`. A second selector kept beside the
+first and made from it is an alias, and `AllocSelector`, `AllocCStoDSAlias` and
+`AllocDStoCSAlias` all have the same observable effect: another selector over
+the same bytes. Which of the three it is does not change what the runtime must
+return, so it is implemented to the contract rather than to a guessed name.
+
+**KERNEL.188 converts a count into a byte size.** It takes one word - always 3
+here - and its DWORD result goes straight into `GlobalAlloc` as `dwBytes` and
+is then decremented and sign-tested as a loop bound. Three segments' worth is
+`3 << 16`. If that reading is wrong the buffer is the wrong size, which shows
+up as a decode writing the wrong amount rather than as silence.
+
+### The import convention was wrong, and it was hiding
+
+Win16 is Pascal: **the callee pops its arguments.** The runtime was popping only
+the far return address, so every import left its arguments on the stack and the
+*next* call read its parameters from the wrong slots. That is how `GlobalAlloc`
+came to be called with a size nothing had given it - the two-byte argument to
+the call before it was still sitting there.
+
+There is now an argument-size table, and an ordinal that is not in it says so
+rather than assuming zero. KERNEL.132 and .197 are still unknown and still
+announce themselves.
+
+### Where the decode actually gets to
+
+`IR32_TRACE=1` prints every crossing into the 32-bit core, which says far more
+than the return code:
+
+```
+ICM_DECOMPRESS_QUERY  ->  3:0360                     -> ICERR_OK
+ICM_DECOMPRESS_BEGIN  ->  3:0000, 3:0000             -> ICERR_OK
+ICM_DECOMPRESS        ->  3:0505, 3:0610 x3          -> ICERR_UNSUPPORTED
+```
+
+3:0610 is **the decode entry** - the 28-argument function whose first act is to
+dereference a far pointer for the instance's data selector - and it is called
+three times, which is what a three-plane YUV decode should look like. 3:0000 is
+the initialisation the `init` command already checks against the disassembly.
+
+So the driver reaches its own decoder. All three calls then return identical
+registers, with `eax` holding 0x0302 - the selector of the *input* buffer we
+passed in - so it is returning early rather than decoding, and the 16-bit half
+turns that into ICERR_UNSUPPORTED.
+
 ### Where it stands
 
 | | |
@@ -506,20 +564,17 @@ from `ICERR_BADPARAM` to `ICERR_OK`.
 | `init` | passes - runs 3:0000 and matches the disassembly |
 | `sweep` | 191 of 217 32-bit entries return |
 | `driver` | DRV_LOAD, DRV_ENABLE, DRV_OPEN all succeed |
-| `decode` | QUERY and BEGIN return ICERR_OK; DECOMPRESS returns -1 |
+| `decode` | QUERY and BEGIN return ICERR_OK; the decoder is called 3x and returns early |
 
 Still open:
 
-- **Two selector calls, KERNEL.171 and .188**, reached during `BEGIN` and
-  unimplemented. The pattern is unmistakable - one is called with 3, the other
-  returns a pair stored as a far pointer at `es:[bx+0x3038]` - and it is the
-  16:32 selector setup the decoder addresses its frame through. Implementing
-  them on a guess is the wrong move: a plausible-but-wrong selector produces a
-  decode that writes somewhere rather than one that fails.
-- **`retf N` across the bridge**, and import argument counts.
-- **`driver` opens without an ICOPEN** and so answers differently from
-  `decode`; that is the command being a minimal probe rather than a
-  disagreement.
+- **Why 3:0610 returns early.** It reads a selector out of memory to set up DS
+  - `mov es, [bp+0x1E]` then `mov ds, es:[ecx]` - so the next thing to check is
+  whether the slot it reads holds a selector we mapped, or whether the 16-bit
+  half filled it from something the runtime did not provide.
+- **`retf N` across the bridge**: the callee's argument pop is not carried, so
+  SP is left low by a known-unknown amount after every crossing.
+- **KERNEL.132 and .197**, still unidentified, still announced.
 
 ### After that
 

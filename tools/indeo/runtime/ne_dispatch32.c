@@ -136,6 +136,12 @@ unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
                    uint16_t ds, uint16_t es)
 {
     g_bridge_calls++;
+    /* IR32_TRACE=1 prints each crossing. Which 32-bit entries a decode
+     * reaches says more than the return code does: seven crossings with an
+     * empty output buffer could be seven calls to setup routines that never
+     * got as far as the decoder itself. */
+    if (getenv("IR32_TRACE"))
+        fprintf(stderr, "  -> 32-bit %04X:%08X\n", seg, off);
     void (*fn)(CPU *) = find(seg, off);
     if (!fn) {
         miss(seg, off);
@@ -151,6 +157,9 @@ unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
     c.fs = ds;
     c.gs = ds;
     fn(&c);
+    if (getenv("IR32_TRACE"))
+        fprintf(stderr, "     returned eax=%08X ecx=%08X edx=%08X esi=%08X "
+                        "edi=%08X\n", c.eax, c.ecx, c.edx, c.esi, c.edi);
     /* How many argument bytes the callee popped is its `retf N`, which the
      * lifted form does not carry yet - so the caller drops only the return
      * address and SP is left N bytes low. Wrong, but visibly wrong. */
