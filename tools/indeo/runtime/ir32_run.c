@@ -34,6 +34,7 @@ uint32_t ir32_driver_call(uint32_t driver_id, uint16_t hdrv, uint16_t msg,
                           uint16_t ds, uint16_t ss, uint16_t sp);
 void ne_report_imports(void);
 uint16_t ne_init(uint32_t stack_bytes);
+extern unsigned long g_bridge_calls;
 
 #define MAX_SEG 64
 static struct { uint32_t off, size; uint16_t flags; } g_seg[MAX_SEG];
@@ -113,6 +114,7 @@ static int load_ne(const char *path)
     unsigned shift = rd16f(img + neoff + 0x32);
     if (!shift) shift = 9;
     g_autodata = rd16f(img + neoff + 0x0E);
+    uint16_t heapsz = rd16f(img + neoff + 0x10);
 
     ne_mem_init();
     if (count >= MAX_SEG) count = MAX_SEG - 1;
@@ -125,6 +127,19 @@ static int load_ne(const char *path)
         if (len == 0 && sector) len = 65536;
         if (alloc == 0) alloc = 65536;
         uint32_t size = alloc > len ? alloc : len;
+        /* The automatic data segment carries a local heap past its data, which
+         * the header asks for and the loader appends. LocalAlloc hands out near
+         * offsets into it, so without the room those calls have nowhere to go. */
+        if (i + 1 == g_autodata && heapsz) {
+            /* ne_heap is the INITIAL local heap; Windows grows it on demand
+             * within the 64K the segment can address, and IR32 asks for 1116
+             * bytes in one call against a declared 1024. So give it the rest
+             * of the segment, which is what a real DGROUP has available. */
+            g_local_base = (uint16_t)size;
+            g_local_next = g_local_base;
+            g_local_end = 0xFFF0u;
+            size = 0x10000u;
+        }
         const void *src = (sector && len) ? img + ((uint32_t)sector << shift) : NULL;
         g_seg[i + 1].off = ne_alloc((uint16_t)(i + 1), src, len, size);
         g_seg[i + 1].size = size;
@@ -133,6 +148,9 @@ static int load_ne(const char *path)
     g_nseg = count;
     printf("applied %u selector fixups in the loaded image\n",
            apply_relocs(img, count, segtab, shift));
+    if (g_local_base)
+        printf("local heap: %u bytes at DS:%04X\n",
+               (unsigned)(g_local_end - g_local_base), g_local_base);
     free(img);
     return 1;
 }
@@ -147,7 +165,7 @@ static int load_ne(const char *path)
  * that a stray write lands somewhere identifiable rather than in a neighbour.
  */
 enum {
-    SEL_BIIN = 0x0300, SEL_BIOUT, SEL_IN, SEL_OUT, SEL_ICD
+    SEL_BIIN = 0x0300, SEL_BIOUT, SEL_IN, SEL_OUT, SEL_ICD, SEL_ICOPEN
 };
 
 static void put32(unsigned char *p, uint32_t v)
@@ -210,11 +228,29 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
     put32(icd + 12, farptr(SEL_BIOUT));
     put32(icd + 16, farptr(SEL_OUT));
 
+    /* DRV_OPEN on an installable driver takes no argument, but a codec is
+     * opened through ICM and gets an ICOPEN in lParam2 saying what it is being
+     * opened FOR. Without it the driver has no reason to believe it is being
+     * asked to decompress, which is the obvious first suspect when the messages
+     * after it answer ICERR_BADFORMAT.
+     *
+     *   0  dwSize    4  fccType 'vidc'   8  fccHandler 'IV32'
+     *  12  dwVersion 16  dwFlags        20  dwError
+     *  24  pV1Reserved  28  pV2Reserved  32  dnDevNode      = 36 bytes
+     */
+    ne_alloc(SEL_ICOPEN, NULL, 0, 64);
+    unsigned char *ico = g_arena + g_segoff[SEL_ICOPEN];
+    memset(ico, 0, 36);
+    put32(ico + 0, 36);
+    memcpy(ico + 4, "vidc", 4);
+    memcpy(ico + 8, "IV32", 4);
+    put32(ico + 16, 4);          /* ICMODE_DECOMPRESS */
+
     uint32_t id = 0;
     struct { uint16_t msg; const char *name; uint32_t p1, p2; } pre[] = {
         { 0x0001, "DRV_LOAD",   0, 0 },
         { 0x0002, "DRV_ENABLE", 0, 0 },
-        { 0x0003, "DRV_OPEN",   0, 0 },
+        { 0x0003, "DRV_OPEN",   0, farptr(SEL_ICOPEN) },
     };
     for (unsigned i = 0; i < 3; i++) {
         uint32_t r = ir32_driver_call(id, 1, pre[i].msg, pre[i].p1, pre[i].p2,
@@ -245,6 +281,10 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
         if (outp[i]) nonzero++;
     printf("output: %lu of %u bytes non-zero (%.1f%%)\n",
            nonzero, outsize, 100.0 * nonzero / outsize);
+    /* Zero crossings means the driver never called its own decoder, which is a
+     * different problem from a decoder that ran and wrote nothing - and an
+     * empty output buffer looks identical either way. */
+    printf("crossings into the 32-bit core: %lu\n", g_bridge_calls);
 
     if (out_ppm && nonzero) {
         FILE *o = fopen(out_ppm, "wb");

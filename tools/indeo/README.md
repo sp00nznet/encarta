@@ -434,61 +434,70 @@ descriptors, the base and limit calls accepted and ignored, since `g_segoff`
 already says where a segment is). Setting the D/B bit changes no behaviour
 here; refusing the call would stop the driver dead.
 
-### ICM_DECOMPRESS runs
-
-`ir32_run <DLL> decode <frame.bin> <w> <h> [out.ppm]` performs the whole
-sequence against a real frame taken from an Encarta clip - `T010532A.AVI`,
-216x192 IV32, whose first frame is a 15,844-byte keyframe.
+### The codec accepts the format
 
 ```
 DRV_LOAD               -> 00000001
 DRV_ENABLE             -> 00000001
-DRV_OPEN               -> 00003FB8
-ICM_DECOMPRESS_QUERY   -> 0000FEC0
-ICM_DECOMPRESS_BEGIN   -> 0000FEC0
-ICM_DECOMPRESS         -> 0000FEC0
+DRV_OPEN               -> 00003FCA
+ICM_DECOMPRESS_QUERY   -> 00000000     ICERR_OK
+ICM_DECOMPRESS_BEGIN   -> 00000000     ICERR_OK
+ICM_DECOMPRESS         -> FFFFFFFF     ICERR_UNSUPPORTED
 output: 0 of 124416 bytes non-zero (0.0%)
+crossings into the 32-bit core: 7
 ```
 
-Every message reaches the driver and returns. **No pixels come out**, and the
-output check is there so that cannot be mistaken for success: a decoder that
-runs and writes nothing returns just like one that worked, and the return code
-alone would not have said which happened.
+The frame is real - `T010532A.AVI` from the disc, 216x192 IV32, first frame a
+15,844-byte keyframe - and **the codec now agrees to decode it**. `QUERY` and
+`BEGIN` both return `ICERR_OK`, which means the driver has looked at the input
+and output headers and accepted both.
 
-The structures are the documented ones laid out by hand - a 16-bit
-`BITMAPINFOHEADER` and `ICDECOMPRESS` are packed and use far pointers, so a
-host struct would not reproduce either - with each object given its own selector
-so a stray write lands somewhere identifiable.
+**Seven crossings into the 32-bit core.** The decode path reaches the lifted
+32-bit Indeo code and returns from it. Both halves execute, the bridge between
+them carries the call, and the failure that remains is the driver's own answer
+rather than the recompilation falling over.
 
-Finding the frame took one correction worth noting: the AVI's video chunks are
-`00iv` inside `rec ` interleave lists, not the `dc`/`db` a demuxer normally
-looks for. Whitelisting suffixes finds zero frames here and reports success
-while doing it.
+That counter exists because an empty output buffer looks the same whether the
+decoder ran and wrote nothing or was never called at all, and those need
+completely different fixes.
 
-### What is actually stopping it
+### Three things stood between "returns garbage" and "returns ICERR_OK"
 
-Six far calls go nowhere:
+**A fallthrough is not a far call.** A function that runs into the next one
+emits:
 
-```
-0000:0000   twice during DRV_LOAD and DRV_ENABLE
-0065:0008   during DRV_OPEN
-0052:000E   ICM_DECOMPRESS_QUERY
-0059:000A   ICM_DECOMPRESS_BEGIN
-0063:0000   ICM_DECOMPRESS
+```c
+recomp_dispatch(cpu, 0x52, 0xE); return;   /* fallthrough 0x00052E */
 ```
 
-Selectors 0x52, 0x59, 0x63 and 0x65 are mapped to nothing - they fall outside
-every range the loader assigns (segments 1-47, stack 0x100, instance 0x200,
-structures 0x300s, heap 0x400s, DPMI 0x800s). Together with the two null
-targets, they are all the same shape: **the driver is calling through far
-pointers that nothing has filled in.**
+There is no call here - control simply continues at the next function - and the
+address is split as a real-mode paragraph *and* carries the lifter's base, so
+the true target is `0x00052E - 0x0280 = 0x02AE`. Every ICM message handler ends
+this way, so before the fix every message returned without doing anything. 33
+sites across two segments.
 
-That is a specific and checkable claim rather than a mystery. The candidates
-are a table the DLL builds during a load step not being reached, or one meant
-to be filled by relocations of a type the loader currently skips - it applies
-only internal SELECTOR fixups, and imports get a synthetic selector rather than
-a real address. Which of those it is decides the next move, and the run already
-names every pointer to go and look at.
+**The harness pushed the wrong return address.** `ir32_driver_call` pushed zero,
+so DriverProc's own `retf` dispatched to `0000:0000` and read as a missing
+function. 0xFFFF is lift16's marker for a return address it does not know, and
+the runtime already treats it as the end of a call.
+
+**A codec is opened through ICM, not just DRV_OPEN.** `lParam2` carries an
+`ICOPEN` saying what the driver is being opened *for* - `fccType` 'vidc',
+`fccHandler` 'IV32', `dwFlags` ICMODE_DECOMPRESS. Without it the driver has no
+reason to believe it is being asked to decompress anything.
+
+### The local heap was missing, and that was the last of it
+
+`DRV_OPEN` calls `LocalAlloc` three times, and LocalAlloc hands out **near**
+offsets into the automatic data segment - so it needs heap room inside that
+segment, which the loader was not providing. The NE header asks for
+`ne_heap = 1024` bytes.
+
+1024 is not enough: the driver asks for 1116 in a single call. That is not a
+contradiction, it is what `ne_heap` means - the *initial* heap, which Windows
+grows on demand within the 64K a segment can address. Giving the data segment
+the rest of its 64K, which is what a real DGROUP has, took `QUERY` and `BEGIN`
+from `ICERR_BADPARAM` to `ICERR_OK`.
 
 ### Where it stands
 
@@ -497,16 +506,20 @@ names every pointer to go and look at.
 | `init` | passes - runs 3:0000 and matches the disassembly |
 | `sweep` | 191 of 217 32-bit entries return |
 | `driver` | DRV_LOAD, DRV_ENABLE, DRV_OPEN all succeed |
-| `decode` | all six messages return; output is empty |
+| `decode` | QUERY and BEGIN return ICERR_OK; DECOMPRESS returns -1 |
 
 Still open:
 
-- **The six unfilled far pointers**, above.
-- **`retf N` across the bridge**, and import argument counts: both leave SP low
-  by a known-unknown number of bytes, which is a plausible way for a structure
-  pointer to be read from the wrong stack slot.
-- **KERNEL.132 and .197** reached and unimplemented, with the run continuing
-  past them.
+- **Two selector calls, KERNEL.171 and .188**, reached during `BEGIN` and
+  unimplemented. The pattern is unmistakable - one is called with 3, the other
+  returns a pair stored as a far pointer at `es:[bx+0x3038]` - and it is the
+  16:32 selector setup the decoder addresses its frame through. Implementing
+  them on a guess is the wrong move: a plausible-but-wrong selector produces a
+  decode that writes somewhere rather than one that fails.
+- **`retf N` across the bridge**, and import argument counts.
+- **`driver` opens without an ICOPEN** and so answers differently from
+  `decode`; that is the command being a minimal probe rather than a
+  disagreement.
 
 ### After that
 
