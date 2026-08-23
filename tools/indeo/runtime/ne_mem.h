@@ -1,0 +1,49 @@
+/*
+ * ne_mem.h - the memory both halves of a lifted NE share.
+ *
+ * Deliberately mentions no CPU type. pcrecomp's 16-bit and 32-bit runtimes
+ * both define a struct called CPU and both define push32, so they can never
+ * appear in one translation unit - which means anything they both need lives
+ * here instead.
+ *
+ * ---- one arena ----
+ *
+ * The two halves address memory differently. Lifted 32-bit code computes a
+ * host address (`rd32(SEGB(c->ds) + off)`); lifted 16-bit code indexes a flat
+ * array (`cpu->mem[SEG_OFF(seg, off)]`). They have to mean the same bytes, or
+ * a pointer handed from the driver to the decoder points somewhere else.
+ *
+ * So there is one arena, and two views of it:
+ *
+ *     g_segoff[sel]   offset of the segment within the arena  (16-bit view)
+ *     g_selbase[sel]  host address of the same                (32-bit view)
+ *
+ * The first 64K of the arena is left unmapped on purpose. An unset selector
+ * has offset 0, so reading through one faults immediately instead of quietly
+ * returning whatever happens to be at the start of the arena - which is the
+ * difference between finding a bug and shipping one.
+ */
+#ifndef IR32_NE_MEM_H
+#define IR32_NE_MEM_H
+
+#include <stdint.h>
+
+#define NE_ARENA_GUARD  0x10000u        /* unmapped, catches selector 0 */
+#define NE_ARENA_SIZE   0x2000000u      /* 32 MB: 47 segments plus buffers */
+
+extern unsigned char *g_arena;
+extern uint32_t g_segoff[65536];        /* arena-relative, 0 == unmapped */
+extern uint32_t g_selbase[65536];       /* host address of the same */
+
+/* Reserve the arena. Call once, before anything is mapped. */
+void ne_mem_init(void);
+
+/* Place `size` bytes for `sel` in the arena and copy `src` into it (or zero it
+ * if src is NULL). Returns the arena offset. */
+uint32_t ne_alloc(uint16_t sel, const void *src, uint32_t copy, uint32_t size);
+
+/* Point a selector at an existing arena offset - for aliasing one segment
+ * under a second selector, which the driver does when it hands a buffer on. */
+void ne_alias(uint16_t sel, uint32_t arena_off);
+
+#endif /* IR32_NE_MEM_H */

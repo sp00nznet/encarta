@@ -48,18 +48,16 @@
  * otherwise assumes a flat stack. It is why ESP here is a small number and not
  * a host address: the code does `mov bp, sp` and then reads `[bp+6]`, and a
  * host address does not survive being truncated to 16 bits. */
-extern uint32_t g_selbase[65536];
+#include "ne_mem.h"
+
 #define SEGB(sel) (g_selbase[(uint16_t)(sel)])
 #define STACK_BASE(c) SEGB((c)->ss)
 
-#include "cpu.h"
+#include "recomp32_cpu/cpu.h"
 
-/* ---- selector -> base ------------------------------------------------- */
-
-/* Indexed by selector. 64K entries of uint32_t is 256 KB, which is not worth
- * being clever about to save. A selector with no segment mapped reads 0, and
- * an access through it faults immediately at a near-null address rather than
- * silently landing somewhere plausible. */
+/* ---- selector -> base -------------------------------------------------
+ * g_selbase and the arena behind it live in ne_mem.h, shared with the 16-bit
+ * half so a pointer built on one side means the same bytes on the other. */
 /* ---- lifted code ------------------------------------------------------ */
 
 typedef struct {
@@ -71,8 +69,6 @@ typedef struct {
  * with. dispatch() uses c->cs to pick between them. */
 void ne_register_code(uint16_t sel, const ne_entry *entries, unsigned count);
 
-/* Map a segment's bytes at `host` and give it a selector. */
-void ne_map(uint16_t sel, void *host, uint32_t size);
 
 /* Call the lifted function at `target` in the current code segment. */
 void dispatch(CPU *c, uint32_t target);
@@ -80,8 +76,15 @@ void dispatch(CPU *c, uint32_t target);
 /* Same, for an indirect jump: the callee returns to our caller, not to us. */
 void dispatch_jmp(CPU *c, uint32_t target);
 
-/* Set up the selector table and a stack. Returns the stack selector. */
+/* Allocate a stack in the arena and return its selector. */
 uint16_t ne_init(uint32_t stack_bytes);
+
+/* Call a lifted 32-bit function from the 16-bit half. The caller has already
+ * pushed the far return address, so ESP points at it and arguments follow -
+ * exactly the frame the real thunk sees. Returns the callee's `retf N`, so the
+ * caller can drop the arguments the way hardware would. */
+unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
+                   uint16_t ds, uint16_t es);
 
 /* Diagnostics: how many dispatches missed the entry table, and where. */
 extern unsigned long g_dispatch_misses;
