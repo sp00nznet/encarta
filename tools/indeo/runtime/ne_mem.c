@@ -16,6 +16,8 @@ uint32_t g_selbase[65536];
 
 static uint32_t g_next = NE_ARENA_GUARD;
 
+uint16_t g_local_base, g_local_next, g_local_end;
+
 void ne_mem_init(void)
 {
     if (g_arena)

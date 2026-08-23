@@ -126,9 +126,16 @@ uint16_t ne_init(uint32_t stack_bytes)
  * inherit the caller's general registers - and ESP points at the return
  * address the caller pushed, which is the frame the real thunk reads its
  * arguments from at [bp+4]. */
+/* How many times the 16-bit half has crossed into the 32-bit core. Zero after
+ * a decode means the driver never got as far as calling its own decoder,
+ * which is a different problem from a decoder that ran and produced nothing -
+ * and an empty output buffer looks identical either way. */
+unsigned long g_bridge_calls;
+
 unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
                    uint16_t ds, uint16_t es)
 {
+    g_bridge_calls++;
     void (*fn)(CPU *) = find(seg, off);
     if (!fn) {
         miss(seg, off);

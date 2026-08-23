@@ -1008,6 +1008,9 @@ def main():
         far_call = _re.compile(r"\bfar_([0-9A-Fa-f]{4})_([0-9A-Fa-f]{4})\(cpu\)")
         near_call = _re.compile(
             r"\bres_[0-9A-Fa-f]{6}\(cpu\);(\s*)/\* call 0x([0-9A-Fa-f]+) \*/")
+        fallthru = _re.compile(
+            r"recomp_dispatch\(cpu, 0x[0-9A-Fa-f]+, 0x[0-9A-Fa-f]+\); return;"
+            r"(?=\s*/\* fallthrough 0x([0-9A-Fa-f]{6}) \*/)")
         enter_hook = _re.compile(
             r"void ir32_s%d_([0-9A-F]{4})\(CPU \*cpu\)\n\{" % a.seg)
         # The `tail-jmp 0xNNNNNN` value is the lifter's base PLUS the target,
@@ -1062,6 +1065,19 @@ def main():
             # cycle exhausts the host stack with no useful diagnosis, because
             # the fault handler needs stack it no longer has. One counter at
             # each entry catches it while there is still room to print.
+            # A function that runs into the next one emits a "fallthrough",
+            # and lift16 splits that address as a real-mode paragraph too:
+            #
+            #   recomp_dispatch(cpu, 0x52, 0xE); return; /* fallthrough 0x00052E */
+            #
+            # There is no far call here at all - the code simply continues at
+            # the next function. And as with `res_<n>`, the number is the
+            # lifter's base plus the target: 0x00052E - 0x0280 = 0x02AE, which
+            # is the function that follows. Every ICM message handler ends this
+            # way, so unfixed, every message returns without doing anything.
+            c = fallthru.sub(
+                lambda m: "ir32_s%d_%04X(cpu); return;"
+                          % (a.seg, int(m.group(1), 16) - start), c)
             c = enter_hook.sub(
                 lambda m: "%s\n    if (ir32_enter(0x%s)) return;"
                           % (m.group(0), m.group(1)), c)

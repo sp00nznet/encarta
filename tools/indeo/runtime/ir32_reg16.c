@@ -98,8 +98,12 @@ uint32_t ir32_driver_call(uint32_t driver_id, uint16_t hdrv, uint16_t msg,
     push16(&cpu, msg);
     push32(&cpu, lp1);
     push32(&cpu, lp2);
-    push16(&cpu, 0);        /* return segment - nothing returns through it */
-    push16(&cpu, 0);        /* return offset */
+    /* 0xFFFF is lift16's marker for a return address it does not know, and
+     * recomp_dispatch treats it as the end of a call. Pushing zero instead
+     * makes DriverProc's own `retf` dispatch to 0000:0000, which then reads as
+     * a missing function rather than as a return. */
+    push16(&cpu, 0xFFFF);   /* return segment */
+    push16(&cpu, 0xFFFF);   /* return offset */
     cpu.bp = cpu.sp;
 
 #if defined(_WIN32)

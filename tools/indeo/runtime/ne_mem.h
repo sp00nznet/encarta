@@ -42,6 +42,16 @@ void ne_mem_init(void);
  * if src is NULL). Returns the arena offset. */
 uint32_t ne_alloc(uint16_t sel, const void *src, uint32_t copy, uint32_t size);
 
+/* The automatic data segment's local heap.
+ *
+ * The NE header asks for one (ne_heap) and the loader is expected to append it
+ * past the segment's data - it is where LocalAlloc allocates from, and its
+ * handles are NEAR offsets into DS, so it cannot live anywhere else. IR32 asks
+ * for 1024 bytes and calls LocalAlloc three times during DRV_OPEN. */
+extern uint16_t g_local_base;   /* offset within the data segment */
+extern uint16_t g_local_next;
+extern uint16_t g_local_end;
+
 /* Point a selector at an existing arena offset - for aliasing one segment
  * under a second selector, which the driver does when it hands a buffer on. */
 void ne_alias(uint16_t sel, uint32_t arena_off);

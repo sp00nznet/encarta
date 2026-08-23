@@ -92,7 +92,9 @@ static void note_import(uint16_t mod, uint16_t ord)
  * the selector it was bound to. */
 enum { K_GLOBALALLOC = 15, K_GLOBALREALLOC = 16, K_GLOBALFREE = 17,
        K_GLOBALLOCK = 18, K_GLOBALUNLOCK = 19, K_GLOBALSIZE = 20,
-       K_GETVERSION = 3 };
+       K_GETVERSION = 3,
+       K_LOCALALLOC = 5, K_LOCALREALLOC = 6, K_LOCALFREE = 7,
+       K_LOCALLOCK = 8, K_LOCALUNLOCK = 9, K_LOCALSIZE = 10 };
 
 static uint16_t g_next_heap_sel = 0x0400;
 
@@ -133,6 +135,34 @@ static void kernel_import(CPU *cpu, uint16_t ord)
         cpu->dx = 0;
         break;
     }
+    case K_LOCALALLOC: {
+        /* LocalAlloc(flags, bytes) -> a NEAR handle in the local heap. With
+         * LMEM_FIXED the handle is the offset itself, which is what callers
+         * that dereference without locking assume, so hand back the offset.
+         *
+         * Bump allocation, no free list: this runs one decode and stops. If
+         * something starts freeing and reallocating in a loop, this will run
+         * out and say so rather than quietly handing back a used block. */
+        uint32_t bytes = mem_read16(cpu, cpu->ss, (uint16_t)(cpu->sp + 4));
+        bytes = (bytes + 3u) & ~3u;
+        if (!bytes) bytes = 4;
+        if (g_local_next + bytes > g_local_end) {
+            fprintf(stderr, "LocalAlloc: local heap exhausted (%u bytes)\n",
+                    (unsigned)bytes);
+            cpu->ax = 0;
+        } else {
+            cpu->ax = g_local_next;
+            g_local_next = (uint16_t)(g_local_next + bytes);
+        }
+        break;
+    }
+    case K_LOCALLOCK:
+        cpu->ax = mem_read16(cpu, cpu->ss, (uint16_t)(cpu->sp + 4));
+        break;
+    case K_LOCALUNLOCK:
+    case K_LOCALFREE:
+        cpu->ax = 0;
+        break;
     case K_GLOBALUNLOCK:
     case K_GLOBALFREE:
         cpu->ax = 0;
@@ -162,6 +192,7 @@ void ne_import(CPU *cpu, const char *module, uint16_t ordinal)
  * tail of the call chain, which is what identifies the cycle. */
 #define MAX_DEPTH 256
 static void recomp_dispatch_inner(CPU *cpu, uint16_t seg, uint16_t off);
+uint16_t ir32_last_entered(void);
 static unsigned g_depth;
 static uint32_t g_chain[MAX_DEPTH];
 
@@ -213,8 +244,17 @@ static void recomp_dispatch_inner(CPU *cpu, uint16_t seg, uint16_t off)
     void (*fn)(CPU *) = find16(seg, off);
     if (!fn) {
         g_dispatch16_misses++;
-        fprintf(stderr, "recomp_dispatch: no lifted entry for %04X:%04X\n",
-                seg, off);
+        /* Say whether the selector is mapped at all, and who called. An
+         * unmapped selector means the far pointer came out of memory nothing
+         * initialised - a different problem from a segment that exists but was
+         * not lifted, and the address alone does not distinguish them. The
+         * caller is the last function entered, which the cycle counter is
+         * already recording. */
+        fprintf(stderr, "recomp_dispatch: no lifted entry for %04X:%04X (%s)"
+                        " from %04X\n",
+                seg, off,
+                g_segoff[seg] ? "selector mapped" : "selector UNMAPPED",
+                ir32_last_entered());
         cpu->sp += 4;
         return;
     }
@@ -270,6 +310,13 @@ void catz_div0(void)
 static unsigned long g_calls, g_budget = 2000000;
 static uint16_t g_trail[TRAIL];
 static unsigned g_trail_n;
+
+/* The last lifted function entered. Enough to say who made a bad far call,
+ * without threading a caller argument through every dispatch. */
+uint16_t ir32_last_entered(void)
+{
+    return g_trail_n ? g_trail[(g_trail_n - 1) % TRAIL] : 0;
+}
 
 void ir32_enter_reset(unsigned long budget)
 {
