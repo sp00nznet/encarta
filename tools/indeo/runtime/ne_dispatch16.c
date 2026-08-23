@@ -98,6 +98,39 @@ enum { K_GLOBALALLOC = 15, K_GLOBALREALLOC = 16, K_GLOBALFREE = 17,
 
 static uint16_t g_next_heap_sel = 0x0400;
 
+/* How many bytes of arguments each import takes.
+ *
+ * Win16 is Pascal: the callee pops. Getting this wrong does not fail at the
+ * call - it leaves the stack skewed, and the NEXT function reads its
+ * parameters from the wrong slots. That is how GlobalAlloc came to be called
+ * with a size it was never given: the two-byte argument to the call before it
+ * was still sitting there.
+ *
+ * Sizes are read off the call sites and the documented prototypes, and an
+ * ordinal that is not listed returns -1 so the runtime can say it does not
+ * know rather than assume zero. */
+static int kernel_argbytes(uint16_t ord)
+{
+    switch (ord) {
+    case K_GETVERSION:      return 0;
+    case K_LOCALALLOC:      return 4;   /* UINT flags, UINT bytes */
+    case K_LOCALREALLOC:    return 6;   /* HLOCAL, UINT, UINT */
+    case K_LOCALFREE:
+    case K_LOCALLOCK:
+    case K_LOCALUNLOCK:
+    case K_LOCALSIZE:       return 2;   /* HLOCAL */
+    case K_GLOBALALLOC:     return 6;   /* UINT flags, DWORD bytes */
+    case K_GLOBALREALLOC:   return 8;   /* HGLOBAL, DWORD, UINT */
+    case K_GLOBALFREE:
+    case K_GLOBALLOCK:
+    case K_GLOBALUNLOCK:
+    case K_GLOBALSIZE:      return 2;   /* HGLOBAL */
+    case 171:               return 2;   /* one word at the call site */
+    case 188:               return 2;   /* one word at the call site */
+    default:                return -1;  /* unknown - say so */
+    }
+}
+
 static void kernel_import(CPU *cpu, uint16_t ord)
 {
     switch (ord) {
@@ -173,6 +206,44 @@ static void kernel_import(CPU *cpu, uint16_t ord)
     case K_GETVERSION:
         cpu->ax = 0x0A03;      /* Windows 3.10 */
         break;
+
+    /* ---- KERNEL.171 and .188 ----------------------------------------
+     *
+     * Named by what they are observed to do, not by an ordinal table this
+     * project does not have. Both are implemented to their contract at the
+     * call site, which is visible and unambiguous even where the name is not.
+     *
+     * 171 is handed the selector GlobalLock just returned - the driver stores
+     * it at es:[bx+0x3038] on the line before - and its result is stored
+     * immediately after it at es:[bx+0x303A]. A second selector kept beside
+     * the first, made from it, is an alias. AllocSelector, AllocCStoDSAlias
+     * and AllocDStoCSAlias all do that and all have the same observable
+     * effect here: another selector over the same bytes. Which of the three it
+     * is does not change what this has to return, so it is not guessed at.
+     *
+     * 188 takes one word - always 3 at this site - and its DWORD result goes
+     * straight into GlobalAlloc as dwBytes, then gets decremented and sign
+     * tested as a loop bound. So it converts a count into a byte size, and 3
+     * segments' worth is 3 << 16. If that reading is wrong the buffer is the
+     * wrong size, which shows up as a decode that writes the wrong amount
+     * rather than as silence.
+     */
+    case 171: {
+        uint16_t src = mem_read16(cpu, cpu->ss, (uint16_t)(cpu->sp + 4));
+        uint16_t alias = g_next_heap_sel++;
+        ne_alias(alias, g_segoff[src]);
+        cpu->ax = alias;
+        cpu->dx = 0;
+        break;
+    }
+    case 188: {
+        uint32_t n = mem_read16(cpu, cpu->ss, (uint16_t)(cpu->sp + 4));
+        if (!n) n = 1;
+        uint32_t bytes = n << 16;
+        cpu->ax = (uint16_t)(bytes & 0xFFFF);
+        cpu->dx = (uint16_t)(bytes >> 16);
+        break;
+    }
     default:
         fprintf(stderr, "unimplemented KERNEL.%u\n", ord);
         break;
@@ -224,13 +295,23 @@ static void recomp_dispatch_inner(CPU *cpu, uint16_t seg, uint16_t off)
     if ((seg & 0xFF00) == 0xF000) {
         uint16_t mod = seg & 0xFF;
         note_import(mod, off);
-        if (mod < NMODULES && !strcmp(MODULES[mod], "KERNEL"))
-            kernel_import(cpu, off);
-        /* Pascal convention: the callee pops its arguments. We do not know how
-         * many without a prototype per ordinal, so the far return address is
-         * dropped and the arguments are left - which keeps SP wrong rather
-         * than silently plausible, and the import report says who to blame. */
-        cpu->sp += 4;
+        int argbytes = 0;
+        if (mod < NMODULES && !strcmp(MODULES[mod], "KERNEL")) {
+            argbytes = kernel_argbytes(off);
+            if (argbytes < 0) {
+                static unsigned char warned[256];
+                if (!warned[off & 0xFF]) {
+                    warned[off & 0xFF] = 1;
+                    fprintf(stderr, "KERNEL.%u: argument size unknown, stack "
+                                    "will be left skewed\n", off);
+                }
+                argbytes = 0;
+            } else {
+                kernel_import(cpu, off);
+            }
+        }
+        /* Pascal: the callee pops its arguments as well as the return address. */
+        cpu->sp = (uint16_t)(cpu->sp + 4 + argbytes);
         return;
     }
 
