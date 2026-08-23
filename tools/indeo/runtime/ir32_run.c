@@ -196,7 +196,7 @@ static void bih(unsigned char *p, int32_t w, int32_t h, uint16_t bits,
 static uint32_t farptr(uint16_t sel) { return ((uint32_t)sel << 16); }
 
 static int decode_frame(const char *path, int w, int h, const char *out_ppm,
-                        uint16_t ds, uint16_t ss)
+                        uint16_t ds, uint16_t ss, int outbits)
 {
     FILE *f = fopen(path, "rb");
     if (!f) { fprintf(stderr, "cannot open %s\n", path); return 1; }
@@ -207,16 +207,31 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
     if (fread(frame, 1, n, f) != (size_t)n) { fclose(f); return 1; }
     fclose(f);
 
-    uint32_t outsize = (uint32_t)w * h * 3;
-    ne_alloc(SEL_BIIN,  NULL, 0, 64);
-    ne_alloc(SEL_BIOUT, NULL, 0, 64);
+    /* The codec decodes into its own buffers and then converts to whatever
+     * output format was asked for, so the format is not a formality - a depth
+     * it does not support is a decode that runs and then declines to hand
+     * anything back. Indeo 3 supports several, and which one this build wants
+     * is a question for the driver rather than for a guess. */
+    uint32_t outsize = (uint32_t)w * h * ((outbits + 7) / 8);
+    /* A BITMAPINFOHEADER for a palettised format is followed by its colour
+     * table - 256 RGBQUADs - and the codec both reads and fills it. 64 bytes
+     * holds the header alone, so at 8bpp the palette would land outside the
+     * object. Give both headers room for a full BITMAPINFO. */
+    ne_alloc(SEL_BIIN,  NULL, 0, 40 + 256 * 4);
+    ne_alloc(SEL_BIOUT, NULL, 0, 40 + 256 * 4);
     ne_alloc(SEL_IN,    frame, (uint32_t)n, (uint32_t)n + 64);
     ne_alloc(SEL_OUT,   NULL, 0, outsize + 64);
     ne_alloc(SEL_ICD,   NULL, 0, 64);
     free(frame);
 
     bih(g_arena + g_segoff[SEL_BIIN],  w, h, 24, "IV32", (uint32_t)n);
-    bih(g_arena + g_segoff[SEL_BIOUT], w, h, 24, NULL,   outsize);
+    bih(g_arena + g_segoff[SEL_BIOUT], w, h, (uint16_t)outbits, NULL, outsize);
+    if (outbits <= 8) {
+        /* biClrUsed: how many entries the codec should fill in. Left zero it
+         * means "all of them" for some callers and "none" for others, and the
+         * difference is a palette that never gets written. */
+        put32(g_arena + g_segoff[SEL_BIOUT] + 32, 1u << outbits);
+    }
 
     /* ICDECOMPRESS, 24 bytes: flags, lpbiInput, lpInput, lpbiOutput,
      * lpOutput, ckid. */
@@ -279,14 +294,36 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
     unsigned long nonzero = 0;
     for (uint32_t i = 0; i < outsize; i++)
         if (outp[i]) nonzero++;
-    printf("output: %lu of %u bytes non-zero (%.1f%%)\n",
-           nonzero, outsize, 100.0 * nonzero / outsize);
+    printf("output (%d bpp): %lu of %u bytes non-zero (%.1f%%)\n",
+           outbits, nonzero, outsize, 100.0 * nonzero / outsize);
     /* Zero crossings means the driver never called its own decoder, which is a
      * different problem from a decoder that ran and wrote nothing - and an
      * empty output buffer looks identical either way. */
     printf("crossings into the 32-bit core: %lu\n", g_bridge_calls);
 
-    if (out_ppm && nonzero) {
+    /* Did the decoder write anywhere at all?
+     *
+     * An empty output buffer has two very different explanations: nothing
+     * decoded, or something decoded into the driver's own working buffers and
+     * was never copied out. Those need opposite fixes, and the output buffer
+     * alone cannot tell them apart. The driver's buffers are the ones it got
+     * from GlobalAlloc, which this runtime hands out from 0x0400 up. */
+    printf("driver buffers written:\n");
+    unsigned any = 0;
+    for (uint16_t sel = 0x0400; sel < 0x0420; sel++) {
+        if (!g_segoff[sel])
+            continue;
+        const unsigned char *p = g_arena + g_segoff[sel];
+        unsigned long nz = 0;
+        for (uint32_t i = 0; i < 0x10000u; i++)
+            if (p[i]) nz++;
+        printf("   selector %04X: %lu of 65536 bytes non-zero\n", sel, nz);
+        any += (nz != 0);
+    }
+    if (!any)
+        printf("   (none - nothing decoded anywhere, not just not copied out)\n");
+
+    if (out_ppm && nonzero && outbits == 24) {
         FILE *o = fopen(out_ppm, "wb");
         if (o) {
             fprintf(o, "P6\n%d %d\n255\n", w, h);
@@ -374,12 +411,13 @@ int main(int argc, char **argv)
     }
     if (!strcmp(argv[2], "decode")) {
         if (argc < 6) {
-            fprintf(stderr, "usage: %s <DLL> decode <frame.bin> <w> <h> [out.ppm]\n",
-                    argv[0]);
+            fprintf(stderr, "usage: %s <DLL> decode <frame.bin> <w> <h> "
+                            "[out.ppm] [outbits]\n", argv[0]);
             return 2;
         }
         return decode_frame(argv[3], atoi(argv[4]), atoi(argv[5]),
-                            argc > 6 ? argv[6] : NULL, ds, ss);
+                            argc > 6 ? argv[6] : NULL, ds, ss,
+                            argc > 7 ? atoi(argv[7]) : 24);
     }
 
     fprintf(stderr, "unknown command %s\n", argv[2]);

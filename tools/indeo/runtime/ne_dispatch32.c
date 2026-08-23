@@ -147,6 +147,39 @@ unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
         miss(seg, off);
         return 0;
     }
+    /* The decode entry's first act is to find its instance data:
+     *
+     *     mov ax, [bp+0x1E]     ; a selector
+     *     mov es, ax
+     *     mov ax, es:[ecx]      ; ecx = [bp+4]; read a word through it
+     *     mov ds, ax            ; that word IS the instance's data selector
+     *
+     * So a decode that returns without doing anything is most cheaply explained
+     * by that chain not resolving. Walk it here, where both the arena and the
+     * selector table are in reach, rather than inferring it from registers. */
+    if (getenv("IR32_TRACE") && seg == 3 && off == 0x610) {
+        const unsigned char *frame = g_arena + g_segoff[ss] + sp;
+        uint16_t p_off = (uint16_t)(frame[4] | (frame[5] << 8));
+        uint16_t p_sel = (uint16_t)(frame[0x1E] | (frame[0x1F] << 8));
+        fprintf(stderr, "     args: [bp+04]=%04X [bp+1E]=%04X (%s)\n",
+                p_off, p_sel, g_segoff[p_sel] ? "mapped" : "UNMAPPED");
+        if (g_segoff[p_sel]) {
+            const unsigned char *q = g_arena + g_segoff[p_sel] + p_off;
+            uint16_t ds_sel = (uint16_t)(q[0] | (q[1] << 8));
+            /* Two words, not one. The decoder takes DS from the first and FS
+             * from the second, and bails out immediately if the second is
+             * zero:  add ecx,2 / mov ax,es:[ecx] / test ax,ax / je. */
+            uint16_t fs_sel = (uint16_t)(q[2] | (q[3] << 8));
+            fprintf(stderr, "     ds from %04X:%04X = %04X (%s), "
+                            "fs from +2 = %04X (%s)\n",
+                    p_sel, p_off, ds_sel,
+                    g_segoff[ds_sel] ? "mapped" : "UNMAPPED",
+                    fs_sel,
+                    fs_sel == 0 ? "ZERO - decoder bails here"
+                                : (g_segoff[fs_sel] ? "mapped" : "UNMAPPED"));
+        }
+    }
+
     CPU c;
     memset(&c, 0, sizeof c);
     c.cs = seg;
