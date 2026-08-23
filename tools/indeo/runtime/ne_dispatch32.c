@@ -177,6 +177,18 @@ unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
                     fs_sel,
                     fs_sel == 0 ? "ZERO - decoder bails here"
                                 : (g_segoff[fs_sel] ? "mapped" : "UNMAPPED"));
+            /* The decoder walks a sliding pair over this array - DS from
+             * [ecx], FS from [ecx+2], ecx += 2 - and stops when one reads
+             * zero. How many entries there are is how many planes it will
+             * process, so the array itself says how much work it intends. */
+            fprintf(stderr, "     selector array at %04X:%04X:", p_sel, p_off);
+            for (int k = 0; k < 8; k++) {
+                uint16_t v = (uint16_t)(q[k * 2] | (q[k * 2 + 1] << 8));
+                fprintf(stderr, " %04X%s", v, g_segoff[v] ? "" : "!");
+                if (!v)
+                    break;
+            }
+            fprintf(stderr, "   (! = unmapped)\n");
         }
     }
 
