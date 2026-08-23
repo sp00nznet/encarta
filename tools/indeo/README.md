@@ -689,13 +689,42 @@ The output buffer receives 8,984 bytes of the constant 4 across rows 143-191.
 That is a background fill, not an image - two distinct values in the whole
 buffer - and it happens before the fault.
 
-Still open:
+### What the codec's working buffer looks like
 
-- **The far pointer at the fault.** Whether an instruction lost its segment
-  half or the decoder wants a flat view.
-- **16 bpp returns ICERR_OK and writes nothing**, where 8 bpp faults and writes
-  a fill. The two disagree and both are wrong.
-- **KERNEL.132 and .197**, reached and still unidentified.
+Selector 0x0405 - the instance the decoder works in - is not empty and is not
+noise:
+
+```
+byte histogram: 04 x37449, 00 x22407, 7E x770, 07 x642, 06 x596, 7B x572
+runs of 0x04:  0x0088..0x0171 (233)   0x0188..0x0228 (160)
+               0x0288..0x0371 (233)   0x0388..0x0428 (160)
+```
+
+Runs starting every 256 bytes, alternating 233 and 160 long, with other values
+between them. That is image-shaped: a stride, a dominant flat value, and
+detail around it. It is what a partially decoded plane would look like.
+
+It still does not match ffmpeg. `verify_decode.py` finds no row of the
+reference in any buffer, and the nearest approach is a chroma row at 6.31
+against a 5th-percentile of 30 - the same near-constant coincidence documented
+above, not a hit. So something decoder-shaped is happening and it is not
+producing this frame.
+
+The fill that reaches the output buffer is the same byte, 0x04, which is why
+8,984 bytes of it arrive there and nothing else does.
+
+### A reading that did not survive
+
+KERNEL.171 was re-examined on the theory that it is `GetSelectorBase` - its
+result feeds the table the 32-bit core dereferences, and an address would fit
+that better than a selector. Implementing it that way changed nothing: the
+value that faults comes from elsewhere. It is also ruled out by the caller,
+which stores only AX (`mov es:[bx+0x303A], ax`), so a 32-bit linear base would
+lose its high half on the way in. The return is 16 bits, so it is a selector,
+and the alias reading stands. The change was reverted rather than left in as an
+unjustified guess.
+
+Still open:
 
 ### After that
 

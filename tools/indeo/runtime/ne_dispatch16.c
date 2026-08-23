@@ -229,6 +229,18 @@ static void kernel_import(CPU *cpu, uint16_t ord)
      * rather than as silence.
      */
     case 171: {
+        /* Selector in, selector out - an alias.
+         *
+         * GetSelectorBase was tried here on the theory that the result feeds
+         * the 32-bit core's pointer table, and it changed nothing: the value
+         * that faults comes from elsewhere. It is also ruled out by the caller,
+         * which stores only AX - `mov es:[bx+0x303A], ax` - so a 32-bit linear
+         * base would lose its high half on the way in. The return is 16 bits,
+         * which makes it a selector.
+         *
+         * AllocSelector, AllocCStoDSAlias and AllocDStoCSAlias all have the
+         * same observable effect here, so which of the three it is does not
+         * change what this must return. */
         uint16_t src = mem_read16(cpu, cpu->ss, (uint16_t)(cpu->sp + 4));
         uint16_t alias = g_next_heap_sel++;
         ne_alias(alias, g_segoff[src]);
