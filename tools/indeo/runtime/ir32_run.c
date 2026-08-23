@@ -27,6 +27,9 @@ int  ir32_init_test(uint16_t ds, uint16_t ss);
 int  ir32_sweep32(uint16_t ds, uint16_t ss);
 unsigned long ir32_call16(uint16_t seg, uint16_t off, uint16_t ds,
                           uint16_t ss, uint16_t sp);
+uint32_t ir32_driver_call(uint32_t driver_id, uint16_t hdrv, uint16_t msg,
+                          uint32_t lp1, uint32_t lp2,
+                          uint16_t ds, uint16_t ss, uint16_t sp);
 void ne_report_imports(void);
 uint16_t ne_init(uint32_t stack_bytes);
 
@@ -161,6 +164,33 @@ int main(int argc, char **argv)
     if (!strcmp(argv[2], "sweep"))
         return ir32_sweep32(ds, ss);
     if (!strcmp(argv[2], "driver")) {
+        /* The sequence Video for Windows actually performs on an installable
+         * codec. Doing it in order matters: DRV_OPEN is what returns the driver
+         * ID every later message is addressed to, and a decode cannot be asked
+         * for before ICM_DECOMPRESS_BEGIN has set the format up.
+         *
+         * Values are from the installable-driver and ICM interfaces, not from
+         * guesswork - and the DLL's own dispatch agrees, routing 0x4005..0x402A
+         * through a 38-entry table, which is where the ICM_DECOMPRESS_* range
+         * sits. */
+        struct { uint16_t msg; const char *name; } seq[] = {
+            { 0x0001, "DRV_LOAD" },
+            { 0x0002, "DRV_ENABLE" },
+            { 0x0003, "DRV_OPEN" },
+        };
+        uint32_t id = 0;
+        for (unsigned i = 0; i < sizeof seq / sizeof seq[0]; i++) {
+            uint32_t r = ir32_driver_call(id, 1, seq[i].msg, 0, 0, ds, ss, 0xFF00);
+            printf("   %-22s -> %08X\n", seq[i].name, r);
+            if (seq[i].msg == 0x0003 && r != 0xFFFFFFFFu)
+                id = r;            /* DRV_OPEN returns the driver ID */
+        }
+        printf("driver id: %08X\n", id);
+        ne_report_imports();
+        return 0;
+    }
+
+    if (!strcmp(argv[2], "driver-old")) {
         /* DriverProc is segment 6 offset 0, ordinal 2 in the entry table.
          * Calling it with an empty frame is not a decode - it is the first
          * question the runtime can ask the 16-bit half at all, and what it

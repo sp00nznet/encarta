@@ -44,7 +44,8 @@ cl /nologo /W3 /O2 /EHa ^
    "%HERE%\ne_mem.c" "%HERE%\ne_dispatch16.c" "%HERE%\ne_dispatch32.c" ^
    "%HERE%\ir32_reg16.c" "%HERE%\ir32_reg32.c" "%HERE%\ir32_run.c" ^
    /I "%HERE%" /I "%OUT%" /I "%PCRECOMP%\runtime" ^
-   /Fo:"%OUT%\\" /Fe:"%OUT%\ir32_run.exe" || exit /b 1
+   /Fo:"%OUT%\\" /Fe:"%OUT%\ir32_run.exe" ^
+   /link /STACK:0x20000000 || exit /b 1
 
 echo.
 echo built %OUT%\ir32_run.exe

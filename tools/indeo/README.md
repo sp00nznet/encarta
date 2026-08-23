@@ -671,19 +671,89 @@ so faulting is the expected answer to the wrong question rather than a defect
 in the lift. What it does establish is that 37 lifted segments load, register
 and begin executing.
 
+### Calling it the way Video for Windows does
+
+`ir32_run <DLL> driver` issues the real installable-driver sequence -
+`DRV_LOAD`, `DRV_ENABLE`, `DRV_OPEN` - rather than poking at an entry point.
+The frame is not guesswork: DriverProc is `FAR PASCAL`, and the lifted code
+confirms the layout itself, doing `enter 0x2A` and then reading
+
+```
+[bp+0x12] dwDriverID   [bp+0x0E] msg      [bp+0x06] lParam2
+[bp+0x10] hDriver      [bp+0x0A] lParam1
+```
+
+which is exactly 16 bytes of arguments above a 4-byte far return address. The
+result comes back in DX:AX.
+
+```
+DRV_LOAD               -> 00003FB8
+DRV_ENABLE             -> 00000000
+DRV_OPEN               -> 00000000
+```
+
+### Two bugs that ran
+
+Getting there meant finding two defects that neither compiled nor crashed at
+the point of the mistake. Both were in how lift16's output was being read.
+
+**A tail jump is near, and was being made far.** lift16 splits a jump target
+into a real-mode paragraph pair:
+
+```c
+{ recomp_dispatch(cpu, 0x5, 0xE); return; }   /* tail-jcc 0x00005E */
+```
+
+0x005E is an offset in the same segment, not `0005:000E`. Sent to segment 5, it
+lands in unrelated code that can jump back the same way - and lifted calls are
+real C calls, so a cycle exhausts the host stack rather than looping.
+
+**A near call was going to the wrong function.** lift16 names the target
+`res_<n>` where n is its own base *plus* the target. A call to offset 0 from a
+function based at 0x00E4 is named `res_0000E4`, so reading the name as an offset
+sends it to 0x00E4 - which in that case is the calling function itself:
+
+```c
+ir32_s9_00E4(cpu);      /* call 0x0000 */      <- wrong
+ir32_s9_0000(cpu);      /* call 0x0000 */      <- right
+```
+
+The instruction settles it. At 0x00F5 the bytes are `E8 08 FF`, a `call rel16`
+of -248, and the next instruction is at 0x00F8, so the target is 0x0000. The
+comment is the decoded target; the name is not.
+
+That one is the reason for the care taken elsewhere in this file about numbers
+that look fine. It linked, it ran, and it called the wrong function - every
+near call in 35 segments, silently.
+
+**Finding them needed a counter, not a debugger.** A cycle in lifted code dies
+by stack overflow, and that death is silent: the fault handler needs stack it no
+longer has, and raising the stack to half a gigabyte only makes it take longer.
+Counting entries and printing the last 32 named the cycle in one run.
+
+### Where it stands
+
+| | |
+|---|---|
+| `init` | passes - runs 3:0000 and matches the disassembly |
+| `sweep` | 191 of 217 32-bit entries return |
+| `driver` | DRV_LOAD/ENABLE/OPEN all return; stops at a named gap |
+
+The gap is `seg 6 offset 0633 was never lifted` - one of segment 6's 42
+near-call targets that descent never reached, and 0x0633 is past the end of a
+1,382-byte segment, so the call site itself is in a region carved out of
+alignment. That is the next thread to pull, and it is a coverage problem in one
+16-bit segment rather than anything structural.
+
 Still open:
 
-- **A real `ICM_DECOMPRESS`.** DriverProc wants a message and a far pointer to
-  a structure. Building one means reading how VFW calls a codec, which is
-  documented, rather than guessing - and the fault is inside a lifted 16-bit
-  function reached by near call, so the depth guard on far calls does not see
-  it.
-- **`retf N` is not carried across the bridge.** A 16-bit caller of the 32-bit
-  half drops the return address but not the arguments, so SP is left N bytes
-  low. Recording each function's `retf` immediate in its entry table is the fix.
-- **Import argument counts.** Pascal convention is callee-cleans, and without a
-  prototype per ordinal the runtime cannot pop the right number - so it pops
-  none and says so.
+- **Segment 6's carve.** 83.6% covered, and the executed path runs into the
+  rest. The stubs name themselves when called, so the work is bounded and
+  visible rather than guessed at.
+- **`ICM_DECOMPRESS` itself**, which needs `DRV_OPEN` to return a real driver
+  ID first.
+- **`retf N` across the bridge**, and import argument counts: both leave SP low
+  by a known-unknown number of bytes.
 
 ### After that
 
