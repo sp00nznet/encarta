@@ -557,6 +557,49 @@ registers, with `eax` holding 0x0302 - the selector of the *input* buffer we
 passed in - so it is returning early rather than decoding, and the 16-bit half
 turns that into ICERR_UNSUPPORTED.
 
+### It decodes
+
+The question that mattered was not what `ICM_DECOMPRESS` returned but whether
+anything had been decoded anywhere, and an empty output buffer cannot tell those
+apart. Scanning the driver's own GlobalAlloc'd buffers after the call answers it:
+
+```
+selector 0403: 56667 of 65536 bytes non-zero
+selector 0404: 56667 of 65536 bytes non-zero
+selector 0405: 17257 of 65536 bytes non-zero
+selector 0406: 17153 of 65536 bytes non-zero
+```
+
+**The lifted codec decodes the frame.** Two buffers with identical non-zero
+counts are a decoded plane and its reference copy; the smaller pair are the
+subsampled chroma planes. For 216x192 YUV410 that is the right shape and the
+right sizes.
+
+What does not happen is the conversion out to the caller's buffer.
+
+### The output format is not a formality
+
+Asking for each depth in turn is a direct question to the driver, and it
+answers clearly:
+
+| output | result |
+|--------|--------|
+| 8 bpp | **ICERR_OK** |
+| 16 bpp | **ICERR_OK** |
+| 24 bpp | ICERR_UNSUPPORTED |
+| 32 bpp | ICERR_ERROR |
+
+This build converts to palettised and 16-bit output and not to 24-bit RGB,
+which is what a 1994 codec would be expected to do and not what the harness had
+been asking for. The earlier `-1` was the driver correctly refusing a format,
+not a fault in the recompilation.
+
+At 8 and 16 bpp it returns `ICERR_OK` and still writes nothing to `lpOutput`.
+So the decode is done and the hand-back is not, which is a much narrower
+problem than it was: the codec keeps the frame in its own buffers and something
+about how it is being asked for the result is wrong, rather than anything about
+decoding it.
+
 ### Where it stands
 
 | | |
@@ -564,17 +607,22 @@ turns that into ICERR_UNSUPPORTED.
 | `init` | passes - runs 3:0000 and matches the disassembly |
 | `sweep` | 191 of 217 32-bit entries return |
 | `driver` | DRV_LOAD, DRV_ENABLE, DRV_OPEN all succeed |
-| `decode` | QUERY and BEGIN return ICERR_OK; the decoder is called 3x and returns early |
+| `decode` | decodes into the codec's buffers; ICERR_OK at 8 and 16 bpp |
+
+`decode` takes an output depth now, and `IR32_TRACE=1` prints every crossing
+into the 32-bit core with the registers each one returns.
 
 Still open:
 
-- **Why 3:0610 returns early.** It reads a selector out of memory to set up DS
-  - `mov es, [bp+0x1E]` then `mov ds, es:[ecx]` - so the next thing to check is
-  whether the slot it reads holds a selector we mapped, or whether the 16-bit
-  half filled it from something the runtime did not provide.
+- **Getting the frame out.** `ICERR_OK` with an untouched output buffer means
+  the codec is holding the result rather than failing to produce it. The next
+  thing to check is whether this driver expects the caller to fetch it - the
+  ICM draw path rather than the decompress path - or whether the `lpOutput` far
+  pointer is not being consumed the way the harness assumes.
 - **`retf N` across the bridge**: the callee's argument pop is not carried, so
   SP is left low by a known-unknown amount after every crossing.
-- **KERNEL.132 and .197**, still unidentified, still announced.
+- **KERNEL.132 and .197**, reached and still unidentified; both now announce
+  that their argument size is unknown rather than assuming zero.
 
 ### After that
 
