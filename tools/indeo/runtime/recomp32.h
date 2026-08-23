@@ -58,6 +58,34 @@
 /* ---- selector -> base -------------------------------------------------
  * g_selbase and the arena behind it live in ne_mem.h, shared with the 16-bit
  * half so a pointer built on one side means the same bytes on the other. */
+/* ---- watching memory access ---------------------------------------------
+ *
+ * Built with IR32_WATCH, every read and write records its address in a ring
+ * buffer. A fault gives one address and no history; this gives the last
+ * several, which is what distinguishes "an offset with no base" from "a base
+ * added twice" - the two look identical from a single wild address.
+ *
+ * The macros go over cpu.h's accessors rather than replacing them, so the
+ * lifted code needs no changes and the non-watching build is byte-identical.
+ */
+#ifdef IR32_WATCH
+#define IR32_WATCH_N 16
+extern uint32_t g_watch[IR32_WATCH_N];
+extern unsigned g_watch_n;
+static inline uint32_t ir32_note(uint32_t a)
+{
+    g_watch[g_watch_n++ % IR32_WATCH_N] = a;
+    return a;
+}
+#define rd8(a)     rd8(ir32_note(a))
+#define rd16(a)    rd16(ir32_note(a))
+#define rd32(a)    rd32(ir32_note(a))
+#define wr8(a, v)  wr8(ir32_note(a), (v))
+#define wr16(a, v) wr16(ir32_note(a), (v))
+#define wr32(a, v) wr32(ir32_note(a), (v))
+void ir32_watch_dump(void);
+#endif
+
 /* ---- lifted code ------------------------------------------------------ */
 
 typedef struct {
