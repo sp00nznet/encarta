@@ -118,6 +118,21 @@ static void kernel_import(CPU *cpu, uint16_t ord)
         cpu->ax = 0;
         cpu->dx = mem_read16(cpu, cpu->ss, (uint16_t)(cpu->sp + 4));
         break;
+    case K_GLOBALREALLOC: {
+        /* GlobalReAlloc(handle, dwBytes, flags). The handle is a selector and
+         * stays one, so the block is re-bound at a fresh arena offset and the
+         * handle is returned unchanged. Contents are not copied: nothing on
+         * this path re-allocates a block it has already filled, and silently
+         * copying the wrong length would be worse than not copying. */
+        uint16_t h = mem_read16(cpu, cpu->ss, (uint16_t)(cpu->sp + 8));
+        uint32_t bytes = (uint32_t)mem_read16(cpu, cpu->ss, (uint16_t)(cpu->sp + 4))
+                       | ((uint32_t)mem_read16(cpu, cpu->ss, (uint16_t)(cpu->sp + 6)) << 16);
+        if (!bytes) bytes = 16;
+        if (h) ne_alloc(h, NULL, 0, bytes);
+        cpu->ax = h;
+        cpu->dx = 0;
+        break;
+    }
     case K_GLOBALUNLOCK:
     case K_GLOBALFREE:
         cpu->ax = 0;
@@ -166,6 +181,15 @@ void recomp_dispatch(CPU *cpu, uint16_t seg, uint16_t off)
 
 static void recomp_dispatch_inner(CPU *cpu, uint16_t seg, uint16_t off)
 {
+    /* A `retf` in lifted code pops the return address and dispatches to it,
+     * which is right when the caller was also lifted. When the caller is C -
+     * this runtime, or any lifted function reached by a direct call - there is
+     * no address to go back to, and lift16 marks that by pushing 0xFFFF as the
+     * return offset. Dispatching to it looks like a missing function and is
+     * really just the end of the call. */
+    if (off == 0xFFFF)
+        return;
+
     if ((seg & 0xFF00) == 0xF000) {
         uint16_t mod = seg & 0xFF;
         note_import(mod, off);
@@ -231,14 +255,7 @@ void catz_div0(void)
     abort();
 }
 
-/* `int N` from lifted 16-bit code. A Windows DLL has no business issuing a
- * software interrupt, so reaching this means execution walked into data. */
-void int_handler(CPU *cpu, unsigned char n)
-{
-    fprintf(stderr, "int_handler: INT %02Xh reached (ax=%04X) - data being "
-                    "executed, not code\n", n, cpu->ax);
-    abort();
-}
+
 
 /* ---- call-cycle detection --------------------------------------------
  *
@@ -273,4 +290,116 @@ int ir32_enter(unsigned off)
             fprintf(stderr, "   %04X\n", g_trail[(g_trail_n + i) % TRAIL]);
     }
     return 1;      /* unwind: every frame returns at once */
+}
+
+/* ---- DPMI (INT 31h) ---------------------------------------------------
+ *
+ * A Win16 program in protected mode manipulates its own descriptors through
+ * DPMI, and this driver uses it for exactly one thing:
+ *
+ *     mov bx, [bp+6]        ; a selector
+ *     lea di, [bp-8]        ; an 8-byte descriptor buffer
+ *     mov es, ax            ; ES:DI = buffer
+ *     mov ax, 0x000B        ; get descriptor
+ *     int 31h
+ *     or byte [bp-2], 0x40  ; byte 6, bit 6 - the D/B bit
+ *     mov ax, 0x000C        ; set descriptor
+ *     int 31h
+ *
+ * It is marking its own segments 32-bit at load time. That is the same fact
+ * the lift had to establish by decoding each segment both ways and comparing
+ * junk rates, arrived at from the other direction - and it is why nothing in
+ * the file records the width statically: the DLL sets it itself, at run time.
+ *
+ * Descriptors are kept as an 8-byte image per selector. Nothing here consults
+ * them for addressing - g_segoff does that - so setting the D/B bit changes
+ * no behaviour. Refusing the call, though, would stop the driver dead.
+ */
+#define DESC_MAX 4096
+static unsigned char g_desc[DESC_MAX][8];
+static unsigned char g_desc_init[DESC_MAX];
+static uint16_t g_next_dpmi_sel = 0x0800;
+
+static void desc_default(uint16_t sel)
+{
+    if (sel >= DESC_MAX || g_desc_init[sel])
+        return;
+    uint32_t base = g_selbase[sel];
+    unsigned char *d = g_desc[sel];
+    d[0] = 0xFF; d[1] = 0xFF;                    /* limit 15:0 */
+    d[2] = (unsigned char)(base & 0xFF);
+    d[3] = (unsigned char)((base >> 8) & 0xFF);
+    d[4] = (unsigned char)((base >> 16) & 0xFF);
+    d[5] = 0xF3;                                 /* present, ring 3, data, rw */
+    d[6] = 0x40;                                 /* D/B set, limit 19:16 = 0 */
+    d[7] = (unsigned char)((base >> 24) & 0xFF);
+    g_desc_init[sel] = 1;
+}
+
+static void set_cf(CPU *cpu, int on)
+{
+    if (on) cpu->flags |= FLAG_CF; else cpu->flags &= ~FLAG_CF;
+}
+
+static void dpmi(CPU *cpu)
+{
+    uint16_t fn = cpu->ax;
+    switch (fn) {
+    case 0x0000: {                 /* allocate LDT descriptors, CX of them */
+        uint16_t n = cpu->cx ? cpu->cx : 1;
+        uint16_t first = g_next_dpmi_sel;
+        for (uint16_t i = 0; i < n; i++)
+            desc_default((uint16_t)(first + i));
+        g_next_dpmi_sel = (uint16_t)(first + n);
+        cpu->ax = first;
+        set_cf(cpu, 0);
+        break;
+    }
+    case 0x000B: {                 /* get descriptor: BX -> ES:DI */
+        desc_default(cpu->bx);
+        if (cpu->bx < DESC_MAX)
+            for (int i = 0; i < 8; i++)
+                mem_write8(cpu, cpu->es, (uint16_t)(cpu->di + i), g_desc[cpu->bx][i]);
+        set_cf(cpu, 0);
+        break;
+    }
+    case 0x000C: {                 /* set descriptor: ES:DI -> BX */
+        if (cpu->bx < DESC_MAX) {
+            for (int i = 0; i < 8; i++)
+                g_desc[cpu->bx][i] = mem_read8(cpu, cpu->es, (uint16_t)(cpu->di + i));
+            g_desc_init[cpu->bx] = 1;
+        }
+        set_cf(cpu, 0);
+        break;
+    }
+    case 0x0006:                   /* get segment base -> CX:DX */
+        cpu->cx = (uint16_t)(g_selbase[cpu->bx] >> 16);
+        cpu->dx = (uint16_t)(g_selbase[cpu->bx] & 0xFFFF);
+        set_cf(cpu, 0);
+        break;
+    case 0x0007:                   /* set segment base, 0008 limit, 0009 rights */
+    case 0x0008:
+    case 0x0009:
+        /* Accepted and ignored: the base a program asks for is meaningless
+         * here, since g_segoff already says where the segment is. */
+        set_cf(cpu, 0);
+        break;
+    default:
+        fprintf(stderr, "DPMI %04X not implemented\n", fn);
+        set_cf(cpu, 1);
+        break;
+    }
+}
+
+/* `int N` from lifted 16-bit code. INT 31h is DPMI and expected; anything else
+ * in a Windows DLL means execution walked into data. */
+void int_handler(CPU *cpu, unsigned char n)
+{
+    if (n == 0x31) {
+        dpmi(cpu);
+        return;
+    }
+    fprintf(stderr, "int_handler: INT %02Xh reached (ax=%04X) - data being "
+                    "executed, not code\n", n, cpu->ax);
+    abort();
 }
