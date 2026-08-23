@@ -315,12 +315,60 @@ static void recomp_dispatch_inner(CPU *cpu, uint16_t seg, uint16_t off)
         return;
     }
 
+    /* The target may be a copy of a code segment rather than the segment
+     * itself - see ne_code_alias. Resolve before deciding anything else, or a
+     * call into the copy looks like a call to a segment that was never
+     * lifted. */
+    if (!find16(seg, off)) {
+        uint16_t orig = ne_code_alias(seg, 47);
+        if (orig) {
+            if (getenv("IR32_TRACE16"))
+                fprintf(stderr, "  (selector %04X is a copy of segment %u)\n",
+                        seg, orig);
+            seg = orig;
+        }
+    }
+
     if (seg == 2 || seg == 3) {
         unsigned pops = ne_call32(seg, off, cpu->ss, cpu->sp,
                                   cpu->ds, cpu->es);
         cpu->sp += (uint16_t)(4 + pops);
         return;
     }
+
+    /* 7:0714 is the decompress worker, and it decides whether to decode at all
+     * on two bytes of its instance structure:
+     *
+     *     mov bx, si            ; si = [bp+0x0E], a near pointer in DS
+     *     cmp byte ds:[bx+8], 0 / je 0x7D4
+     *     cmp byte ds:[bx+6], 0 / je 0x7D4
+     *
+     * At the point of dispatch the caller has pushed its arguments and the far
+     * return address, so [bp+0x0E] in the callee is [sp+0x0C] here. Reading it
+     * from this side avoids having to thread a hook through every lifted
+     * function just to see two bytes. */
+    if (getenv("IR32_TRACE") && seg == 7 && off == 0x714) {
+        uint16_t si  = mem_read16(cpu, cpu->ss, (uint16_t)(cpu->sp + 0x0C));
+        uint16_t icd = mem_read16(cpu, cpu->ss, (uint16_t)(cpu->sp + 0x08));
+        uint16_t ics = mem_read16(cpu, cpu->ss, (uint16_t)(cpu->sp + 0x0A));
+        fprintf(stderr, "  7:0714 instance=DS:%04X icdecompress=%04X:%04X\n",
+                si, ics, icd);
+        fprintf(stderr, "         ds:[si]=%04X  ds:[si+6]=%02X  ds:[si+8]=%02X"
+                        "   %s\n",
+                mem_read16(cpu, cpu->ds, si),
+                mem_read8(cpu, cpu->ds, (uint16_t)(si + 6)),
+                mem_read8(cpu, cpu->ds, (uint16_t)(si + 8)),
+                (mem_read8(cpu, cpu->ds, (uint16_t)(si + 6)) &&
+                 mem_read8(cpu, cpu->ds, (uint16_t)(si + 8)))
+                    ? "both set - decode path" : "one is zero - takes 0x7D4");
+    }
+
+    /* IR32_TRACE16=1 prints every far call in the 16-bit half. Reading the
+     * path one conditional branch at a time is how 0x7D4 got mistaken for a
+     * bail-out when it is the ordinary route; the whole path in one run does
+     * not leave that room. */
+    if (getenv("IR32_TRACE16"))
+        fprintf(stderr, "  16-bit %04X:%04X\n", seg, off);
 
     void (*fn)(CPU *) = find16(seg, off);
     if (!fn) {

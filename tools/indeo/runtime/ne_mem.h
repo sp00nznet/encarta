@@ -52,6 +52,17 @@ extern uint16_t g_local_base;   /* offset within the data segment */
 extern uint16_t g_local_next;
 extern uint16_t g_local_end;
 
+/* Which lifted segment a selector holds a copy of, or 0.
+ *
+ * A 16:32 codec does not call its 32-bit code where the loader put it. It
+ * GlobalAllocs a block, copies the code segment into it, marks the descriptor
+ * 32-bit through DPMI, and far-calls the COPY - so the call arrives as
+ * 0404:2C10 where the lifted functions are registered under segment 3. The
+ * copy is byte-identical bar the loader's fixups, so comparing a page of it
+ * against each loaded segment identifies it. Answers are cached; a selector
+ * that is not a copy of anything is only ever scanned once. */
+uint16_t ne_code_alias(uint16_t sel, unsigned nseg);
+
 /* Point a selector at an existing arena offset - for aliasing one segment
  * under a second selector, which the driver does when it hands a buffer on. */
 void ne_alias(uint16_t sel, uint32_t arena_off);

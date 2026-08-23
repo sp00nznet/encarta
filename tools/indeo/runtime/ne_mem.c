@@ -77,3 +77,38 @@ void ne_alias(uint16_t sel, uint32_t arena_off)
         ne_mem_init();
     bind_sel(sel, arena_off);
 }
+
+/* See ne_mem.h. The comparison is 256 bytes: enough that two different
+ * segments cannot agree by accident, short enough to not matter. The first
+ * bytes of a code segment are its entry thunk, which differs between segments,
+ * so this is a strong discriminator in practice. */
+#define ALIAS_CMP 256
+
+static uint16_t g_alias[65536];
+static unsigned char g_alias_known[65536];
+
+uint16_t ne_code_alias(uint16_t sel, unsigned nseg)
+{
+    if (g_alias_known[sel])
+        return g_alias[sel];
+    g_alias_known[sel] = 1;
+    g_alias[sel] = 0;
+    if (!g_segoff[sel] || !g_arena)
+        return 0;
+    const unsigned char *a = g_arena + g_segoff[sel];
+    for (unsigned i = 1; i <= nseg && i < 64; i++) {
+        if (i == sel || !g_segoff[i])
+            continue;
+        const unsigned char *b = g_arena + g_segoff[i];
+        unsigned same = 0;
+        for (unsigned k = 0; k < ALIAS_CMP; k++)
+            same += (a[k] == b[k]);
+        /* Not memcmp: the loader patches selectors into the original after the
+         * copy was taken, so a handful of bytes legitimately differ. */
+        if (same >= ALIAS_CMP - 16) {
+            g_alias[sel] = (uint16_t)i;
+            break;
+        }
+    }
+    return g_alias[sel];
+}
