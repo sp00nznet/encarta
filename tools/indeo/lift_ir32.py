@@ -1107,9 +1107,28 @@ def main():
         for m in pat.finditer(body_text):
             want.add(int(m.group(1), 16))
         missing = sorted(want - defined)
+
+        # The lifter and the carve disagree about where a function ends. lift16
+        # decides from its own view of the body, so a jump this carve considers
+        # internal can still come out as a tail dispatch - to an address that is
+        # real code but not an entry, and therefore not callable from C. That is
+        # how the ICM branch of DriverProc's message switch, segment 6 offset
+        # 0x005E, ended up a stub while sitting inside a function that was
+        # lifted and reached.
+        #
+        # Report those separately from the genuinely unreached ones. They are
+        # not a coverage problem and the fix is mechanical: lift again with them
+        # as roots, which lift_all.py does.
+        # Not `m in by_addr`: the sweep is misaligned exactly where these
+        # live - that is why they were never entries - so membership in it
+        # is the wrong question. Decoding AT the address is the right one,
+        # and carve_functions resyncs on a root the sweep does not have.
+        callable_missing = [m for m in missing if valid(m)]
+        if callable_missing:
+            print("NOT-ENTRY: " + " ".join("%X" % m for m in callable_missing))
         if missing:
-            print("   %d near-call targets are outside what descent reached; "
-                  "stubbed" % len(missing))
+            print("   %d call targets not lifted (%d are real code needing only "
+                  "an entry); stubbed" % (len(missing), len(callable_missing)))
 
         # Declarations first. A call to a function defined later in the file
         # gets an implicit `int f()` from C, which then conflicts with the real

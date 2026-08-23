@@ -43,11 +43,25 @@ def main():
             continue
         idx = seg.index
         out = os.path.join(a.out, "ir32_seg%d.c" % idx)
-        r = subprocess.run(
-            [sys.executable, os.path.join(HERE, "lift_ir32.py"), a.ne_file,
-             "--seg", str(idx), "-o", out, "--pcrecomp", a.pcrecomp],
-            capture_output=True, text=True)
+        cmd = [sys.executable, os.path.join(HERE, "lift_ir32.py"), a.ne_file,
+               "--seg", str(idx), "-o", out, "--pcrecomp", a.pcrecomp]
+        r = subprocess.run(cmd, capture_output=True, text=True)
         log = r.stdout + r.stderr
+
+        # A target the lifter calls that is real code but not an entry cannot
+        # be called from C. lift_ir32 names them; feeding them back as roots
+        # makes them entries. One extra pass, because a second has never found
+        # more and looping would hide it if it did.
+        extra = []
+        for line in log.splitlines():
+            if line.startswith("NOT-ENTRY:"):
+                extra += line.split()[1:]
+        if extra and r.returncode == 0:
+            for e in extra:
+                cmd += ["--entry", e]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            log = r.stdout + r.stderr
+            print("seg %-3d re-lifted with %d recovered entries" % (idx, len(extra)))
         if r.returncode != 0:
             print("seg %-3d FAILED\n%s" % (idx, log))
             return 1

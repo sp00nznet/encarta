@@ -434,6 +434,62 @@ descriptors, the base and limit calls accepted and ignored, since `g_segoff`
 already says where a segment is). Setting the D/B bit changes no behaviour
 here; refusing the call would stop the driver dead.
 
+### ICM_DECOMPRESS runs
+
+`ir32_run <DLL> decode <frame.bin> <w> <h> [out.ppm]` performs the whole
+sequence against a real frame taken from an Encarta clip - `T010532A.AVI`,
+216x192 IV32, whose first frame is a 15,844-byte keyframe.
+
+```
+DRV_LOAD               -> 00000001
+DRV_ENABLE             -> 00000001
+DRV_OPEN               -> 00003FB8
+ICM_DECOMPRESS_QUERY   -> 0000FEC0
+ICM_DECOMPRESS_BEGIN   -> 0000FEC0
+ICM_DECOMPRESS         -> 0000FEC0
+output: 0 of 124416 bytes non-zero (0.0%)
+```
+
+Every message reaches the driver and returns. **No pixels come out**, and the
+output check is there so that cannot be mistaken for success: a decoder that
+runs and writes nothing returns just like one that worked, and the return code
+alone would not have said which happened.
+
+The structures are the documented ones laid out by hand - a 16-bit
+`BITMAPINFOHEADER` and `ICDECOMPRESS` are packed and use far pointers, so a
+host struct would not reproduce either - with each object given its own selector
+so a stray write lands somewhere identifiable.
+
+Finding the frame took one correction worth noting: the AVI's video chunks are
+`00iv` inside `rec ` interleave lists, not the `dc`/`db` a demuxer normally
+looks for. Whitelisting suffixes finds zero frames here and reports success
+while doing it.
+
+### What is actually stopping it
+
+Six far calls go nowhere:
+
+```
+0000:0000   twice during DRV_LOAD and DRV_ENABLE
+0065:0008   during DRV_OPEN
+0052:000E   ICM_DECOMPRESS_QUERY
+0059:000A   ICM_DECOMPRESS_BEGIN
+0063:0000   ICM_DECOMPRESS
+```
+
+Selectors 0x52, 0x59, 0x63 and 0x65 are mapped to nothing - they fall outside
+every range the loader assigns (segments 1-47, stack 0x100, instance 0x200,
+structures 0x300s, heap 0x400s, DPMI 0x800s). Together with the two null
+targets, they are all the same shape: **the driver is calling through far
+pointers that nothing has filled in.**
+
+That is a specific and checkable claim rather than a mystery. The candidates
+are a table the DLL builds during a load step not being reached, or one meant
+to be filled by relocations of a type the loader currently skips - it applies
+only internal SELECTOR fixups, and imports get a synthetic selector rather than
+a real address. Which of those it is decides the next move, and the run already
+names every pointer to go and look at.
+
 ### Where it stands
 
 | | |
@@ -441,20 +497,16 @@ here; refusing the call would stop the driver dead.
 | `init` | passes - runs 3:0000 and matches the disassembly |
 | `sweep` | 191 of 217 32-bit entries return |
 | `driver` | DRV_LOAD, DRV_ENABLE, DRV_OPEN all succeed |
+| `decode` | all six messages return; output is empty |
 
 Still open:
 
-- **`ICM_DECOMPRESS`.** The driver ID exists now, so the remaining work is the
-  `ICDECOMPRESS` structure and a real frame - both of which are documented
-  layouts rather than guesses.
-- **Three unresolved far calls**: `0000:0000` twice during load and
-  `0065:0008` during open. A null target usually means a function pointer that
-  something was supposed to fill in; segment 0x65 is past the 47 that exist, so
-  that one is reading a selector from somewhere it should not.
-- **KERNEL.132 and .197** are reached and unimplemented, and the run continues
-  past them - which is worth being suspicious of rather than pleased about.
+- **The six unfilled far pointers**, above.
 - **`retf N` across the bridge**, and import argument counts: both leave SP low
-  by a known-unknown number of bytes.
+  by a known-unknown number of bytes, which is a plausible way for a structure
+  pointer to be read from the wrong stack slot.
+- **KERNEL.132 and .197** reached and unimplemented, with the run continuing
+  past them.
 
 ### After that
 
