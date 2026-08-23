@@ -239,3 +239,38 @@ void int_handler(CPU *cpu, unsigned char n)
                     "executed, not code\n", n, cpu->ax);
     abort();
 }
+
+/* ---- call-cycle detection --------------------------------------------
+ *
+ * lift16 compiles a tail jump as a call, so a loop spanning two carved
+ * functions is recursion, and a cycle runs the host stack out. That death is
+ * silent: the structured handler needs stack it no longer has, and raising the
+ * stack to half a gigabyte only makes it take longer. So count entries and
+ * print the tail of the trail while there is still room.
+ *
+ * The budget is per top-level call, reset by ir32_enter_reset(). */
+#define TRAIL 32
+static unsigned long g_calls, g_budget = 2000000;
+static uint16_t g_trail[TRAIL];
+static unsigned g_trail_n;
+
+void ir32_enter_reset(unsigned long budget)
+{
+    g_calls = 0;
+    g_trail_n = 0;
+    if (budget) g_budget = budget;
+}
+
+int ir32_enter(unsigned off)
+{
+    g_trail[g_trail_n++ % TRAIL] = (uint16_t)off;
+    if (++g_calls < g_budget)
+        return 0;
+    if (g_calls == g_budget) {
+        fprintf(stderr, "ir32_enter: %lu calls without returning - the last "
+                        "%d entered:\n", g_calls, TRAIL);
+        for (unsigned i = 0; i < TRAIL; i++)
+            fprintf(stderr, "   %04X\n", g_trail[(g_trail_n + i) % TRAIL]);
+    }
+    return 1;      /* unwind: every frame returns at once */
+}
