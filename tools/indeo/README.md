@@ -598,6 +598,60 @@ rows are near-constant, the buffer has runs of near-constant `7D`, and the
 rows after it score 44 at the best stride. There is no plane structure. The
 frame is not decoded, in any layout, anywhere in those buffers.
 
+### Narrowing it down
+
+Three things were checked, and two candidate explanations died.
+
+**`retf N` is not the problem.** Every `retf` in the 32-bit core carries no
+immediate - the callees do not pop arguments - so the bridge returning 0 was
+always right. That had been the leading suspect on the grounds that a decoder
+reading its arguments from the wrong stack slots would look exactly like this.
+It is not that.
+
+**3:0610 is not the pixel decoder.** It walks a sliding pair over a selector
+array - DS from `[ecx]`, FS from `[ecx+2]`, then `ecx += 2`, stopping when one
+reads zero - and the array is `0405 0406 0000`. One pair, then the terminator.
+Its inner loop shuffles 4-byte values at a stride of 0xB0, which is state
+management. It being called three times looked like three planes and is not.
+
+**The input is reaching the codec intact**, and the codec says so itself. The
+worker at 7:0714 validates the Indeo frame header before doing anything:
+
+```
+mov eax, es:[bx+4]
+xor eax, es:[bx+0xC]
+xor eax, es:[bx]
+xor eax, 0x46524D48      ; 'FRMH'
+cmp eax, es:[bx+8]
+jne  bail
+```
+
+Both test frames pass it:
+
+```
+frame0: [4]^[C]^[0]^'FRMH' = 465270AC   [8] = 465270AC   PASS
+frame1: [4]^[C]^[0]^'FRMH' = 46524E1D   [8] = 46524E1D   PASS
+```
+
+and the size field at `[0xC]` equals the file length exactly - 15,844 and 852.
+So the frame the harness extracted from the AVI, the far pointer it built, and
+the selector it mapped are all correct, checked by the codec's own arithmetic
+rather than by assumption.
+
+Immediately after that check the path forks on two bytes in the instance
+structure:
+
+```
+mov bx, si               ; si = [bp+0xE]
+cmp byte ds:[bx+8], 0
+je   0x7D4
+cmp byte ds:[bx+6], 0
+je   0x7D4
+```
+
+That is where a decode that validates its input and then produces nothing goes,
+and it is the next thing to look at.
+
 ### What is actually established
 
 | | |
@@ -605,26 +659,16 @@ frame is not decoded, in any layout, anywhere in those buffers.
 | `init` | 3:0000 runs and its output matches the disassembly |
 | `sweep` | 191 of 217 32-bit entries return |
 | `driver` | DRV_LOAD, DRV_ENABLE, DRV_OPEN all succeed |
-| `decode` | all six messages return; ICERR_OK at 8 and 16 bpp; **nothing decoded** |
-
-The output-depth result stands on its own evidence and is unaffected: 8 and 16
-bpp return `ICERR_OK` where 24 returns `ICERR_UNSUPPORTED` and 32 returns
-`ICERR_ERROR`, which says this build converts to palettised and 16-bit output.
-So does the crossing trace - the driver calls 3:0610 three times, which is the
-decode entry.
-
-What is not established is that any of it produces pixels. The driver reaches
-its decoder, the decoder returns, and no frame comes out of it.
+| input | reaches the codec intact - passes its own 'FRMH' checksum |
+| output format | 8 and 16 bpp accepted; 24 and 32 refused |
+| `decode` | returns ICERR_OK and **decodes nothing** |
 
 Still open:
 
-- **Why the decoder returns without decoding.** It is reached, its selector
-  chain resolves, and it returns immediately with the input selector in EAX.
-  Tracing inside 3:0610 rather than around it is the next step.
-- **`retf N` across the bridge**: the callee's argument pop is not carried, so
-  SP is left low by a known-unknown amount after every crossing. This is a
-  candidate cause rather than a loose end - a decoder reading its arguments
-  from the wrong stack slots would behave exactly like this.
+- **The two flag bytes at `ds:[bx+6]` and `ds:[bx+8]`** in 7:0714, which decide
+  whether the decode path runs at all. They live in a structure the driver sets
+  up, so what writes them - and whether the harness has skipped a message that
+  would - is the question.
 - **KERNEL.132 and .197**, reached and still unidentified.
 
 ### After that
