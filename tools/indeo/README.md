@@ -627,34 +627,54 @@ the thunk *body* rather than its `0xCCCCCCCC` fixup placeholder. Had that
 search been left at the placeholder, this call would have had nowhere to land
 and the reason would have been considerably harder to see.
 
-### Still not a decode
+### Into the decoder, and out the other side
 
-With the alias resolved the run reaches one more crossing and writes to the
-output buffer for the first time. That is not the same as decoding, and the
-difference is worth being explicit about because the byte count alone reads
-like success:
+With the code copy resolved the run reaches 3:2C10 - the real decode thunk -
+and **faults inside it**. That is progress: the -1 the driver appeared to be
+returning was the harness's own fault handler, not the codec's answer.
+
+Two things came out of chasing it.
+
+**String operations were addressing memory with no segment base.** The lifter
+emits a whole `rep movsd` as one statement built from ESI/EDI directly:
+
+```c
+while (c->ecx) { wr32(c->edi, rd32(c->esi)); ... }
+    /* rep movsd dword ptr es:[edi], dword ptr fs:[esi] */
+```
+
+Correct for a flat image, wrong here - and overriding `rd`/`wr` does not reach
+it, because the statement is built whole. The comment names both segments, so
+the NE driver rewrites it from there rather than assuming the defaults. Two
+forms occur in this DLL, `rep movsd` and `rep stosb`, and both were wrong.
+
+**The fault is a far pointer being used as a flat offset.** `IR32_WATCH` records
+every address touched, which a single fault address cannot substitute for:
 
 ```
-output (8 bpp): 8984 of 41472 bytes non-zero (21.7%)
+20F9E0C4  in arena
+20F9E0D4  in arena
+20F9E0D4  in arena
+24FF111C  OUTSIDE arena
 ```
 
-Those 8,984 bytes hold **two distinct values**, mean 0.9, confined to rows 143
-and below. An image it is not. The buffers the codec works in changed
-substantially as well - 0405 went from 17,257 non-zero bytes to 43,129 - so
-more of the decoder is running than before, and none of it has yet produced a
-frame that `verify_decode.py` can match against ffmpeg.
+The decoder runs normally inside the arena and then steps outside in one
+instruction. The register behind it held `040611FC`, which is not a large
+number - it is **selector 0x0406, offset 0x11FC**, and 0x0406 is one of the
+driver's own GlobalAlloc'd buffers. A 16:16 far pointer is being consumed as a
+32-bit offset.
 
-Two things also became clear and are recorded so they are not re-derived:
+That is the shape of the remaining problem, and it is a model question rather
+than a bug to patch. Real 32-bit Indeo code runs with descriptors whose bases
+make a linear address meaningful, so a pointer built in one place is usable in
+another. This runtime gives every selector its own base into one arena, which
+keeps faults loud and traces readable, and makes a linear address from the
+DLL's own world meaningless. Whether that pointer should have been loaded with
+`les` and lost its segment half somewhere, or whether the decoder genuinely
+expects a flat view, is the next thing to establish - and it decides whether
+the fix is one instruction or the memory model.
 
-- **`retf N` is not a factor.** Every `retf` in the 32-bit core carries no
-  immediate, so the bridge returning 0 was always right. It had been the
-  leading suspect.
-- **The flags at instance+6 and +8 are not a decode gate.** The branch they
-  guard, 0x7D4, tests `ICDECOMPRESS.dwFlags` for `ICDECOMPRESS_HURRYUP` and
-  falls through to 5:06C8 either way. Reading a path one conditional at a time
-  is what made it look like a bail-out; the full trace is what corrected it.
-
-### Where it stands
+### What is actually established
 
 | | |
 |---|---|
@@ -663,14 +683,18 @@ Two things also became clear and are recorded so they are not re-derived:
 | `driver` | DRV_LOAD, DRV_ENABLE, DRV_OPEN all succeed |
 | input | reaches the codec intact - passes its own 'FRMH' checksum |
 | output format | 8 and 16 bpp accepted; 24 and 32 refused |
-| `decode` | the full path runs, writes to the output buffer, **produces no image** |
+| `decode` | reaches the decode thunk, runs inside it, faults on a far pointer |
+
+The output buffer receives 8,984 bytes of the constant 4 across rows 143-191.
+That is a background fill, not an image - two distinct values in the whole
+buffer - and it happens before the fault.
 
 Still open:
 
-- **What those 8,984 two-valued bytes are.** Written to the bottom quarter of
-  the frame, which is a shape worth explaining rather than dismissing.
-- **16 bpp returns ICERR_OK and writes nothing**, where 8 bpp returns -1 and
-  writes something. The two disagree and both are wrong.
+- **The far pointer at the fault.** Whether an instruction lost its segment
+  half or the decoder wants a flat view.
+- **16 bpp returns ICERR_OK and writes nothing**, where 8 bpp faults and writes
+  a fill. The two disagree and both are wrong.
 - **KERNEL.132 and .197**, reached and still unidentified.
 
 ### After that

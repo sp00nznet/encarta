@@ -317,6 +317,35 @@ def apply_selector_fixups(ne, seg_index, code):
     return bytes(out), n
 
 
+def _fix_stringops(c):
+    """Give string operations their segment bases.
+
+    lift32_cpu emits a whole `rep movsd`/`rep stosb` as one statement built
+    from ESI/EDI directly, which is correct for a flat image and wrong for a
+    segmented one. The instruction comment it emits alongside names the actual
+    segments - `es:[edi]`, `fs:[esi]` - so the fix reads them from there rather
+    than assuming the defaults, which is what an override would have had to do.
+    """
+    import re
+
+    def fix(line):
+        m = re.search(r"/\* [0-9A-F]+: rep \w+ .*?\*/", line)
+        if not m:
+            return line
+        cmt = m.group(0)
+        dst = re.search(r"(\w\w):\[edi\]", cmt)
+        src = re.search(r"(\w\w):\[esi\]", cmt)
+        if dst:
+            line = re.sub(r"\bwr(8|16|32)\(c->edi,",
+                          r"wr\1(SEGB(c->%s) + c->edi," % dst.group(1), line)
+        if src:
+            line = re.sub(r"\brd(8|16|32)\(c->esi\)",
+                          r"rd\1(SEGB(c->%s) + c->esi)" % src.group(1), line)
+        return line
+
+    return "\n".join(fix(l) for l in c.split("\n"))
+
+
 def make_validator(code, is32, decode16):
     """Does an address look like the start of real instructions?
 
@@ -988,6 +1017,18 @@ def main():
             # lift32_cpu names functions L_<addr> from the segment-relative
             # address, so segment 2's L_00000000 and segment 3's are the same
             # symbol. Prefix per segment or they collide at link time.
+            # String operations address memory through ES:EDI and DS/FS:ESI,
+            # and the base class emits them whole - so overriding rd/wr does
+            # not touch them and they come out using raw offsets:
+            #
+            #   while (c->ecx) { wr32(c->edi, rd32(c->esi)); ... }
+            #       /* rep movsd dword ptr es:[edi], dword ptr fs:[esi] */
+            #
+            # In a flat build that is right. Here it reads and writes at a
+            # segment offset with no base, which is a wild address rather than
+            # a near-null one, so it does not even fault helpfully. The comment
+            # names both segments, so use it.
+            c = _fix_stringops(c)
             c = _re_name.sub(lambda m: "L_s%d_%s" % (a.seg, m.group(1)), c)
             unhandled += c.count("UNHANDLED") + c.count("abort()")
             emitted_entries.append(lo)

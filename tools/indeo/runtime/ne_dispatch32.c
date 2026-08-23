@@ -6,6 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "recomp32.h"
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 uint32_t g_image_delta;        /* cpu.h's GVA(); zero, so GVA is the identity */
 unsigned long g_dispatch_misses;
@@ -132,6 +135,39 @@ uint16_t ne_init(uint32_t stack_bytes)
  * and an empty output buffer looks identical either way. */
 unsigned long g_bridge_calls;
 
+#ifdef IR32_WATCH
+uint32_t g_watch[IR32_WATCH_N];
+unsigned g_watch_n;
+
+void ir32_watch_dump(void)
+{
+    fprintf(stderr, "     last %d addresses touched (oldest first):\n",
+            IR32_WATCH_N);
+    for (unsigned i = 0; i < IR32_WATCH_N; i++) {
+        uint32_t a = g_watch[(g_watch_n + i) % IR32_WATCH_N];
+        uint32_t base = (uint32_t)(uintptr_t)g_arena;
+        fprintf(stderr, "       %08X  %s\n", a,
+                a < NE_ARENA_GUARD ? "near null - no base added"
+                : (a >= base && a < base + NE_ARENA_SIZE)
+                      ? "in arena" : "OUTSIDE arena");
+    }
+}
+#endif
+
+#if defined(_WIN32)
+/* Pull the faulting address out of the exception record. Which address was
+ * touched identifies the bug; the register dump only hints at it. */
+static void record_fault(EXCEPTION_POINTERS *ep, uint32_t *at, int *write)
+{
+    if (!ep || !ep->ExceptionRecord)
+        return;
+    if (ep->ExceptionRecord->NumberParameters >= 2) {
+        *write = (int)ep->ExceptionRecord->ExceptionInformation[0];
+        *at = (uint32_t)ep->ExceptionRecord->ExceptionInformation[1];
+    }
+}
+#endif
+
 unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
                    uint16_t ds, uint16_t es)
 {
@@ -201,7 +237,50 @@ unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
     c.es = es;
     c.fs = ds;
     c.gs = ds;
+#if defined(_WIN32)
+    /* Catching it here rather than at the 16-bit boundary is the difference
+     * between "the message faulted" and knowing which selector was being read
+     * through when it did. An unmapped selector's base is 0 and the arena's
+     * first page is deliberately not committed, so a fault near null is a
+     * selector nobody mapped - which is a specific, findable bug rather than a
+     * crash. */
+    uint32_t fault_at = 0;
+    int fault_write = 0;
+    __try {
+        fn(&c);
+    } __except (record_fault(GetExceptionInformation(), &fault_at, &fault_write),
+                EXCEPTION_EXECUTE_HANDLER) {
+        /* The address that was touched says more than any register does. Near
+         * zero means an unmapped selector - base 0 plus a small offset - and
+         * the arena's first page is left uncommitted so exactly that faults.
+         * Far outside the arena means an offset that is not an offset. */
+        fprintf(stderr, "     FAULT in %04X:%08X (code 0x%08lX) %s %08X %s\n",
+                seg, off, (unsigned long)GetExceptionCode(),
+                fault_write ? "writing" : "reading", fault_at,
+                fault_at < NE_ARENA_GUARD ? "- UNMAPPED SELECTOR (near null)"
+                : (fault_at >= (uint32_t)(uintptr_t)g_arena &&
+                   fault_at < (uint32_t)(uintptr_t)g_arena + NE_ARENA_SIZE)
+                      ? "- inside the arena" : "- OUTSIDE the arena");
+        fprintf(stderr, "       eax=%08X ebx=%08X ecx=%08X edx=%08X\n",
+                c.eax, c.ebx, c.ecx, c.edx);
+        fprintf(stderr, "       esi=%08X edi=%08X ebp=%08X esp=%08X\n",
+                c.esi, c.edi, c.ebp, c.esp);
+        fprintf(stderr, "       ds=%04X%s es=%04X%s fs=%04X%s gs=%04X%s "
+                        "ss=%04X%s\n",
+                c.ds, g_segoff[c.ds] ? "" : "!",
+                c.es, g_segoff[c.es] ? "" : "!",
+                c.fs, g_segoff[c.fs] ? "" : "!",
+                c.gs, g_segoff[c.gs] ? "" : "!",
+                c.ss, g_segoff[c.ss] ? "" : "!");
+        fprintf(stderr, "       (! = selector not mapped)\n");
+#ifdef IR32_WATCH
+        ir32_watch_dump();
+#endif
+        return 0;
+    }
+#else
     fn(&c);
+#endif
     if (getenv("IR32_TRACE"))
         fprintf(stderr, "     returned eax=%08X ecx=%08X edx=%08X esi=%08X "
                         "edi=%08X\n", c.eax, c.ecx, c.edx, c.esi, c.edi);
