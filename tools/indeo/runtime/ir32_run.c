@@ -195,6 +195,25 @@ static void bih(unsigned char *p, int32_t w, int32_t h, uint16_t bits,
 
 static uint32_t farptr(uint16_t sel) { return ((uint32_t)sel << 16); }
 
+/* The decompress worker gates on two bytes of the driver's instance:
+ *
+ *     cmp byte ds:[bx+8], 0 / je no-decode
+ *     cmp byte ds:[bx+6], 0 / je no-decode
+ *
+ * Both are zero when it runs, so something that should set them has not. The
+ * instance is a LocalAlloc block in the automatic data segment, so watching
+ * that region across the message sequence says which message is meant to. */
+static void dump_instance(uint16_t ds, const char *when)
+{
+    if (!getenv("IR32_TRACE") || !g_local_base)
+        return;
+    const unsigned char *heap = g_arena + g_segoff[ds] + g_local_base;
+    printf("   instance after %-22s:", when);
+    for (int i = 0x168; i < 0x180; i++)
+        printf(" %02X", heap[i]);
+    printf("\n");
+}
+
 static int decode_frame(const char *path, int w, int h, const char *out_ppm,
                         uint16_t ds, uint16_t ss, int outbits)
 {
@@ -272,6 +291,7 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
                                       ds, ss, 0xFF00);
         printf("   %-22s -> %08X\n", pre[i].name, r);
         if (pre[i].msg == 0x0003) id = r;
+        dump_instance(ds, pre[i].name);
     }
 
     /* ICM_DECOMPRESS_QUERY and _BEGIN take the two headers; ICM_DECOMPRESS
@@ -285,6 +305,7 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
         uint32_t r = ir32_driver_call(id, 1, seq[i].msg, seq[i].p1, seq[i].p2,
                                       ds, ss, 0xFF00);
         printf("   %-22s -> %08X\n", seq[i].name, r);
+        dump_instance(ds, seq[i].name);
     }
 
     /* Did anything land in the output buffer? A decoder that ran and wrote
@@ -333,6 +354,14 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
      * and let the comparison find the planes. */
     const char *dump = getenv("IR32_DUMP");
     if (dump) {
+        char op[512];
+        snprintf(op, sizeof op, "%s_out.bin", dump);
+        FILE *oo = fopen(op, "wb");
+        if (oo) {
+            fwrite(g_arena + g_segoff[SEL_OUT], 1, outsize, oo);
+            fclose(oo);
+            printf("   dumped %s (%u bytes)\n", op, outsize);
+        }
         for (uint16_t sel = 0x0400; sel < 0x0420; sel++) {
             if (!g_segoff[sel])
                 continue;

@@ -598,61 +598,63 @@ rows are near-constant, the buffer has runs of near-constant `7D`, and the
 rows after it score 44 at the best stride. There is no plane structure. The
 frame is not decoded, in any layout, anywhere in those buffers.
 
-### Narrowing it down
+### The codec calls a copy of itself
 
-Three things were checked, and two candidate explanations died.
-
-**`retf N` is not the problem.** Every `retf` in the 32-bit core carries no
-immediate - the callees do not pop arguments - so the bridge returning 0 was
-always right. That had been the leading suspect on the grounds that a decoder
-reading its arguments from the wrong stack slots would look exactly like this.
-It is not that.
-
-**3:0610 is not the pixel decoder.** It walks a sliding pair over a selector
-array - DS from `[ecx]`, FS from `[ecx+2]`, then `ecx += 2`, stopping when one
-reads zero - and the array is `0405 0406 0000`. One pair, then the terminator.
-Its inner loop shuffles 4-byte values at a stride of 0xB0, which is state
-management. It being called three times looked like three planes and is not.
-
-**The input is reaching the codec intact**, and the codec says so itself. The
-worker at 7:0714 validates the Indeo frame header before doing anything:
+Tracing every far call in the 16-bit half - `IR32_TRACE16=1` - showed the whole
+`ICM_DECOMPRESS` path in one run:
 
 ```
-mov eax, es:[bx+4]
-xor eax, es:[bx+0xC]
-xor eax, es:[bx]
-xor eax, 0x46524D48      ; 'FRMH'
-cmp eax, es:[bx+8]
-jne  bail
+6:0000 -> 1:01DE -> 6:02EC -> 7:0714 -> 5:06C8
+   -> 3:0505, 3:0610 x3
+   -> 0404:2C10        no lifted entry
 ```
 
-Both test frames pass it:
+Selector 0x0404 is one of the driver's own `GlobalAlloc` blocks, and 0x2C10 is
+an entry in **segment 3**. A 16:32 codec does not call its 32-bit code where
+the loader put it: it allocates a block, copies the code segment in, marks the
+descriptor 32-bit through DPMI - which is the `int 31h` sequence documented
+above - and calls the copy. So the call arrives as `0404:2C10` while every
+lifted function is registered under segment 3.
+
+`ne_code_alias` resolves it. A copy is byte-identical to its original bar the
+handful the loader patches, so comparing 256 bytes identifies it, and the
+answer is cached. The comparison is deliberately not `memcmp`: the loader
+writes selectors into the original *after* the copy was taken, so a few bytes
+legitimately differ.
+
+That entry, 0x2C10, is one of the two thunks that only turned up by matching
+the thunk *body* rather than its `0xCCCCCCCC` fixup placeholder. Had that
+search been left at the placeholder, this call would have had nowhere to land
+and the reason would have been considerably harder to see.
+
+### Still not a decode
+
+With the alias resolved the run reaches one more crossing and writes to the
+output buffer for the first time. That is not the same as decoding, and the
+difference is worth being explicit about because the byte count alone reads
+like success:
 
 ```
-frame0: [4]^[C]^[0]^'FRMH' = 465270AC   [8] = 465270AC   PASS
-frame1: [4]^[C]^[0]^'FRMH' = 46524E1D   [8] = 46524E1D   PASS
+output (8 bpp): 8984 of 41472 bytes non-zero (21.7%)
 ```
 
-and the size field at `[0xC]` equals the file length exactly - 15,844 and 852.
-So the frame the harness extracted from the AVI, the far pointer it built, and
-the selector it mapped are all correct, checked by the codec's own arithmetic
-rather than by assumption.
+Those 8,984 bytes hold **two distinct values**, mean 0.9, confined to rows 143
+and below. An image it is not. The buffers the codec works in changed
+substantially as well - 0405 went from 17,257 non-zero bytes to 43,129 - so
+more of the decoder is running than before, and none of it has yet produced a
+frame that `verify_decode.py` can match against ffmpeg.
 
-Immediately after that check the path forks on two bytes in the instance
-structure:
+Two things also became clear and are recorded so they are not re-derived:
 
-```
-mov bx, si               ; si = [bp+0xE]
-cmp byte ds:[bx+8], 0
-je   0x7D4
-cmp byte ds:[bx+6], 0
-je   0x7D4
-```
+- **`retf N` is not a factor.** Every `retf` in the 32-bit core carries no
+  immediate, so the bridge returning 0 was always right. It had been the
+  leading suspect.
+- **The flags at instance+6 and +8 are not a decode gate.** The branch they
+  guard, 0x7D4, tests `ICDECOMPRESS.dwFlags` for `ICDECOMPRESS_HURRYUP` and
+  falls through to 5:06C8 either way. Reading a path one conditional at a time
+  is what made it look like a bail-out; the full trace is what corrected it.
 
-That is where a decode that validates its input and then produces nothing goes,
-and it is the next thing to look at.
-
-### What is actually established
+### Where it stands
 
 | | |
 |---|---|
@@ -661,14 +663,14 @@ and it is the next thing to look at.
 | `driver` | DRV_LOAD, DRV_ENABLE, DRV_OPEN all succeed |
 | input | reaches the codec intact - passes its own 'FRMH' checksum |
 | output format | 8 and 16 bpp accepted; 24 and 32 refused |
-| `decode` | returns ICERR_OK and **decodes nothing** |
+| `decode` | the full path runs, writes to the output buffer, **produces no image** |
 
 Still open:
 
-- **The two flag bytes at `ds:[bx+6]` and `ds:[bx+8]`** in 7:0714, which decide
-  whether the decode path runs at all. They live in a structure the driver sets
-  up, so what writes them - and whether the harness has skipped a message that
-  would - is the question.
+- **What those 8,984 two-valued bytes are.** Written to the bottom quarter of
+  the frame, which is a shape worth explaining rather than dismissing.
+- **16 bpp returns ICERR_OK and writes nothing**, where 8 bpp returns -1 and
+  writes something. The two disagree and both are wrong.
 - **KERNEL.132 and .197**, reached and still unidentified.
 
 ### After that
