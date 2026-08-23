@@ -282,7 +282,28 @@ def apply_selector_fixups(ne, seg_index, code):
         return bytes(out), 0
     n = 0
     for r in segs[0].relocations:
-        if r.src_type != 2 or (r.flags & 3) != 0:
+        kind = r.flags & 3
+        if kind in (1, 2):
+            # An import. Give it a synthetic selector - 0xF000 | module index -
+            # and put the ordinal where the offset goes, so a call to it lifts
+            # into an ordinary far call that the runtime can name. Left
+            # unpatched these read as a call to 0000:FFFF, which is the chain
+            # terminator rather than an address, and tells nobody anything.
+            if r.src_type not in (3, 11):        # FAR_PTR / PTR48
+                continue
+            off, guard = r.offset, 0
+            sel = 0xF000 | (r.module_idx & 0xFF)
+            while 0 <= off + 3 < len(out) and guard < 4096:
+                guard += 1
+                nxt = struct.unpack_from("<H", out, off)[0]
+                struct.pack_into("<H", out, off, r.ordinal & 0xFFFF)
+                struct.pack_into("<H", out, off + 2, sel)
+                n += 1
+                if nxt == 0xFFFF:
+                    break
+                off = nxt
+            continue
+        if r.src_type != 2 or kind != 0:
             continue
         off, guard = r.offset, 0
         while 0 <= off + 1 < len(out) and guard < 4096:
@@ -772,6 +793,25 @@ def main():
               % (len(code) - nb))
         print("   found yet (indirect calls). Not lifted; --seed-unreached forces it.")
 
+    # A code segment returns. Zero returns across everything carved is not a
+    # quirk of optimised code, it is the segment not being code - and the
+    # failure is quiet, because a blob of data carves into exactly one enormous
+    # "function" covering 100% of the segment, which reads as the best result
+    # in the table. Segment 13 did precisely that: 1 function, 100% coverage,
+    # and a lift whose only unhandled instructions were daa, das, aaa, bound,
+    # arpl and packuswb - opcodes no video codec emits.
+    #
+    # This decides whether to lift at all, so it runs on every path and not
+    # only under --stats, where it sat at first and did nothing for the driver
+    # that actually generates the build.
+    rets = sum(1 for _s, _b in funcs for _i in _b
+               if (_i.mnemonic or '').lower() in ('ret', 'retf', 'retn',
+                                                  'iret', 'iretd'))
+    if rets == 0 and funcs:
+        print("WARNING: not one return in %d carved functions - this segment"
+              % len(funcs))
+        print("         is almost certainly data, not code. Do not lift it.")
+
     if a.stats:
         sizes = sorted((len(b) for _, b in funcs), reverse=True)
         print("functions: %d  largest: %s  median: %d"
@@ -792,21 +832,6 @@ def main():
             frac = (zeros + junk) / float(len(body))
             if frac > 0.05:
                 flagged.append((frac, start, len(body), zeros, junk))
-        # A code segment returns. Zero returns across everything carved is not a
-        # quirk of optimised code, it is the segment not being code - and this
-        # failure is quiet, because a blob of data carves into exactly one
-        # enormous "function" covering 100% of the segment, which reads as the
-        # best result in the table. Segment 13 did precisely that: 1 function,
-        # 100% coverage, and a lift whose only unhandled instructions were daa,
-        # das, aaa, aas, bound, arpl, lldt and packuswb - BCD and system opcodes
-        # that no video codec emits.
-        rets = sum(1 for _s, _b in funcs for _i in _b
-                   if (_i.mnemonic or '').lower() in ('ret', 'retf', 'retn',
-                                                      'iret', 'iretd'))
-        if rets == 0 and funcs:
-            print("WARNING: not one return in %d carved functions - this segment"
-                  % len(funcs))
-            print("         is almost certainly data, not code. Do not lift it.")
         if flagged:
             print("suspect functions (>5%% zero-fill or junk opcodes):")
             for frac, start, n, z, j in sorted(flagged, reverse=True):
@@ -938,6 +963,13 @@ def main():
             parts.append(c)
     else:
         lifter = lift16.Lifter()
+        # lift16 emits a direct call to `far_SSSS_OOOO` for a far transfer,
+        # which suits a DOS binary where SSSS is a real paragraph. Here SSSS is
+        # the target's NE segment number - the selector fixups above put it
+        # there - so it is an address the runtime resolves, not a symbol. The
+        # same rewrite covers imports, whose synthetic selector is 0xF0mm.
+        far_call = _re.compile(r"\bfar_([0-9A-Fa-f]{4})_([0-9A-Fa-f]{4})\(cpu\)")
+        near_call = _re.compile(r"\bres_([0-9A-Fa-f]{6})\b")
         for start, body in funcs:
             name = "ir32_s%d_%04X" % (a.seg, start)
             try:
@@ -947,13 +979,23 @@ def main():
                 continue
             if isinstance(c, list):
                 c = "\n".join(c)
+            c = far_call.sub(
+                lambda m: "recomp_dispatch(cpu, 0x%s, 0x%s)" % (m.group(1), m.group(2)), c)
+            # lift16 names a near-call target `res_<offset>`, its own convention
+            # from a flat DOS image. Ours are `ir32_s<seg>_<offset>`, so without
+            # this every intra-segment call is an unresolved external - which
+            # the compiler is perfectly happy with and the linker is not.
+            c = near_call.sub(
+                lambda m: "ir32_s%d_%04X" % (a.seg, int(m.group(1), 16)), c)
             unhandled += c.count("UNHANDLED") + c.count("abort()")
+            emitted_entries.append(start)
             parts.append(c)
 
     out = a.out or ("ir32_seg%d.c" % a.seg)
     with open(out, "w") as f:
         f.write("/* AUTO-GENERATED by lift_ir32.py from IR32.DLL segment %d.\n"
                 " * %s NE code lifted via pcrecomp %s.\n */\n"
+                '#include <stdio.h>\n#include <stdlib.h>\n'
                 '#include "%s"\n\n'
                 % (a.seg,
                    "32-bit" if is32 else "16-bit",
@@ -969,18 +1011,61 @@ def main():
                 " * offsets, not virtual addresses.\n"
                 " */\n\n")
 
-        f.write("\n\n".join(parts))
+        # A near call can name a target in the part of the segment descent
+        # never reached - segment 1 is 77% covered, and calls into the rest are
+        # ordinary calls to code we simply do not have. Left alone they are
+        # unresolved externals and nothing links at all, which stops the other
+        # 34 segments being testable over a gap in one.
+        #
+        # So emit a stub that says which target is missing, at the moment it is
+        # actually needed. A missing function that aborts by name is worth more
+        # than a link error listing forty symbols with no context.
+        body_text = "\n\n".join(parts)
+        defined = set(emitted_entries)
+        want = set()
+        pat = (_re.compile(r"\bir32_s%d_([0-9A-F]{4})\(cpu\)" % a.seg) if not is32
+               else _re.compile(r"\bL_s%d_([0-9A-F]{8})\(c\)" % a.seg))
+        for m in pat.finditer(body_text):
+            want.add(int(m.group(1), 16))
+        missing = sorted(want - defined)
+        if missing:
+            print("   %d near-call targets are outside what descent reached; "
+                  "stubbed" % len(missing))
+
+        # Declarations first. A call to a function defined later in the file
+        # gets an implicit `int f()` from C, which then conflicts with the real
+        # `void f(CPU *)` - and functions within a segment call each other in
+        # whatever order the code happens to sit.
+        if emitted_entries:
+            proto = ("void ir32_s%d_%04X(CPU *cpu);" if not is32
+                     else "void L_s%d_%08X(CPU *c);")
+            f.write("/* forward declarations: these call each other */\n")
+            for off in sorted(set(emitted_entries) | set(missing)):
+                f.write((proto % (a.seg, off)) + "\n")
+            f.write("\n")
+        f.write(body_text)
         f.write("\n")
-        if is32 and emitted_entries:
-            # The runtime resolves an indirect target - a jump-table entry, a
-            # far call from the 16-bit half - by looking the offset up here.
-            # Sorted, so the lookup can binary-search.
+        if missing:
+            f.write("\n/* Targets of near calls that descent never reached.\n"
+                    " * Not lifted, so calling one is a real gap - say which. */\n")
+            for off in missing:
+                if is32:
+                    f.write("void L_s%d_%08X(CPU *c) { (void)c;\n"
+                            "    fprintf(stderr, \"IR32: seg %d offset %04X was "
+                            "never lifted\\n\"); abort(); }\n"
+                            % (a.seg, off, a.seg, off))
+                else:
+                    f.write("void ir32_s%d_%04X(CPU *cpu) { (void)cpu;\n"
+                            "    fprintf(stderr, \"IR32: seg %d offset %04X was "
+                            "never lifted\\n\"); abort(); }\n"
+                            % (a.seg, off, a.seg, off))
+        if emitted_entries:
+            ent = "ne16_entry" if not is32 else "ne_entry"
+            name = ("ir32_s%d_%04X" if not is32 else "L_s%d_%08X")
             f.write("\n/* entry table: segment offset -> lifted function */\n")
+            f.write("const %s ir32_seg%d_entries[] = {\n" % (ent, a.seg))
             for off in sorted(set(emitted_entries)):
-                f.write("void L_s%d_%08X(CPU *c);\n" % (a.seg, off))
-            f.write("\nconst ne_entry ir32_seg%d_entries[] = {\n" % a.seg)
-            for off in sorted(set(emitted_entries)):
-                f.write("    { 0x%08Xu, L_s%d_%08X },\n" % (off, a.seg, off))
+                f.write("    { 0x%04Xu, %s },\n" % (off, name % (a.seg, off)))
             f.write("};\nconst unsigned ir32_seg%d_entry_count =\n"
                     "    sizeof(ir32_seg%d_entries)/sizeof(ir32_seg%d_entries[0]);\n"
                     % (a.seg, a.seg, a.seg))

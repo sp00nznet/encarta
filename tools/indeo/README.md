@@ -600,16 +600,90 @@ decoder is instance-based and the 16-bit half owns the structures. That is why
 `init` is as far as this goes without lifting the other half - not because the
 32-bit core is incomplete, but because its caller is.
 
+### Both halves
+
+`build.bat <IR32.DLL>` now lifts the whole DLL - `lift_all.py` walks every code
+segment - and links the two halves together.
+
+```
+lifted 35 16-bit and 2 32-bit segments; skipped 3 as data (13, 39, 40)
+applied 334 selector fixups in the loaded image
+loaded 47 segments; auto-data is segment 47
+```
+
+**One arena, two views.** The halves address memory differently: lifted 32-bit
+code computes a host address (`rd32(SEGB(c->ds) + off)`), lifted 16-bit code
+indexes a flat array (`cpu->mem[SEG_OFF(seg, off)]`). They have to mean the same
+bytes, or a pointer the driver builds and hands to the decoder points somewhere
+else. So `ne_mem.h` owns one arena and both tables into it - `g_segoff` for the
+16-bit view, `g_selbase` for the 32-bit one. The first 64K is left unmapped, so
+an unset selector faults instead of quietly returning whatever is at the start.
+
+**The two runtimes can never share a translation unit.** pcrecomp's 16-bit and
+32-bit `cpu.h` each define a struct called `CPU` and a function called `push32`.
+That is not a problem to solve, it is a constraint to build around: `ne_mem.h`
+names no CPU type, registration is split into `ir32_reg16.c` and `ir32_reg32.c`,
+and the bridge between halves is a plain function crossing the boundary. Even
+the include had to be disambiguated by directory, since both files are called
+`cpu.h` and an include path that sees both picks whichever comes first.
+
+**Imports become addresses.** A Win16 import is a relocation, and unpatched it
+reads as a call to `0000:FFFF` - the chain terminator, not an address. The
+fixup pass gives each a synthetic selector `0xF0mm` (module index) with the
+ordinal as the offset, so `recomp_dispatch(cpu, 0xF002, 0x000F)` is legibly
+KERNEL.15, GlobalAlloc. The runtime records every import reached rather than
+implementing all 61 up front: most belong to the dialogs, and guessing which
+matter is how you end up with five wrong implementations and no way to tell.
+`GlobalAlloc` allocates in the arena and returns the selector it bound, which
+is close to what Win16 actually does.
+
+### What running it found
+
+Six things, none of which reading the output would have shown:
+
+- **A near call reaching code descent never carved.** Segment 1 is 77% covered
+  and calls into the rest. Those were unresolved externals, so nothing linked
+  at all - one segment's gap blocking the other 34 from being testable. They
+  are stubbed now, and a stub names its own offset when called.
+- **Declarations after definitions.** C gives an undeclared call an implicit
+  `int f()`, which then conflicts with the real `void f(CPU *)` later in the
+  same file. Functions in a segment call each other in whatever order the code
+  sits, so declarations have to come first.
+- **`res_<offset>`**, lift16's name for a near-call target, is its own
+  convention from a flat DOS image and does not match ours.
+- **The data guard only ran under `--stats`**, which is not the path that
+  generates the build - so segment 13 was lifted as code again. It decides
+  whether to lift at all, so it runs everywhere now.
+- **`bind`** as a static helper collides with winsock's.
+- **Buffered stdout** loses everything printed before a fault, which is exactly
+  the part that says how far it got.
+
+### Where it stands
+
+| | |
+|---|---|
+| `ir32_run <DLL> init` | passes - runs 3:0000 and matches the disassembly |
+| `ir32_run <DLL> sweep` | 191 of 217 32-bit entries return |
+| `ir32_run <DLL> driver` | faults inside DriverProc |
+
+DriverProc is called with an empty frame, which is not a real driver message,
+so faulting is the expected answer to the wrong question rather than a defect
+in the lift. What it does establish is that 37 lifted segments load, register
+and begin executing.
+
 Still open:
 
-- **Nothing decodes a frame yet.** 3:0610 wants an instance structure built by
-  the 16-bit driver, with fields at +0x452, +0x3002 and +0x3016. Fabricating one
-  by hand is possible and a bad idea: wrong guesses produce plausible garbage
-  rather than errors. The honest route is lifting the 16-bit half.
-- **The 16-bit half is not lifted.** 37 segments, carved at 99%+ but going
-  through `lift16`, which needs a runtime of its own.
-- **Imports are not resolved.** `ne_map` deliberately leaves KERNEL/USER fixups
-  alone; nothing in the paths exercised so far calls out.
+- **A real `ICM_DECOMPRESS`.** DriverProc wants a message and a far pointer to
+  a structure. Building one means reading how VFW calls a codec, which is
+  documented, rather than guessing - and the fault is inside a lifted 16-bit
+  function reached by near call, so the depth guard on far calls does not see
+  it.
+- **`retf N` is not carried across the bridge.** A 16-bit caller of the 32-bit
+  half drops the return address but not the arguments, so SP is left N bytes
+  low. Recording each function's `retf` immediate in its entry table is the fix.
+- **Import argument counts.** Pascal convention is callee-cleans, and without a
+  prototype per ordinal the runtime cannot pop the right number - so it pops
+  none and says so.
 
 ### After that
 
