@@ -974,6 +974,15 @@ def main():
                 base = self.md.reg_name(m.base) if m.base else None
                 return "ss" if base in ("ebp", "esp", "bp", "sp") else "ds"
 
+            def mem_addr(self, insn, op):
+                """`lds`/`les` compute their own address, so overriding rd/wr
+                does not reach them. Without this the far pointer is read from
+                a bare offset - near null - and the selector:offset pair that
+                comes back is whatever happened to be there, which then looks
+                exactly like a real far pointer used in the wrong place."""
+                return "SEGB(c->%s) + %s" % (self._seg_of(op),
+                                             self.seg_off(insn, op))
+
             def rd(self, insn, op):
                 a = "SEGB(c->%s) + %s" % (self._seg_of(op), self.seg_off(insn, op))
                 return {1: "rd8(%s)", 2: "rd16(%s)", 4: "rd32(%s)"}[op.size] % a
