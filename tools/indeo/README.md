@@ -734,7 +734,7 @@ it is recorded because it will matter if a callee ever needs the full 32 bits.
 This DLL's 16-bit half never uses the 32-bit forms - checked, not assumed - so
 it is not the current problem.
 
-### One working buffer is intact, the other is carpet-filled
+### One working buffer is intact, the other is full of pixels
 
 The two 136 KB buffers the driver allocates should be symmetric - current
 frame and reference frame, both initialised by `3:0000` during BEGIN. After a
@@ -745,54 +745,49 @@ sel 0406  [0x0C]=0000E2C0  [0xE1A8]=0000FB80  [0xE198]=00016A34  [0xE190]=0000FE
 sel 0405  [0x0C]=04040404  [0xE1A8]=04040404  [0xE198]=04040404  [0xE190]=04040404
 ```
 
-0x0406 holds coherent decoder state: the plane table where `3:0000` put it, and
-working pointers that have advanced to sensible values. 0x0405 has been filled
-with `0x04` - the plane table, the globals, everything - and `0x04` is the same
-byte that reaches the output buffer.
+0x0406 holds coherent state: the plane table where `3:0000` put it and working
+pointers that have advanced sensibly. 0x0405 reads `04040404` everywhere,
+including the globals the decoder depends on. The fault follows directly: `EDI`
+is loaded from `[0xE1A8]`, and `SEGB(ds) + 0x04040404` is the faulting address
+to the byte - `arena + 0x0FFF20 + 0x040611FC`.
 
-So the decode is not failing to run. It runs, keeps proper state in one buffer,
-and fills the other with a constant. The fault follows from that: `EDI` is
-loaded from `[0xE1A8]`, which in the filled buffer reads `04040404`, and
-`SEGB(ds) + 0x04040404` lands 67 MB outside the arena. The arithmetic checks
-out exactly - `arena + 0x0FFF20 + 0x040611FC` is the faulting address to the
-byte - which is how the wild pointer was traced back to the fill rather than
-the other way round.
-
-That reframes it. The question is no longer "why is the pointer wrong" but
-"what fills a whole working buffer with 0x04", and the candidates are narrow: a
-`rep stosb` with AL=4 whose destination or count is wrong. Two of those exist
-in the 32-bit core and both were emitted without a segment base until recently.
-
-### What the decoder is doing when it dies
-
-`IR32_WATCH` records every address touched. The 48 before the fault are not
-random:
+`0x04040404` is **not a fill**. It is what Indeo's own arithmetic produces:
 
 ```
-2177072C  2176E23C  217BB488
-21770730  2176E33C  217BB538
-21770734  2176E43C  ...
+add eax, 0x4040404        ; +4 to each of four packed pixels
+and ecx, 0x78787878       ; the averaging mask, four 4-bit lanes
 ```
 
-Three interleaved streams, each advancing 4 bytes per step while a second index
-moves 0x100 - three planes being written row by row. That is a decode loop
-doing exactly what a decode loop should, right up until it reads a pointer out
-of the buffer that was filled.
+Five `add eax, 0x4040404` sites sit inside the decode thunk. So those bytes are
+decoded pixels whose value happens to be 4 everywhere, written over the region
+that holds the decoder's own state.
 
-### Far pointer loads had no segment base either
+### Watching it happen
 
-`lds`/`les` compute their own address, so overriding `rd`/`wr` never reached
-them:
+`IR32_WATCH` builds a binary that reports every read and write inside a window,
+chosen with `IR32_WATCH_SEL`, `_OFF` and `_LEN`. Reads and writes are tagged
+separately, because "something touched this address" says nothing about a
+region the setup reads constantly:
 
-```c
-{ uint32_t _a = (R16(c->ebp) + 0xA); SET16(c->esi, rd16(_a)); c->fs = rd16(_a + 2); }
+```
+WRITE at +0008   WRITE at +0010   WRITE at +000C
+WRITE at +0030   WRITE at +002C   WRITE at +0034
+read  at +0030   read  at +000C   read  at +0008
+WRITE at +0008   WRITE at +0010   ...
 ```
 
-That reads the pointer from a bare offset - near null - and returns whatever
-was there as a selector:offset pair, which is indistinguishable from a real far
-pointer used in the wrong place. Fixed with a `mem_addr` hook upstream that
-flat builds get for free. It is not the cause of this fault, though: segment 3
-contains no far pointer loads at all, which was checked rather than assumed.
+Those offsets are 0xE188, 0xE190, 0xE18C, 0xE1B0, 0xE1AC, 0xE1B4 - exactly the
+globals the thunk saves EDX, EDI and ESI into on entry. The pattern repeats
+because the thunk's selector loop runs more than once, and each pass saves the
+registers again. By a later pass the registers hold pixel data, and the globals
+get it.
+
+So the damage is not a stray write from somewhere else. The decoder is storing
+its own registers into its own globals, on a loop iteration where those
+registers are no longer what the first iteration put there. Whether the loop
+should be running that many times, or the registers should have been restored
+between passes, is the open question - and it is a question about one loop
+rather than about the whole decode.
 
 Still open:
 
