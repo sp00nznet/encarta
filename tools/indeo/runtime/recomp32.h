@@ -69,20 +69,36 @@
  * lifted code needs no changes and the non-watching build is byte-identical.
  */
 #ifdef IR32_WATCH
+#include <stdio.h>
 #define IR32_WATCH_N 48
 extern uint32_t g_watch[IR32_WATCH_N];
 extern unsigned g_watch_n;
-static inline uint32_t ir32_note(uint32_t a)
+
+/* A window to report accesses in, set by the runtime. Reads and writes are
+ * tagged separately: the decoder's globals are read constantly during setup,
+ * so "something touched this address" says nothing, while "something WROTE
+ * here 4000 times" names the pixel loop that overran. */
+extern uint32_t g_watch_lo, g_watch_hi;
+extern unsigned g_watch_hits;
+
+static inline uint32_t ir32_note(uint32_t a, int write)
 {
     g_watch[g_watch_n++ % IR32_WATCH_N] = a;
+    if (g_watch_lo && a >= g_watch_lo && a < g_watch_hi) {
+        g_watch_hits++;
+        if (g_watch_hits <= 24)
+            fprintf(stderr, "     %s at +%04X\n",
+                    write ? "WRITE" : "read ", (unsigned)(a - g_watch_lo));
+    }
     return a;
 }
-#define rd8(a)     rd8(ir32_note(a))
-#define rd16(a)    rd16(ir32_note(a))
-#define rd32(a)    rd32(ir32_note(a))
-#define wr8(a, v)  wr8(ir32_note(a), (v))
-#define wr16(a, v) wr16(ir32_note(a), (v))
-#define wr32(a, v) wr32(ir32_note(a), (v))
+
+#define rd8(a)     rd8(ir32_note((a), 0))
+#define rd16(a)    rd16(ir32_note((a), 0))
+#define rd32(a)    rd32(ir32_note((a), 0))
+#define wr8(a, v)  wr8(ir32_note((a), 1), (v))
+#define wr16(a, v) wr16(ir32_note((a), 1), (v))
+#define wr32(a, v) wr32(ir32_note((a), 1), (v))
 void ir32_watch_dump(void);
 #endif
 

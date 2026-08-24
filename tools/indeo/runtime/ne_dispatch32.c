@@ -138,9 +138,12 @@ unsigned long g_bridge_calls;
 #ifdef IR32_WATCH
 uint32_t g_watch[IR32_WATCH_N];
 unsigned g_watch_n;
+uint32_t g_watch_lo, g_watch_hi;
+unsigned g_watch_hits;
 
 void ir32_watch_dump(void)
 {
+    fprintf(stderr, "     accesses in the watched window: %u\n", g_watch_hits);
     fprintf(stderr, "     last %d addresses touched (oldest first):\n",
             IR32_WATCH_N);
     for (unsigned i = 0; i < IR32_WATCH_N; i++) {
@@ -172,6 +175,25 @@ unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
                    uint16_t ds, uint16_t es, const ne_regs *r)
 {
     g_bridge_calls++;
+#ifdef IR32_WATCH
+    /* Arm the low-region watch once the working buffer exists. */
+    if (!g_watch_lo) {
+        /* IR32_WATCH_SEL / _OFF / _LEN choose the window, so a run can ask
+         * about any region without a rebuild. Defaults to the decoder's
+         * globals in the first working buffer, which is where the damage
+         * showed up. */
+        const char *ws = getenv("IR32_WATCH_SEL");
+        const char *wo = getenv("IR32_WATCH_OFF");
+        const char *wl = getenv("IR32_WATCH_LEN");
+        uint16_t wsel = ws ? (uint16_t)strtoul(ws, NULL, 16) : 0x0405;
+        uint32_t woff = wo ? strtoul(wo, NULL, 16) : 0xE180;
+        uint32_t wlen = wl ? strtoul(wl, NULL, 16) : 0x40;
+        if (g_segoff[wsel]) {
+            g_watch_lo = g_selbase[wsel] + woff;
+            g_watch_hi = g_watch_lo + wlen;
+        }
+    }
+#endif
     /* IR32_TRACE=1 prints each crossing. Which 32-bit entries a decode
      * reaches says more than the return code does: seven crossings with an
      * empty output buffer could be seven calls to setup routines that never
