@@ -32,6 +32,14 @@
  * already pushed, and running it - which is what the real thunks do, only in
  * hardware. That bridge lives in its own translation unit because the two
  * runtimes cannot share one. */
+/* Declared here too: the 16-bit half calls across the boundary and cannot
+ * include recomp32.h, which would drag in the other CPU type. */
+typedef struct {
+    uint32_t eax, ecx, edx, ebx, ebp, esi, edi;
+} ne_regs;
+unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
+                   uint16_t ds, uint16_t es, const ne_regs *r);
+
 void recomp_dispatch(CPU *cpu, uint16_t seg, uint16_t off);
 
 typedef struct {

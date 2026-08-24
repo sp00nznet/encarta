@@ -713,16 +713,64 @@ producing this frame.
 The fill that reaches the output buffer is the same byte, 0x04, which is why
 8,984 bytes of it arrive there and nothing else does.
 
-### A reading that did not survive
+### The bridge was clearing registers a far call preserves
 
-KERNEL.171 was re-examined on the theory that it is `GetSelectorBase` - its
-result feeds the table the 32-bit core dereferences, and an address would fit
-that better than a selector. Implementing it that way changed nothing: the
-value that faults comes from elsewhere. It is also ruled out by the caller,
-which stores only AX (`mov es:[bx+0x303A], ax`), so a 32-bit linear base would
-lose its high half on the way in. The return is 16 bits, so it is a selector,
-and the alias reading stands. The change was reverted rather than left in as an
-unjustified guess.
+The decode thunk's first three instructions are:
+
+```
+mov [0xe188], edx      ; saves the incoming EDX
+mov [0xe190], edi      ; saves the incoming EDI
+mov [0xe18c], esi      ; saves the incoming ESI
+```
+
+It saves them because they are inputs - a far call does not touch the general
+registers, so whatever the 16-bit caller left is part of the call. `ne_call32`
+started from a `memset` machine and handed the decoder three nulls instead.
+Fixed: the caller's registers are carried across.
+
+SI, DI and BP are 16-bit in pcrecomp's 16-bit CPU, so only their low halves
+survive the trip. That is a limit of the model rather than a shortcut here, and
+it is recorded because it will matter if a callee ever needs the full 32 bits.
+This DLL's 16-bit half never uses the 32-bit forms - checked, not assumed - so
+it is not the current problem.
+
+### What the decoder is doing when it dies
+
+`IR32_WATCH` records every address touched. The 48 before the fault are not
+random:
+
+```
+2177072C  2176E23C  217BB488
+21770730  2176E33C  217BB538
+21770734  2176E43C  ...
+```
+
+Three interleaved streams, each advancing 4 bytes per step while a second index
+moves 0x100 - three planes being written row by row. That is a decode loop
+doing exactly what a decode loop should. Then one access goes outside the arena
+and it stops.
+
+At the fault, three registers hold far-pointer-shaped values: `edi=040611FC`,
+`ebp=040AB94C`, `esi=FC01B2D0`. 0x0406 and 0x040A are both selectors this
+runtime handed out. Whatever produced them packed selector and offset into one
+register, and the decoder then used it as a flat offset.
+
+The plane table itself is not the problem, and that took ruling out:
+
+```
+after BEGIN:      sel 0405 head: ... 00010734 0000E2C0 0000E318 00018C94 0000E2EC
+after DECOMPRESS: sel 0405 head: 04040404 04040404 04040404 ...
+```
+
+Correct after BEGIN - those are the offsets `3:0000` writes - and overwritten by
+the decode. The index into it is 0, so the pointers read are `ds:[8]` and
+`ds:[0xC]`, both sane. The table is built right, read right, and then written
+over by the same run that reads it.
+
+Also established: 0x0403 and 0x0404 share an arena offset, so the code copy and
+its alias really are one block, while 0x0405 and 0x0406 are separate 136 KB
+buffers, both initialised by `3:0000` during BEGIN. Two working buffers is what
+a codec doing delta frames should have.
 
 Still open:
 

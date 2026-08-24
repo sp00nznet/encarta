@@ -69,7 +69,7 @@
  * lifted code needs no changes and the non-watching build is byte-identical.
  */
 #ifdef IR32_WATCH
-#define IR32_WATCH_N 16
+#define IR32_WATCH_N 48
 extern uint32_t g_watch[IR32_WATCH_N];
 extern unsigned g_watch_n;
 static inline uint32_t ir32_note(uint32_t a)
@@ -111,8 +111,18 @@ uint16_t ne_init(uint32_t stack_bytes);
  * pushed the far return address, so ESP points at it and arguments follow -
  * exactly the frame the real thunk sees. Returns the callee's `retf N`, so the
  * caller can drop the arguments the way hardware would. */
+/* The general registers as the caller left them.
+ *
+ * A far call preserves them, and the 32-bit core relies on that: its entry
+ * thunk's first act is to save the incoming EDX, EDI and ESI into its own
+ * globals, so they are arguments in all but name. A bridge that starts from a
+ * zeroed machine hands it three null pointers instead. */
+typedef struct {
+    uint32_t eax, ecx, edx, ebx, ebp, esi, edi;
+} ne_regs;
+
 unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
-                   uint16_t ds, uint16_t es);
+                   uint16_t ds, uint16_t es, const ne_regs *r);
 
 /* Diagnostics: how many dispatches missed the entry table, and where. */
 extern unsigned long g_dispatch_misses;

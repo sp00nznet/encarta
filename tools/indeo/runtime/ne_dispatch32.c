@@ -169,7 +169,7 @@ static void record_fault(EXCEPTION_POINTERS *ep, uint32_t *at, int *write)
 #endif
 
 unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
-                   uint16_t ds, uint16_t es)
+                   uint16_t ds, uint16_t es, const ne_regs *r)
 {
     g_bridge_calls++;
     /* IR32_TRACE=1 prints each crossing. Which 32-bit entries a decode
@@ -193,6 +193,27 @@ unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
      * So a decode that returns without doing anything is most cheaply explained
      * by that chain not resolving. Walk it here, where both the arena and the
      * selector table are in reach, rather than inferring it from registers. */
+    /* The decode thunk indexes its plane table with [ebp+0x0A]:
+     *
+     *     mov ax, [ebp+0x0A]
+     *     mov ebx, ds:[eax*4 + 8]     -> [0xE198]
+     *     mov ebx, ds:[eax*4 + 0xC]   -> [0xE1A8], later dereferenced as EDI
+     *
+     * The table itself is correct after BEGIN - 0xE2C0, 0xE318, 0x18C94 - so a
+     * pointer that faults means the INDEX is wrong and the read fell off the
+     * end of the table into whatever follows. Print the arguments rather than
+     * inferring the index from the value it produced. */
+    if (getenv("IR32_TRACE") && seg == 3 && off == 0x2C10) {
+        const unsigned char *f = g_arena + g_segoff[ss] + sp;
+        unsigned idx = f[0x0A] | (f[0x0B] << 8);
+        fprintf(stderr, "     2C10 args: [bp+06]=%04X [bp+08]=%04X "
+                        "[bp+0A]=%04X (table index)\n",
+                f[6] | (f[7] << 8), f[8] | (f[9] << 8), idx);
+        fprintf(stderr, "       reads ds:[%X] and ds:[%X]%s\n",
+                idx * 4 + 8, idx * 4 + 0xC,
+                idx > 8 ? "   <- past the table" : "");
+    }
+
     if (getenv("IR32_TRACE") && seg == 3 && off == 0x610) {
         const unsigned char *frame = g_arena + g_segoff[ss] + sp;
         uint16_t p_off = (uint16_t)(frame[4] | (frame[5] << 8));
@@ -237,6 +258,14 @@ unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
     c.es = es;
     c.fs = ds;
     c.gs = ds;
+    /* Carried, not cleared: a far call does not touch the general registers,
+     * and this callee saves EDX, EDI and ESI on entry because they are inputs.
+     * Zeroing them here was handing the decoder null pointers and calling it a
+     * fresh machine. */
+    if (r) {
+        c.eax = r->eax; c.ecx = r->ecx; c.edx = r->edx; c.ebx = r->ebx;
+        c.ebp = r->ebp; c.esi = r->esi; c.edi = r->edi;
+    }
 #if defined(_WIN32)
     /* Catching it here rather than at the 16-bit boundary is the difference
      * between "the message faulted" and knowing which selector was being read

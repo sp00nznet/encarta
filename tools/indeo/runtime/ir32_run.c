@@ -212,6 +212,29 @@ static void dump_instance(uint16_t ds, const char *when)
     for (int i = 0x168; i < 0x180; i++)
         printf(" %02X", heap[i]);
     printf("\n");
+
+    /* The 32-bit core's plane table lives at the start of whichever selector
+     * the thunk loads into DS, written by 3:0000 - `[0x0C]=0xE2C0`,
+     * `[0x18]=0xE2EC`, stride 0x2C. If it holds pointers after BEGIN and
+     * pixels after DECOMPRESS, the decoder is writing over its own table,
+     * which is a very different bug from never having built one. */
+    /* Two selectors that are supposed to alias must share an arena offset.
+     * Printing them settles whether a difference in their contents means the
+     * decoder wrote to one, or that they were never the same memory. */
+    printf("   arena offsets: 0400=%06X 0401=%06X 0402=%06X 0403=%06X "
+           "0404=%06X 0405=%06X 0406=%06X\n",
+           g_segoff[0x400], g_segoff[0x401], g_segoff[0x402], g_segoff[0x403],
+           g_segoff[0x404], g_segoff[0x405], g_segoff[0x406]);
+    for (uint16_t sel = 0x0405; sel <= 0x0406; sel++) {
+        if (!g_segoff[sel])
+            continue;
+        const unsigned char *q = g_arena + g_segoff[sel];
+        printf("   sel %04X head:", sel);
+        for (int i = 0; i < 0x1C; i += 4)
+            printf(" %08X", (unsigned)(q[i] | (q[i+1] << 8) |
+                                       (q[i+2] << 16) | ((unsigned)q[i+3] << 24)));
+        printf("\n");
+    }
 }
 
 static int decode_frame(const char *path, int w, int h, const char *out_ppm,
