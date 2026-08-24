@@ -734,6 +734,35 @@ it is recorded because it will matter if a callee ever needs the full 32 bits.
 This DLL's 16-bit half never uses the 32-bit forms - checked, not assumed - so
 it is not the current problem.
 
+### One working buffer is intact, the other is carpet-filled
+
+The two 136 KB buffers the driver allocates should be symmetric - current
+frame and reference frame, both initialised by `3:0000` during BEGIN. After a
+decode they are not:
+
+```
+sel 0406  [0x0C]=0000E2C0  [0xE1A8]=0000FB80  [0xE198]=00016A34  [0xE190]=0000FEC0
+sel 0405  [0x0C]=04040404  [0xE1A8]=04040404  [0xE198]=04040404  [0xE190]=04040404
+```
+
+0x0406 holds coherent decoder state: the plane table where `3:0000` put it, and
+working pointers that have advanced to sensible values. 0x0405 has been filled
+with `0x04` - the plane table, the globals, everything - and `0x04` is the same
+byte that reaches the output buffer.
+
+So the decode is not failing to run. It runs, keeps proper state in one buffer,
+and fills the other with a constant. The fault follows from that: `EDI` is
+loaded from `[0xE1A8]`, which in the filled buffer reads `04040404`, and
+`SEGB(ds) + 0x04040404` lands 67 MB outside the arena. The arithmetic checks
+out exactly - `arena + 0x0FFF20 + 0x040611FC` is the faulting address to the
+byte - which is how the wild pointer was traced back to the fill rather than
+the other way round.
+
+That reframes it. The question is no longer "why is the pointer wrong" but
+"what fills a whole working buffer with 0x04", and the candidates are narrow: a
+`rep stosb` with AL=4 whose destination or count is wrong. Two of those exist
+in the 32-bit core and both were emitted without a segment base until recently.
+
 ### What the decoder is doing when it dies
 
 `IR32_WATCH` records every address touched. The 48 before the fault are not
@@ -747,30 +776,23 @@ random:
 
 Three interleaved streams, each advancing 4 bytes per step while a second index
 moves 0x100 - three planes being written row by row. That is a decode loop
-doing exactly what a decode loop should. Then one access goes outside the arena
-and it stops.
+doing exactly what a decode loop should, right up until it reads a pointer out
+of the buffer that was filled.
 
-At the fault, three registers hold far-pointer-shaped values: `edi=040611FC`,
-`ebp=040AB94C`, `esi=FC01B2D0`. 0x0406 and 0x040A are both selectors this
-runtime handed out. Whatever produced them packed selector and offset into one
-register, and the decoder then used it as a flat offset.
+### Far pointer loads had no segment base either
 
-The plane table itself is not the problem, and that took ruling out:
+`lds`/`les` compute their own address, so overriding `rd`/`wr` never reached
+them:
 
-```
-after BEGIN:      sel 0405 head: ... 00010734 0000E2C0 0000E318 00018C94 0000E2EC
-after DECOMPRESS: sel 0405 head: 04040404 04040404 04040404 ...
+```c
+{ uint32_t _a = (R16(c->ebp) + 0xA); SET16(c->esi, rd16(_a)); c->fs = rd16(_a + 2); }
 ```
 
-Correct after BEGIN - those are the offsets `3:0000` writes - and overwritten by
-the decode. The index into it is 0, so the pointers read are `ds:[8]` and
-`ds:[0xC]`, both sane. The table is built right, read right, and then written
-over by the same run that reads it.
-
-Also established: 0x0403 and 0x0404 share an arena offset, so the code copy and
-its alias really are one block, while 0x0405 and 0x0406 are separate 136 KB
-buffers, both initialised by `3:0000` during BEGIN. Two working buffers is what
-a codec doing delta frames should have.
+That reads the pointer from a bare offset - near null - and returns whatever
+was there as a selector:offset pair, which is indistinguishable from a real far
+pointer used in the wrong place. Fixed with a `mem_addr` hook upstream that
+flat builds get for free. It is not the cause of this fault, though: segment 3
+contains no far pointer loads at all, which was checked rather than assumed.
 
 Still open:
 
