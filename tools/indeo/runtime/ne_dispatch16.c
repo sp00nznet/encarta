@@ -342,8 +342,16 @@ static void recomp_dispatch_inner(CPU *cpu, uint16_t seg, uint16_t off)
     }
 
     if (seg == 2 || seg == 3) {
+        /* SI, DI and BP are 16-bit in this runtime's CPU, so only their low
+         * halves survive the trip. That is a real limit of the 16-bit model
+         * rather than a shortcut here, and it is worth knowing about if a
+         * callee ever needs the full 32 bits of one. */
+        ne_regs r;
+        r.eax = cpu->eax; r.ecx = cpu->ecx;
+        r.edx = cpu->edx; r.ebx = cpu->ebx;
+        r.ebp = cpu->bp;  r.esi = cpu->si;  r.edi = cpu->di;
         unsigned pops = ne_call32(seg, off, cpu->ss, cpu->sp,
-                                  cpu->ds, cpu->es);
+                                  cpu->ds, cpu->es, &r);
         cpu->sp += (uint16_t)(4 + pops);
         return;
     }
