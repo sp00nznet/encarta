@@ -260,7 +260,19 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
      * it does not support is a decode that runs and then declines to hand
      * anything back. Indeo 3 supports several, and which one this build wants
      * is a question for the driver rather than for a guess. */
-    uint32_t outsize = (uint32_t)w * h * ((outbits + 7) / 8);
+    /* outbits 9 means YVU9, Indeo 3's own planar format, not nine bits in a
+     * DIB. Asking for it skips the colour conversion entirely: the codec hands
+     * back the planes it just decoded instead of packing them into RGB or into
+     * palette indices. That matters for checking the decode, because ffmpeg
+     * decodes the same frame to yuv410p - the same layout - so the two can be
+     * compared directly, with no palette and no colour matrix in between.
+     *
+     * YVU9 is 4:1:0: a full luma plane and two chroma planes at a quarter
+     * resolution in each direction, so nine bits per pixel on average. */
+    int planar = (outbits == 9);
+    uint32_t outsize = planar
+        ? (uint32_t)w * h + 2 * (((uint32_t)w / 4) * ((uint32_t)h / 4))
+        : (uint32_t)w * h * ((outbits + 7) / 8);
     /* A BITMAPINFOHEADER for a palettised format is followed by its colour
      * table - 256 RGBQUADs - and the codec both reads and fills it. 64 bytes
      * holds the header alone, so at 8bpp the palette would land outside the
@@ -295,7 +307,20 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
     free(frame);
 
     bih(g_arena + g_segoff[SEL_BIIN],  w, h, 24, "IV32", (uint32_t)n);
-    bih(g_arena + g_segoff[SEL_BIOUT], w, h, (uint16_t)outbits, NULL, outsize);
+    /* IR32_OUTFOURCC names the output format directly, so which formats this
+     * build accepts is a question for the driver rather than for a guess.
+     * ICM_DECOMPRESS_QUERY answers it: ICERR_BADFORMAT (-2) means no. */
+    const char *fcc = getenv("IR32_OUTFOURCC");
+    if (fcc && strlen(fcc) != 4)
+        fcc = NULL;
+    /* IR32_OUTW declares a different width for the OUTPUT header only, leaving
+     * the input header saying what the frame really is. The codec writes
+     * 256-byte rows for a 216-wide DIB; this says whether that pitch follows
+     * the width it is given or is a constant of the codec's own. */
+    const char *ow = getenv("IR32_OUTW");
+    int32_t outw = ow ? atoi(ow) : w;
+    bih(g_arena + g_segoff[SEL_BIOUT], outw, h, (uint16_t)outbits,
+        fcc ? fcc : (planar ? "YVU9" : NULL), outsize);
     if (outbits <= 8) {
         /* biClrUsed: how many entries the codec should fill in. Left zero it
          * means "all of them" for some callers and "none" for others, and the
