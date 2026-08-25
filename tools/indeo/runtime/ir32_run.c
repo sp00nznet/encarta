@@ -285,7 +285,12 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
         fprintf(stderr, "plane offsets biased by +0x%X\n", b);
     }
     ne_alloc(SEL_IN,    frame, (uint32_t)n, (uint32_t)n + 64);
-    ne_alloc(SEL_OUT,   NULL, 0, outsize + 64);
+    /* Generous slack, not a tight fit. The codec's row pitch is its own
+     * decision, and if it exceeds the DIB width the tail of the picture lands
+     * past a tightly-sized buffer - which reads as "the decoder stopped early"
+     * rather than as "the buffer was too small". 64K covers any plausible
+     * pitch for this frame size, and the dump shows how much was really used. */
+    ne_alloc(SEL_OUT,   NULL, 0, outsize + 65536);
     ne_alloc(SEL_ICD,   NULL, 0, 64);
     free(frame);
 
@@ -375,6 +380,21 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
         if (outp[i]) nonzero++;
     printf("output (%d bpp): %lu of %u bytes non-zero (%.1f%%)\n",
            outbits, nonzero, outsize, 100.0 * nonzero / outsize);
+    /* How far past the DIB the codec actually wrote. The row pitch is the
+     * codec's decision, and if it exceeds the DIB width the tail of the
+     * picture lands beyond a tightly-sized buffer - which reads as "the
+     * decoder stopped early" instead of "the buffer was too small". */
+    {
+        uint32_t last = 0;
+        for (uint32_t i = 0; i < outsize + 65536; i++)
+            if (outp[i]) last = i;
+        if (last >= outsize)
+            printf("   wrote %u bytes past the %u-byte DIB "
+                   "(pitch is wider than the width)\n",
+                   last + 1 - outsize, outsize);
+        else
+            printf("   highest byte touched: %u of %u\n", last, outsize);
+    }
     /* Zero crossings means the driver never called its own decoder, which is a
      * different problem from a decoder that ran and wrote nothing - and an
      * empty output buffer looks identical either way. */
@@ -422,7 +442,7 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
         snprintf(op, sizeof op, "%s_out.bin", dump);
         FILE *oo = fopen(op, "wb");
         if (oo) {
-            fwrite(g_arena + g_segoff[SEL_OUT], 1, outsize, oo);
+            fwrite(g_arena + g_segoff[SEL_OUT], 1, outsize + 65536, oo);
             fclose(oo);
             printf("   dumped %s (%u bytes)\n", op, outsize);
         }
