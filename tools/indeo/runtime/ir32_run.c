@@ -267,6 +267,23 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
      * object. Give both headers room for a full BITMAPINFO. */
     ne_alloc(SEL_BIIN,  NULL, 0, 40 + 256 * 4);
     ne_alloc(SEL_BIOUT, NULL, 0, 40 + 256 * 4);
+    /* IR32_BIAS: add a constant to the three plane offsets at +0x20 before
+     * handing the frame over. The decoder reads at frame+offset and finds zero
+     * bytes; the plane header signature 61 F7 08 actually sits at
+     * frame+0x14+offset. If the decoder is simply missing that 0x14, biasing
+     * the offsets makes it read the real data and the access count jumps from
+     * 16 to thousands. If nothing changes, the base is not the problem. */
+    const char *bias = getenv("IR32_BIAS");
+    if (bias && n >= 0x2C) {
+        uint32_t b = (uint32_t)strtoul(bias, NULL, 0);
+        for (int i = 0; i < 3; i++) {
+            uint32_t v;
+            memcpy(&v, frame + 0x20 + i * 4, 4);
+            v += b;
+            memcpy(frame + 0x20 + i * 4, &v, 4);
+        }
+        fprintf(stderr, "plane offsets biased by +0x%X\n", b);
+    }
     ne_alloc(SEL_IN,    frame, (uint32_t)n, (uint32_t)n + 64);
     ne_alloc(SEL_OUT,   NULL, 0, outsize + 64);
     ne_alloc(SEL_ICD,   NULL, 0, 64);

@@ -1,0 +1,14 @@
+# Entries only running the code finds.
+#
+# The relocation walk finds far calls and the descent finds near ones, but a
+# call made through a pointer names its target nowhere in the image - the
+# address is computed at run time. The runtime prints
+#
+#     dispatch: no entry for 0003:0000112C
+#
+# when it reaches one, and adding it here makes the next build lift it as a
+# root. Format: <segment hex>:<offset hex>, one per line.
+3:112C
+3:0FD0
+3:10C6
+3:1736
