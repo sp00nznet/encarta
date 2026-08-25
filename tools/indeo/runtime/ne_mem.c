@@ -13,6 +13,7 @@
 unsigned char *g_arena;
 uint32_t g_segoff[65536];
 uint32_t g_selbase[65536];
+uint32_t g_selsize[65536];
 
 static uint32_t g_next = NE_ARENA_GUARD;
 
@@ -67,6 +68,7 @@ uint32_t ne_alloc(uint16_t sel, const void *src, uint32_t copy, uint32_t size)
     if (src && copy)
         memcpy(g_arena + off, src, copy > size ? size : copy);
     g_next = off + size;
+    g_selsize[sel] = size;
     bind_sel(sel, off);
     return off;
 }
