@@ -787,6 +787,34 @@ after DECOMPRESS: sel 0405 head: 04040404 04040404 04040404 ...
 So it is corrupted between those two points, and only three calls happen in
 between: 3:0505 once and 3:0610 three times. That is the search space now.
 
+### A 16-bit address does not sign-extend, it wraps
+
+The fault is fixed, and the bug behind it is general.
+
+A 0x67 prefix in a 32-bit segment makes the effective address 16-bit, and a
+16-bit address **wraps inside the segment**. Capstone reports the displacement
+signed, so
+
+```
+mov ebp, es:[0xE188]
+```
+
+arrives as `0xFFFFE188` and was emitted as `SEGB(c->es) + 0xFFFFE188u` - which
+reads 0x1E78 bytes *below* the segment rather than at offset 0xE188. The
+codec's own globals live at 0xE188, so every access to them was landing outside
+its buffer, reading and writing whatever preceded it in the arena.
+
+211 operands in the decode core carry that prefix. Masking the effective
+address to 16 bits when it is present:
+
+| | before | after |
+|---|--------|-------|
+| fault | reads 67 MB outside the arena | **none** |
+| output written | 8,984 bytes (21.7%) | **27,080 bytes (65.3%)** |
+| `ICM_DECOMPRESS` | harness fault handler | `ICERR_OK` |
+
+The decode now runs to completion.
+
 ### Caught in the act
 
 `IR32_WATCH` reports reads and writes inside a chosen window, with the value
@@ -796,29 +824,44 @@ from pixel data landing on top of one. Pointed at the plane table:
 ```
 -> 3:0000     WRITE32 +0000 = 00010734      the real table
               WRITE32 +0004 = 0000E2C0
-              WRITE32 +0008 = 0000E318
-              WRITE32 +000C = 00018C94
 -> 3:0505     (nothing)
 -> 3:0610 x3  reads only
 -> 3:2C10     WRITE32 +0000 = 04040404      <- packed pixels
-              WRITE32 +0004 = 04040404
-              WRITE32 +0008 = 04040404
 ```
 
-The decode thunk writes **pixels to selector offset 0x08**, over the table it
-read two instructions earlier. The correct destinations are 0x10734 and
-0xE2C0. So one plane's destination pointer is effectively zero, and everything
-downstream - the corrupted stride, the cursor leaving the buffer, the fault -
-follows from that one wrong pointer.
+That was the sign-extended address in action: writes meant for the globals at
+0xE188 landing at the start of the buffer instead.
 
-The table's shape is legible now too: 12-byte entries, `{0x10734, 0xE2C0,
-0xE318}` and `{0x18C94, 0xE2EC, 0xE344}` - a large buffer pointer and two small
-ones each, which is what a plane descriptor with a data pointer and two row
-offsets looks like.
+### Mutable variables inside the code segment
 
-Nothing else touches it. 3:0505 does not write there at all, and the three
-3:0610 calls only read - so the setup is right and the corruption is entirely
-inside the decode thunk.
+Also fixed on the way, and worth recording because it explains the code copy:
+
+```
+cmp eax, dword ptr cs:[0x2F7D]     ; read through CS
+mov es, [ebp+4]
+mov dword ptr es:[0x2F7D], eax     ; write through a data alias
+```
+
+The codec keeps mutable variables *inside its own code*, and a code segment
+cannot be written - so it allocates a writable copy, marks it 32-bit through
+DPMI, and writes there. CS must therefore stay the selector the caller used
+rather than the segment the lifted functions are registered under, or the
+decoder reads one copy and writes the other. `find()` resolves the alias for
+dispatch while CS keeps the copy.
+
+### What is left
+
+Every pixel written is the value 4:
+
+```
+distinct values: 2   [(4, 27080), (0, 14392)]
+rows with data: 47..191 of 192
+```
+
+Uniform output over most of the frame, so the decode loop runs and writes where
+it should while whatever supplies the pixel values yields a constant. The
+verification still reports no match, which is the honest answer: the frame is
+not decoded yet.
 
 Still open:
 

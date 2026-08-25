@@ -966,6 +966,22 @@ def main():
             # addressed through EBP or ESP, which is the x86 rule and matters
             # here because the 32-bit half reads its arguments off the 16-bit
             # caller's stack as `[ebp+6]`.
+            def _addr16(self, insn):
+                """Does this instruction address memory with 16 bits?
+
+                A 0x67 prefix in a 32-bit segment makes the effective address
+                16-bit, and a 16-bit address WRAPS inside the segment - it does
+                not sign-extend. Capstone reports the displacement signed, so
+                `mov ebp, es:[0xE188]` arrives as 0xFFFFE188, and adding that to
+                a segment base reads 0x1E78 bytes BELOW the segment instead of
+                at offset 0xE188. The codec's own globals live at 0xE188, so
+                every access to them was landing outside its buffer."""
+                pfx = getattr(insn, "prefix", None)
+                return bool(pfx) and 0x67 in tuple(pfx)
+
+            def _wrap(self, insn, expr):
+                return "((%s) & 0xFFFFu)" % expr if self._addr16(insn) else expr
+
             def _seg_of(self, op):
                 s = self.seg_name(op)
                 if s:
@@ -981,14 +997,16 @@ def main():
                 comes back is whatever happened to be there, which then looks
                 exactly like a real far pointer used in the wrong place."""
                 return "SEGB(c->%s) + %s" % (self._seg_of(op),
-                                             self.seg_off(insn, op))
+                                             self._wrap(insn, self.seg_off(insn, op)))
 
             def rd(self, insn, op):
-                a = "SEGB(c->%s) + %s" % (self._seg_of(op), self.seg_off(insn, op))
+                a = "SEGB(c->%s) + %s" % (self._seg_of(op),
+                                          self._wrap(insn, self.seg_off(insn, op)))
                 return {1: "rd8(%s)", 2: "rd16(%s)", 4: "rd32(%s)"}[op.size] % a
 
             def wr(self, insn, op, val):
-                a = "SEGB(c->%s) + %s" % (self._seg_of(op), self.seg_off(insn, op))
+                a = "SEGB(c->%s) + %s" % (self._seg_of(op),
+                                          self._wrap(insn, self.seg_off(insn, op)))
                 return {1: "wr8(%s, %s);", 2: "wr16(%s, %s);",
                         4: "wr32(%s, %s);"}[op.size] % (a, val)
 
