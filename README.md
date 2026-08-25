@@ -48,11 +48,11 @@ pictures resolve.
 **Video decodes.** All 68 clips are **Indeo 3.2** (`IV32`). Microsoft removed
 the Indeo codecs from Windows years ago and the CD ships only the *16-bit*
 driver (`AAMSSTP\SYSTEM16\IR32.DLL`), which a 32-bit process cannot
-load - so the driver itself was statically recompiled. It is byte-exact: 64 of
-64 first frames decode to 100.00% identical pixels against FFmpeg, 41,472 per
-frame. See [`tools/indeo`](tools/indeo/README.md). Not yet wired up is the
-codec's own colour conversion, so the frame is read out of the decoder's plane
-rather than through `ICM_DECOMPRESS`.
+load - so the driver itself was statically recompiled. It is byte-exact, and
+the codec's own colour conversion works too: 68 of 68 first frames decode to
+100.00% identical pixels against FFmpeg, and the RGB frame `ICM_DECOMPRESS`
+hands back matches at correlation 1.0000. See
+[`tools/indeo`](tools/indeo/README.md).
 
 ## Why?
 
@@ -314,11 +314,10 @@ approach proven on DECO_32, rather than hand-reimplementation:
 - [x] **Driven interactively** — article browsing, search, dictionary, the media
       archive, audio and MindMaze all work from recompiled code
 - [x] **Indeo 3.2 video** — the 16-bit `IR32.DLL` driver statically
-      recompiled and **byte-exact**: 64 of 64 first frames decode to 100.00%
-      identical pixels against FFmpeg ([`tools/indeo`](tools/indeo/README.md)).
-      Its RGB conversion is still wrong — the converters write at a
-      hardcoded 256-byte row pitch — so the picture is read out of the
-      decoded plane
+      recompiled and **byte-exact**: 68 of 68 first frames decode to 100.00%
+      identical pixels against FFmpeg, and the RGB frame the codec itself
+      returns matches at correlation 1.0000
+      ([`tools/indeo`](tools/indeo/README.md))
 - [x] SPAM media (article pictures) — `AM16.DLL`/`AMF16.DLL` beside the app
 - [ ] Shrink the real-code surface: replace MFC40/EEUIL10 with native equivalents
 
@@ -367,7 +366,7 @@ cmake --build build --config Release --target m20dump
 | `strdump` | `tools/strdump/` | STR string table dumper | Working |
 | `spamdump` | `tools/spamdump/` | SPAM multimedia format dumper | Working |
 | `datdump` | `tools/datdump/` | DAT configuration dumper | Working |
-| `indeodec` | `tools/indeo/` | Indeo 3 (IV32) demuxer, plus the recompiled 16-bit `IR32.DLL` codec and its NE runtime | **Byte-exact** — 64/64 frames 100.00% vs FFmpeg ([details](tools/indeo/README.md)) |
+| `indeodec` | `tools/indeo/` | Indeo 3 (IV32) demuxer, plus the recompiled 16-bit `IR32.DLL` codec and its NE runtime | **Byte-exact** — 68/68 frames 100.00%, and its RGB output matches, vs FFmpeg ([details](tools/indeo/README.md)) |
 | `fifdecode` | `tools/fifdecode/` | Old DLL bridge (wrong export signatures) | Superseded by `decooracle` |
 
 ### Static Recompilation (`tools/recomp`)
