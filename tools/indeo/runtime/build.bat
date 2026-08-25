@@ -39,7 +39,14 @@ echo [1/2] lifting every code segment
 py "%INDEO%\lift_all.py" "%~1" -o "%OUT%" || exit /b 1
 
 echo [2/2] compiling
-cl /nologo /W3 /O2 /EHa ^
+rem build.bat <IR32.DLL> [watch]
+rem   watch: compile in the memory-access instrumentation. It is gated at run
+rem   time by IR32_WATCH_SEL/_OFF/_LEN, but it costs a branch on every access,
+rem   so it is not in the default build.
+set WATCH=
+if /i "%~2"=="watch" set WATCH=/DIR32_WATCH
+
+cl /nologo /W3 /O2 /EHa %WATCH% ^
    "%OUT%"\ir32_seg*.c ^
    "%HERE%\ne_mem.c" "%HERE%\ne_dispatch16.c" "%HERE%\ne_dispatch32.c" ^
    "%HERE%\ir32_reg16.c" "%HERE%\ir32_reg32.c" "%HERE%\ir32_run.c" ^
