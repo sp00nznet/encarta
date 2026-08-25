@@ -762,32 +762,46 @@ Five `add eax, 0x4040404` sites sit inside the decode thunk. So those bytes are
 decoded pixels whose value happens to be 4 everywhere, written over the region
 that holds the decoder's own state.
 
+### One buffer proves the decoder works
+
+The two working buffers, read after a decode:
+
+```
+0406   stride=000000A2  cursor=0000FB80  planes=00010734 / 00016A34 / 00018C94
+0405   stride=04040404  cursor=04040404  planes=04040404 / 04040404 / 04040404
+```
+
+0x0406 is **coherent decoder state**: a plausible stride, a cursor that has
+advanced well into the buffer, and three distinct plane pointers spaced like
+Y/U/V. Nothing about it is accidental - a run that had gone wrong everywhere
+would not leave one buffer looking like that. The lifted decoder does work.
+
+0x0405 has `04040404` in every field, including the plane table - and that
+table was verified correct immediately after BEGIN:
+
+```
+after BEGIN:      sel 0405 head: ... 0000E2C0 0000E318 00018C94 0000E2EC
+after DECOMPRESS: sel 0405 head: 04040404 04040404 04040404 ...
+```
+
+So it is corrupted between those two points, and only three calls happen in
+between: 3:0505 once and 3:0610 three times. That is the search space now.
+
 ### Watching it happen
 
-`IR32_WATCH` builds a binary that reports every read and write inside a window,
-chosen with `IR32_WATCH_SEL`, `_OFF` and `_LEN`. Reads and writes are tagged
-separately, because "something touched this address" says nothing about a
-region the setup reads constantly:
+`IR32_WATCH` builds a binary that reports every read and write inside a window
+chosen with `IR32_WATCH_SEL`, `_OFF` and `_LEN`, tagging reads and writes
+separately - "something touched this address" says nothing about a region the
+setup reads constantly.
 
-```
-WRITE at +0008   WRITE at +0010   WRITE at +000C
-WRITE at +0030   WRITE at +002C   WRITE at +0034
-read  at +0030   read  at +000C   read  at +0008
-WRITE at +0008   WRITE at +0010   ...
-```
-
-Those offsets are 0xE188, 0xE190, 0xE18C, 0xE1B0, 0xE1AC, 0xE1B4 - exactly the
-globals the thunk saves EDX, EDI and ESI into on entry. The pattern repeats
-because the thunk's selector loop runs more than once, and each pass saves the
-registers again. By a later pass the registers hold pixel data, and the globals
-get it.
-
-So the damage is not a stray write from somewhere else. The decoder is storing
-its own registers into its own globals, on a loop iteration where those
-registers are no longer what the first iteration put there. Whether the loop
-should be running that many times, or the registers should have been restored
-between passes, is the open question - and it is a question about one loop
-rather than about the whole decode.
+Two things it established. The pixel writes are correctly placed: they ascend
+in 4-byte steps from 0xE20C, which is exactly the base `3:0000` initialises, so
+they are not what runs over the globals below. And `[0xE1A8]` is not a pointer
+that gets stamped on but a **cursor** - five writes and four reads, alternating,
+which is `mov edi,[0xE1A8]` / `add edi,[0xE1A4]` / `mov [0xE1A8],edi` advancing
+a row at a time. In 0x0406 that cursor reached 0xFB80 with a stride of 0xA2. In
+0x0405 the stride it adds is itself `04040404`, so the cursor leaves the buffer
+on the first step - which is the fault, and a consequence rather than a cause.
 
 Still open:
 
