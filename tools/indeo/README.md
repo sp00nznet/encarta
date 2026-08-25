@@ -787,21 +787,38 @@ after DECOMPRESS: sel 0405 head: 04040404 04040404 04040404 ...
 So it is corrupted between those two points, and only three calls happen in
 between: 3:0505 once and 3:0610 three times. That is the search space now.
 
-### Watching it happen
+### Caught in the act
 
-`IR32_WATCH` builds a binary that reports every read and write inside a window
-chosen with `IR32_WATCH_SEL`, `_OFF` and `_LEN`, tagging reads and writes
-separately - "something touched this address" says nothing about a region the
-setup reads constantly.
+`IR32_WATCH` reports reads and writes inside a chosen window, with the value
+written - because "something wrote here" cannot tell a pointer being stored
+from pixel data landing on top of one. Pointed at the plane table:
 
-Two things it established. The pixel writes are correctly placed: they ascend
-in 4-byte steps from 0xE20C, which is exactly the base `3:0000` initialises, so
-they are not what runs over the globals below. And `[0xE1A8]` is not a pointer
-that gets stamped on but a **cursor** - five writes and four reads, alternating,
-which is `mov edi,[0xE1A8]` / `add edi,[0xE1A4]` / `mov [0xE1A8],edi` advancing
-a row at a time. In 0x0406 that cursor reached 0xFB80 with a stride of 0xA2. In
-0x0405 the stride it adds is itself `04040404`, so the cursor leaves the buffer
-on the first step - which is the fault, and a consequence rather than a cause.
+```
+-> 3:0000     WRITE32 +0000 = 00010734      the real table
+              WRITE32 +0004 = 0000E2C0
+              WRITE32 +0008 = 0000E318
+              WRITE32 +000C = 00018C94
+-> 3:0505     (nothing)
+-> 3:0610 x3  reads only
+-> 3:2C10     WRITE32 +0000 = 04040404      <- packed pixels
+              WRITE32 +0004 = 04040404
+              WRITE32 +0008 = 04040404
+```
+
+The decode thunk writes **pixels to selector offset 0x08**, over the table it
+read two instructions earlier. The correct destinations are 0x10734 and
+0xE2C0. So one plane's destination pointer is effectively zero, and everything
+downstream - the corrupted stride, the cursor leaving the buffer, the fault -
+follows from that one wrong pointer.
+
+The table's shape is legible now too: 12-byte entries, `{0x10734, 0xE2C0,
+0xE318}` and `{0x18C94, 0xE2EC, 0xE344}` - a large buffer pointer and two small
+ones each, which is what a plane descriptor with a data pointer and two row
+offsets looks like.
+
+Nothing else touches it. 3:0505 does not write there at all, and the three
+3:0610 calls only read - so the setup is right and the corruption is entirely
+inside the decode thunk.
 
 Still open:
 
