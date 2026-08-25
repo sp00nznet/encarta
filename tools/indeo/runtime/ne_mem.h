@@ -36,6 +36,16 @@ extern uint32_t g_segoff[65536];        /* arena-relative, 0 == unmapped */
 extern uint32_t g_selbase[65536];       /* host address of the same */
 extern uint32_t g_selsize[65536];       /* bytes, 0 == unmapped */
 
+/* Resolve a selector that is not mapped, in case it is one step of a huge
+ * pointer. Win16 addresses a block bigger than a segment by adding
+ * __AHINCR to the selector for each 64K crossed, so `sel + 8k` names the
+ * k-th 64K window of whatever `sel` names. Binding those lazily - only the
+ * ones actually used - keeps the selector numbering free of the spacing
+ * rules that pre-binding them all would demand.
+ *
+ * Returns the arena offset, or 0 if the selector really is unmapped. */
+uint32_t ne_huge_alias(uint16_t sel);
+
 /* Reserve the arena. Call once, before anything is mapped. */
 void ne_mem_init(void);
 

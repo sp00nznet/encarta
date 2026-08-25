@@ -53,6 +53,55 @@ static void bind_sel(uint16_t sel, uint32_t off)
     g_selbase[sel] = (uint32_t)(uintptr_t)(g_arena + off);
 }
 
+#define NE_AHINCR 8
+#define NE_MAX_SEGMENT 64   /* selectors at or below this are NE
+                             * segments, numbered by index */      /* the protected-mode __AHINCR, patched into the
+                          * code by lift_ir32's fixup pass */
+
+uint32_t ne_huge_alias(uint16_t sel)
+{
+    /* Walk back one 64K step at a time looking for the block this selector
+     * is a window into. Bounded by how many steps a real block could span,
+     * so an genuinely bogus selector costs a short loop and still reads as
+     * unmapped. */
+    for (unsigned k = 1; k <= 256; k++) {
+        uint16_t base_sel = (uint16_t)(sel - k * NE_AHINCR);
+        if (!g_segoff[base_sel])
+            continue;
+        uint32_t need = k * 65536u;
+        if (g_selsize[base_sel] <= need)
+            continue;          /* the block does not reach this far */
+        uint32_t off = g_segoff[base_sel] + need;
+        bind_sel(sel, off);
+        g_selsize[sel] = g_selsize[base_sel] - need;
+        return off;
+    }
+    /* The other way a selector gets stepped: across NE segments.
+     *
+     * Windows hands consecutive segments consecutive selectors, 8 apart, so
+     * `sel + 8` is the NEXT SEGMENT - and code that treats several 64K data
+     * segments as one buffer walks them exactly that way. This runtime numbers
+     * a selector by its segment index instead, which is what makes traces
+     * readable, so segment 44 is 0x2C and 0x2C+8 is 0x34 rather than segment
+     * 45. Map it back.
+     *
+     * IR32 has three of these in a row - segments 43, 44 and 45, all data,
+     * all with an allocation size of zero meaning a full 64K - and DRV_LOAD
+     * copies across them. */
+    for (unsigned k = 1; k <= 32; k++) {
+        uint16_t base_sel = (uint16_t)(sel - k * NE_AHINCR);
+        if (base_sel == 0 || base_sel > NE_MAX_SEGMENT)
+            continue;
+        uint16_t step_to = (uint16_t)(base_sel + k);
+        if (step_to > NE_MAX_SEGMENT || !g_segoff[base_sel] || !g_segoff[step_to])
+            continue;
+        bind_sel(sel, g_segoff[step_to]);
+        g_selsize[sel] = g_selsize[step_to];
+        return g_segoff[step_to];
+    }
+    return 0;
+}
+
 uint32_t ne_alloc(uint16_t sel, const void *src, uint32_t copy, uint32_t size)
 {
     if (!g_arena)

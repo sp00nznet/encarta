@@ -171,7 +171,11 @@ static int load_ne(const char *path)
  * that a stray write lands somewhere identifiable rather than in a neighbour.
  */
 enum {
-    SEL_BIIN = 0x0300, SEL_BIOUT, SEL_IN, SEL_OUT, SEL_ICD, SEL_ICOPEN
+    SEL_BIIN = 0x0300, SEL_BIOUT, SEL_IN, SEL_OUT, SEL_ICD, SEL_ICOPEN,
+    /* GET_FORMAT fills in a header. Give it its own object: asked
+     * against SEL_BIOUT it overwrites the format being requested, so
+     * every run silently became whatever the codec preferred. */
+    SEL_BIFMT
 };
 
 static void put32(unsigned char *p, uint32_t v)
@@ -279,6 +283,7 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
      * object. Give both headers room for a full BITMAPINFO. */
     ne_alloc(SEL_BIIN,  NULL, 0, 40 + 256 * 4);
     ne_alloc(SEL_BIOUT, NULL, 0, 40 + 256 * 4);
+    ne_alloc(SEL_BIFMT, NULL, 0, 40 + 256 * 4);
     /* IR32_BIAS: add a constant to the three plane offsets at +0x20 before
      * handing the frame over. The decoder reads at frame+offset and finds zero
      * bytes; the plane header signature 61 F7 08 actually sits at
@@ -302,7 +307,11 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
      * past a tightly-sized buffer - which reads as "the decoder stopped early"
      * rather than as "the buffer was too small". 64K covers any plausible
      * pitch for this frame size, and the dump shows how much was really used. */
-    ne_alloc(SEL_OUT,   NULL, 0, outsize + 65536);
+    /* Sized for the widest format the codec can choose, not for the depth
+     * asked for. Its preferred output is 24bpp - 124,416 bytes for this
+     * frame - and an 8bpp-sized buffer is smaller than that, so the
+     * decode wrote past the end and faulted. */
+    ne_alloc(SEL_OUT,   NULL, 0, (uint32_t)w * h * 4 + 65536);
     ne_alloc(SEL_ICD,   NULL, 0, 64);
     free(frame);
 
@@ -362,7 +371,7 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
         { 0x0002, "DRV_ENABLE", 0, 0 },
         { 0x0003, "DRV_OPEN",   0, farptr(SEL_ICOPEN) },
     };
-    for (unsigned i = 0; i < 3; i++) {
+    for (unsigned i = 0; i < sizeof pre / sizeof pre[0]; i++) {
         uint32_t r = ir32_driver_call(id, 1, pre[i].msg, pre[i].p1, pre[i].p2,
                                       ds, ss, 0xFF00);
         printf("   %-22s -> %08X\n", pre[i].name, r);
@@ -373,6 +382,14 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
     /* ICM_DECOMPRESS_QUERY and _BEGIN take the two headers; ICM_DECOMPRESS
      * takes the ICDECOMPRESS and its size. */
     struct { uint16_t msg; const char *name; uint32_t p1, p2; } seq[] = {
+        /* Ask the codec what output format it wants, rather than inventing
+         * one. Its converters step rows by a hardcoded 0x100 bytes and
+         * advance bands by 0x400 - width, i.e. four rows of 256, so they
+         * only write a correct DIB when its pitch is 256. That is not a
+         * number to guess at: ICM_DECOMPRESS_GET_FORMAT (DRV_USER+10) has
+         * the codec fill in the header it actually wants. */
+        { 0x400A, "ICM_DECOMPRESS_GET_FORMAT",
+                                          farptr(SEL_BIIN), farptr(SEL_BIFMT) },
         { 0x400B, "ICM_DECOMPRESS_QUERY", farptr(SEL_BIIN), farptr(SEL_BIOUT) },
         { 0x400C, "ICM_DECOMPRESS_BEGIN", farptr(SEL_BIIN), farptr(SEL_BIOUT) },
         { 0x400D, "ICM_DECOMPRESS",       farptr(SEL_ICD),  24 },
@@ -389,11 +406,31 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
         { 0x401E, "ICM_DECOMPRESS_GET_PALETTE",
                                           farptr(SEL_BIIN), farptr(SEL_BIOUT) },
     };
-    for (unsigned i = 0; i < 3; i++) {
+    /* Over the table, not a literal 3. It was 3 when the sequence was
+     * QUERY/BEGIN/DECOMPRESS, and every message added after that was
+     * silently never sent - which is why GET_PALETTE looked like a codec
+     * that answers ICERR_OK and fills nothing. It was never asked. */
+    for (unsigned i = 0; i < sizeof seq / sizeof seq[0]; i++) {
         uint32_t r = ir32_driver_call(id, 1, seq[i].msg, seq[i].p1, seq[i].p2,
                                       ds, ss, 0xFF00);
         printf("   %-22s -> %08X\n", seq[i].name, r);
         dump_instance(ds, seq[i].name);
+        /* What the codec wants the output to be, after every message.
+         * GET_FORMAT fills this in and BEGIN may adjust it, and the
+         * number that matters is the row pitch: the converters advance
+         * bands by 0x400 - width, four rows of 256, so they only write a
+         * correct DIB when its pitch is 256 bytes. */
+        {
+            const unsigned char *bo = g_arena + g_segoff[
+                seq[i].msg == 0x400A ? SEL_BIFMT : SEL_BIOUT];
+            int32_t bw = (int32_t)rd32f(bo + 4), bh = (int32_t)rd32f(bo + 8);
+            uint16_t bc = rd16f(bo + 14);
+            printf("        %s: %dx%d %ubpp comp=%08X size=%u"
+                   "  -> pitch %d\n",
+                   seq[i].msg == 0x400A ? "wants" : "biOut",
+                   bw, bh, bc, rd32f(bo + 16), rd32f(bo + 20),
+                   ((bw * bc / 8) + 3) & ~3);
+        }
     }
 
     /* Did anything land in the output buffer? A decoder that ran and wrote

@@ -231,12 +231,22 @@ unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
      * pointer that faults means the INDEX is wrong and the read fell off the
      * end of the table into whatever follows. Print the arguments rather than
      * inferring the index from the value it produced. */
-    if (getenv("IR32_TRACE") && seg == 3 && off == 0x2C10) {
+    /* `seg == 3` is not enough: this one is reached through 0404, a
+     * writable alias of segment 3, so the hook never fired. Resolve the
+     * alias the way find() does. */
+    /* All six colour converters take the same frame: the destination far
+     * pointer at ss:[bp+0x0C] and ss:[bp+0x10]. Which one runs depends on
+     * the output depth, and 2C10 alone hid that the 24bpp converter, 41F0,
+     * is handed a selector that is not mapped. */
+    if (getenv("IR32_TRACE") &&
+        (off == 0x2800 || off == 0x2C10 || off == 0x2FB0 ||
+         off == 0x3640 || off == 0x3CCF || off == 0x41F0) &&
+        (seg == 3 || ne_code_alias(seg, 47) == 3)) {
         const unsigned char *f = g_arena + g_segoff[ss] + sp;
         unsigned idx = f[0x0A] | (f[0x0B] << 8);
-        fprintf(stderr, "     2C10 args: [bp+06]=%04X [bp+08]=%04X "
+        fprintf(stderr, "     converter %04X args: [bp+06]=%04X [bp+08]=%04X "
                         "[bp+0A]=%04X (table index)\n",
-                f[6] | (f[7] << 8), f[8] | (f[9] << 8), idx);
+                (unsigned)off, f[6] | (f[7] << 8), f[8] | (f[9] << 8), idx);
         fprintf(stderr, "       reads ds:[%X] and ds:[%X]%s\n",
                 idx * 4 + 8, idx * 4 + 0xC,
                 idx > 8 ? "   <- past the table" : "");

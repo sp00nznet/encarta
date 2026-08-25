@@ -50,7 +50,17 @@
  * host address does not survive being truncated to 16 bits. */
 #include "ne_mem.h"
 
-#define SEGB(sel) (g_selbase[(uint16_t)(sel)])
+/* Resolve lazily: an unmapped selector may be one 64K step of a huge
+ * pointer (see ne_huge_alias), and binding it on first use is what makes
+ * output buffers larger than a segment addressable at all. */
+static inline uint32_t ir32_segb(uint16_t sel)
+{
+    uint32_t b = g_selbase[sel];
+    if (!b && sel)
+        b = ne_huge_alias(sel) ? g_selbase[sel] : b;
+    return b;
+}
+#define SEGB(sel) ir32_segb((uint16_t)(sel))
 #define STACK_BASE(c) SEGB((c)->ss)
 
 #include "recomp32_cpu/cpu.h"

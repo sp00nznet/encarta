@@ -16,9 +16,30 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include "ne_mem.h"
 
-#define SEG_OFF(seg, off) (g_segoff[(uint16_t)(seg)] + (uint32_t)(uint16_t)(off))
+/* An unmapped selector has base 0, so an access through one lands in the
+ * arena's first 64K - left unmapped on purpose so it faults instead of
+ * quietly hitting a neighbour. The fault address alone does not say WHICH
+ * selector, and that is the part worth knowing, so name it at first use.
+ * IR32_SEGGUARD keeps it out of ordinary runs. */
+static inline uint32_t ir32_seg_off(uint16_t seg, uint16_t off)
+{
+    if (!g_segoff[seg] && seg) {
+        /* Might be one step of a huge pointer rather than a bad selector. */
+        if (!ne_huge_alias(seg)) {
+            static unsigned char said[65536];
+            if (!said[seg] && getenv("IR32_SEGGUARD")) {
+                said[seg] = 1;
+                fprintf(stderr, "   selector %04X is not mapped "
+                                "(first access at offset %04X)\n", seg, off);
+            }
+        }
+    }
+    return g_segoff[seg] + (uint32_t)off;
+}
+#define SEG_OFF(seg, off) ir32_seg_off((uint16_t)(seg), (uint16_t)(off))
 
 /* By directory, not by name: pcrecomp has runtime/recomp16/cpu.h and
  * runtime/recomp32_cpu/cpu.h, and an include path that can see both
