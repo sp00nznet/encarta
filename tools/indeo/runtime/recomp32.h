@@ -93,12 +93,25 @@ static inline uint32_t ir32_note(uint32_t a, int write)
     return a;
 }
 
+/* Writes log their value too. "Something wrote here" does not distinguish a
+ * pointer being stored from pixel data landing on top of one, and that is
+ * exactly the distinction needed: 04040404 is what Indeo's packed arithmetic
+ * produces, so a write of it identifies the writer as the pixel path. The
+ * parenthesised call bypasses the macro so the real accessor still runs. */
+static inline void ir32_wrv(uint32_t a, uint32_t v, int sz)
+{
+    if (g_watch_lo && a >= g_watch_lo && a < g_watch_hi && g_watch_hits < 24)
+        fprintf(stderr, "     WRITE%d at +%04X = %08X%s\n", sz * 8,
+                (unsigned)(a - g_watch_lo), v,
+                v == 0x04040404u ? "   <- packed pixels" : "");
+}
+
 #define rd8(a)     rd8(ir32_note((a), 0))
 #define rd16(a)    rd16(ir32_note((a), 0))
 #define rd32(a)    rd32(ir32_note((a), 0))
-#define wr8(a, v)  wr8(ir32_note((a), 1), (v))
-#define wr16(a, v) wr16(ir32_note((a), 1), (v))
-#define wr32(a, v) wr32(ir32_note((a), 1), (v))
+#define wr8(a, v)  (ir32_wrv((a), (v), 1), wr8(ir32_note((a), 1), (v)))
+#define wr16(a, v) (ir32_wrv((a), (v), 2), wr16(ir32_note((a), 1), (v)))
+#define wr32(a, v) (ir32_wrv((a), (v), 4), wr32(ir32_note((a), 1), (v)))
 void ir32_watch_dump(void);
 #endif
 
