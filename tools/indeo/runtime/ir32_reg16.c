@@ -12,6 +12,25 @@
 #include "ir32_segs.h"
 #if defined(_WIN32)
 #include <windows.h>
+#include "ne_mem.h"
+
+/* Where the last driver message faulted. An exception code on its own does not
+ * distinguish a wild pointer from running one byte off a buffer, and those
+ * want opposite investigations. */
+static uint32_t g_msg_fault_at;
+static int g_msg_fault_write;
+
+static int msg_fault(EXCEPTION_POINTERS *ep)
+{
+    g_msg_fault_at = 0;
+    g_msg_fault_write = 0;
+    if (ep && ep->ExceptionRecord &&
+        ep->ExceptionRecord->NumberParameters >= 2) {
+        g_msg_fault_write = (int)ep->ExceptionRecord->ExceptionInformation[0];
+        g_msg_fault_at = (uint32_t)ep->ExceptionRecord->ExceptionInformation[1];
+    }
+    return EXCEPTION_EXECUTE_HANDLER;
+}
 #endif
 
 #define DECL16(n) \
@@ -109,9 +128,28 @@ uint32_t ir32_driver_call(uint32_t driver_id, uint16_t hdrv, uint16_t msg,
 #if defined(_WIN32)
     __try {
         recomp_dispatch(&cpu, 6, 0);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        printf("   msg %04X: faulted (0x%08lX)\n", msg,
-               (unsigned long)GetExceptionCode());
+    } __except (msg_fault(GetExceptionInformation())) {
+        printf("   msg %04X: faulted (0x%08lX) %s %08X",
+               msg, (unsigned long)GetExceptionCode(),
+               g_msg_fault_write ? "writing" : "reading", g_msg_fault_at);
+        /* An address alone says nothing here, because every object lives at
+         * an arbitrary offset in one arena. Name the selector it belongs to -
+         * that is the difference between "it faulted" and "it ran off the end
+         * of the output buffer". */
+        {
+            uint32_t base = (uint32_t)(uintptr_t)g_arena;
+            uint32_t rel = g_msg_fault_at - base;
+            printf("  arena+%d", (int32_t)rel);
+            uint16_t best = 0; uint32_t bestoff = 0xFFFFFFFFu;
+            for (unsigned s = 1; s < 0x10000; s++)
+                if (g_segoff[s] && g_segoff[s] <= rel && rel - g_segoff[s] < bestoff) {
+                    bestoff = rel - g_segoff[s];
+                    best = (uint16_t)s;
+                }
+            if (best)
+                printf("  = %04X:%08X", best, bestoff);
+        }
+        printf("\n");
         return 0xFFFFFFFFu;
     }
 #else

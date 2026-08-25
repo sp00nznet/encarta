@@ -851,42 +851,80 @@ dispatch while CS keeps the copy.
 
 ### What is left, precisely
 
-The pipeline runs end to end with no faults and `ICERR_OK`, and the decoder
-computes constant output. Measuring rather than guessing found why.
+The decoder runs, consumes the frame, and produces output that depends on the
+frame. It is not yet the picture.
 
-**The bitstream reader consumes 16 bytes.** Watching the input selector across
-a whole decode counts *sixteen* accesses, against a 15,844-byte frame. It reads
-`+0x30` through `+0x3F` and stops. That is the whole explanation for constant
-output: with no coded data consumed, every delta is zero.
+**The bug that was blocking everything: 105 of segment 3's 221 functions were
+truncated.** carve_functions ends a function where the next entry begins, so a
+function whose body simply continues into the next one was emitted with no
+final control transfer - a silent `return` in the middle of its body. Nothing
+crashed and nothing linked wrong; it just quietly did less than the original.
 
-And the constant is not arbitrary. `3:0000` initialises the plane with
-`0x40404040`; the decode writes `0x04040404`, which is that value shifted right
-by four. The decoder is applying its reconstruction to an untouched base.
+The per-plane worker at 3:0610 was one of them. It ended at
 
-**The frame's own layout says where the data is:**
+    mov ebx, 0x80        /* 0000075B */
 
-```
-+10: 20 00 05 00 A0 EE 01 00 00 12 A6 FE C0 00 D8 00    size 0x20, 192 x 216
-+20: 98 06 00 00 A4 03 00 00 30 00 00 00 ...            plane offsets 0x698, 0x3A4, 0x30
-+30: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00    <- what it reads
-+40: 00 00 00 00 61 F7 08 2E 2E 00 15 0B ...            <- coded data starts here
-```
+and returned. The trace had been saying so all along: the registers it handed
+back - ecx=0x101, esi=0, edi=1 - are the literal constants those last three
+instructions load. Reading the returned registers as *evidence about where
+execution stopped*, rather than as values, is what finally located it.
 
-Three plane offsets, and coded data beginning at +0x44. The decoder reads at
-+0x30, sixteen zero bytes, so whatever base those offsets are relative to is
-about 0x14 out.
+Reconnecting them exposed four call sites the image names nowhere, because the
+target is computed at run time and appears in no relocation.
+`runtime_entries.txt` carries them.
 
-Three things that are *not* wrong, each checked rather than assumed: the tables
-are populated (`[0xDC88]`, `[0x0180]`, `[0x0280]` hold varied small values), the
-buffers have structure rather than being uniform fills, and the frame header is
-parsed correctly - the decoder gets 216x192 from it and sizes its buffers
-accordingly.
+**What that changed, measured:**
 
-`correlate_decode.py` sweeps every offset and a dozen strides across every
-buffer against ffmpeg's luma and finds nothing above 0.19, which is noise. That
-rules out "nearly right, wrong scale" - a decoder producing a coarse or shifted
-version of the picture would show a broad correlation peak. Byte-exact matching
-alone could not have told the difference.
+| | before | after |
+|---|---|---|
+| frame bytes consumed | 16 of 15,844 | 15,840 of 15,844 |
+| output vs. frame content | byte-identical for any frame | differs |
+| distinct output byte values | 2 | 129 |
+| 16bpp output | empty | populated |
+
+The consumption figure is not an estimate: truncating the frame and
+binary-searching for the shortest prefix that reproduces the output gives
+15,840.
+
+**The reference pairing is now verified**, which it never was.  `frame0.bin`
+is the first video packet of `ENCYC97/MM/AVI/T010532A.AVI` (216x192 indeo3,
+15,844 bytes at offset 2056), and `ref_f0.yuv` is ffmpeg's decode of that
+exact packet. Every correlation number here depends on that, and it had been
+assumed.
+
+**Where it still goes wrong.** Three things are ruled out rather than
+suspected:
+
+*Not missing code.* Segment 3 carves at 92.7%, and seeding the eight largest
+unlifted runs as roots adds 0.3%: each decodes two bytes and stops. Those runs
+are data tables inside the code segment - `2F7D+51` is the `cs:[0x2F7D]`
+variable the decode reads and writes. The code is all there, and it lifts with
+0 unhandled instructions.
+
+*Not layout.* The written region is 145 rows starting at exactly row 47, and
+none of the placements - as-is, bottom-up, either alignment against the
+reference - explains more than 1.3% of the reference's luma.
+
+*Not the palette.* At 8bpp the output bytes are palette indices, so they are
+compared with a palette-invariant statistic: how much of the reference's luma
+is explained by knowing our index. That is 6-10%, against 0.3% for a shuffled
+control. Real signal, nowhere near a decode. `ICM_DECOMPRESS_GET_PALETTE`
+returns ICERR_OK and fills nothing, so the codec uses a table it does not
+publish - and asking for it between BEGIN and DECOMPRESS silently leaves the
+decoder unable to produce anything at all.
+
+The sharpest remaining clue is that **16bpp output holds four distinct values**
+- 0x0000, 0x0040, 0x0080, 0x00C0 - while the internal plane buffers hold 116.
+ffmpeg's own luma has 62 distinct values, all multiples of 4, because Indeo 3
+works in six bits and scales on output. So the plane is in the right domain and
+the conversion to 16bpp is collapsing it to two bits per pixel.
+
+Every measurement above was checked against a planted control before being
+believed: the stride finder recovers 216 from the reference, and the
+row-profile matcher recovers a hidden stride and start row at correlation
+1.000. On the real buffers it reaches 0.70 at the bottom of its scan range,
+which is a boundary optimum and not a match. Saying so is the point - the
+earlier version of this file claimed a decode on a byte count.
 
 Still open:
 
