@@ -159,6 +159,12 @@ static void kernel_import(CPU *cpu, uint16_t ord)
         if (!bytes) bytes = 16;
         uint16_t sel = g_next_heap_sel++;
         ne_alloc(sel, NULL, 0, bytes);
+        /* The size matters and is not otherwise visible: the codec's plane
+         * pointers run past 0x10000, so whether a block is a 64K segment or a
+         * larger one decides if those pointers are in bounds or off the end. */
+        if (getenv("IR32_TRACE16") || getenv("IR32_TRACEALLOC"))
+            fprintf(stderr, "   GlobalAlloc %u bytes -> selector %04X\n",
+                    bytes, sel);
         cpu->ax = sel;         /* handle == selector, which is true enough */
         cpu->dx = 0;
         break;

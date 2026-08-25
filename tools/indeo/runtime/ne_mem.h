@@ -34,6 +34,7 @@
 extern unsigned char *g_arena;
 extern uint32_t g_segoff[65536];        /* arena-relative, 0 == unmapped */
 extern uint32_t g_selbase[65536];       /* host address of the same */
+extern uint32_t g_selsize[65536];       /* bytes, 0 == unmapped */
 
 /* Reserve the arena. Call once, before anything is mapped. */
 void ne_mem_init(void);

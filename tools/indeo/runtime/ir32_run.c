@@ -444,10 +444,16 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
         if (!g_segoff[sel])
             continue;
         const unsigned char *p = g_arena + g_segoff[sel];
+        /* The real size, not 64K. These blocks are GlobalAlloc'd and most
+         * are bigger: 0405 and 0406 are 137,024 bytes each, and the codec's
+         * luma plane pointer is 0x18B34 - past the 64K that used to be
+         * reported and dumped. Every earlier conclusion about "the plane
+         * buffers" was drawn from the first half of them. */
+        uint32_t sz = g_selsize[sel] ? g_selsize[sel] : 0x10000u;
         unsigned long nz = 0;
-        for (uint32_t i = 0; i < 0x10000u; i++)
+        for (uint32_t i = 0; i < sz; i++)
             if (p[i]) nz++;
-        printf("   selector %04X: %lu of 65536 bytes non-zero\n", sel, nz);
+        printf("   selector %04X: %lu of %u bytes non-zero\n", sel, nz, sz);
         any += (nz != 0);
     }
     if (!any)
@@ -478,7 +484,8 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
             snprintf(path, sizeof path, "%s_%04X.bin", dump, sel);
             FILE *o = fopen(path, "wb");
             if (o) {
-                fwrite(g_arena + g_segoff[sel], 1, 0x10000u, o);
+                fwrite(g_arena + g_segoff[sel], 1,
+                       g_selsize[sel] ? g_selsize[sel] : 0x10000u, o);
                 fclose(o);
                 printf("   dumped %s\n", path);
             }
