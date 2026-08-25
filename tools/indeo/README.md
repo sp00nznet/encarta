@@ -851,8 +851,9 @@ dispatch while CS keeps the copy.
 
 ### What is left, precisely
 
-The decoder runs, consumes the frame, and produces output that depends on the
-frame. It is not yet the picture.
+The decoder runs, consumes the frame, and produces output whose pixel VALUES
+have close to the right distribution. It is not the picture, and where it goes
+wrong is now bounded much more tightly than "somewhere".
 
 **The bug that was blocking everything: 105 of segment 3's 221 functions were
 truncated.** carve_functions ends a function where the next entry begins, so a
@@ -860,71 +861,72 @@ function whose body simply continues into the next one was emitted with no
 final control transfer - a silent `return` in the middle of its body. Nothing
 crashed and nothing linked wrong; it just quietly did less than the original.
 
-The per-plane worker at 3:0610 was one of them. It ended at
-
-    mov ebx, 0x80        /* 0000075B */
-
+The per-plane worker at 3:0610 was one of them. It ended at `mov ebx, 0x80`
 and returned. The trace had been saying so all along: the registers it handed
 back - ecx=0x101, esi=0, edi=1 - are the literal constants those last three
-instructions load. Reading the returned registers as *evidence about where
-execution stopped*, rather than as values, is what finally located it.
-
-Reconnecting them exposed four call sites the image names nowhere, because the
-target is computed at run time and appears in no relocation.
-`runtime_entries.txt` carries them.
-
-**What that changed, measured:**
+instructions load. Reading returned registers as evidence about *where
+execution stopped*, rather than as values, is what located it.
 
 | | before | after |
 |---|---|---|
 | frame bytes consumed | 16 of 15,844 | 15,840 of 15,844 |
-| output vs. frame content | byte-identical for any frame | differs |
-| distinct output byte values | 2 | 129 |
-| 16bpp output | empty | populated |
+| output vs. frame content | identical for any frame | differs |
+| distinct output byte values | 2 | 128 |
 
-The consumption figure is not an estimate: truncating the frame and
-binary-searching for the shortest prefix that reproduces the output gives
-15,840.
+Consuming 15,840 of 15,844 bytes is itself a strong result: a desynced
+bitstream reader does not land within four bytes of the end. The entropy
+decode is right.
 
-**The reference pairing is now verified**, which it never was.  `frame0.bin`
-is the first video packet of `ENCYC97/MM/AVI/T010532A.AVI` (216x192 indeo3,
-15,844 bytes at offset 2056), and `ref_f0.yuv` is ffmpeg's decode of that
-exact packet. Every correlation number here depends on that, and it had been
-assumed.
+**The reference pairing is verified**, which it never was. `frame0.bin` is the
+first video packet of `ENCYC97/MM/AVI/T010532A.AVI` (216x192 indeo3, 15,844
+bytes at offset 2056), and `ref_f0.yuv` is ffmpeg's decode of that exact
+packet.
 
-**Where it still goes wrong.** Three things are ruled out rather than
-suspected:
+**Both lifters translate correctly.** `difftest.py` and `difftest16.py` run
+every distinct instruction two ways on identical state - once through the
+generated C, once through Unicorn's x86 - and compare registers, flags and
+memory. Across 37 segments and roughly 7,000 distinct instructions the only
+disagreements are:
 
-*Not missing code.* Segment 3 carves at 92.7%, and seeding the eight largest
-unlifted runs as roots adds 0.3%: each decodes two bytes and stops. Those runs
-are data tables inside the code segment - `2F7D+51` is the `cs:[0x2F7D]`
-variable the decode reads and writes. The code is all there, and it lifts with
-0 unhandled instructions.
+  * shifts do not set OF (x86 defines it for a count of 1),
+  * mul/imul do not write SF/ZF/PF (x86 leaves them undefined),
+  * 16-bit adc/sbb fold the carry into the source - `flags_add16(dst, src+cf)`
+    - so CF is lost when `src+cf` wraps.
 
-*Not layout.* The written region is 145 rows starting at exactly row 47, and
-none of the placements - as-is, bottom-up, either alignment against the
-reference - explains more than 1.3% of the reference's luma.
+All three are real and all three are irrelevant here: nothing on this path
+branches on OF after a shift or on ZF after an imul, checked, zero occurrences.
 
-*Not the palette.* At 8bpp the output bytes are palette indices, so they are
-compared with a palette-invariant statistic: how much of the reference's luma
-is explained by knowing our index. That is 6-10%, against 0.3% for a shuffled
-control. Real signal, nowhere near a decode. `ICM_DECOMPRESS_GET_PALETTE`
-returns ICERR_OK and fills nothing, so the codec uses a table it does not
-publish - and asking for it between BEGIN and DECOMPRESS silently leaves the
-decoder unable to produce anything at all.
+**What else is ruled out**, each measured rather than assumed:
 
-The sharpest remaining clue is that **16bpp output holds four distinct values**
-- 0x0000, 0x0040, 0x0080, 0x00C0 - while the internal plane buffers hold 116.
-ffmpeg's own luma has 62 distinct values, all multiples of 4, because Indeo 3
-works in six bits and scales on output. So the plane is in the right domain and
-the conversion to 16bpp is collapsing it to two bits per pixel.
+  * *Missing code.* Segment 3 carves at 92.7%; seeding the eight largest
+    unlifted runs adds 0.3% because each decodes two bytes and stops. They are
+    data tables - `2F7D+51` is the `cs:[0x2F7D]` variable the decode uses.
+  * *Jump tables.* A dispatch miss aborts loudly and the decode does not abort.
+  * *The palette.* Compared with a palette-invariant statistic; and
+    ICM_DECOMPRESS_GET_PALETTE returns ICERR_OK while filling nothing.
+  * *Output format.* Only RGB 8, 16 and 24 are accepted - every planar fourcc
+    (YVU9, IF09, YUV9, I420, UYVY, YUY2) is refused with ICERR_BADFORMAT, so
+    the codec must colour-convert and there is no way to read its planes out.
+  * *Buffer size.* The codec writes 12,032 bytes past a 216x192 DIB, and a
+    tight allocation truncated the picture - which reads as "the decoder
+    stopped early" rather than "the buffer was short".
 
-Every measurement above was checked against a planted control before being
-believed: the stride finder recovers 216 from the reference, and the
-row-profile matcher recovers a hidden stride and start row at correlation
-1.000. On the real buffers it reaches 0.70 at the bottom of its scan range,
-which is a boundary optimum and not a match. Saying so is the point - the
-earlier version of this file claimed a decode on a byte count.
+**Where it actually stands.** Over the written span our values are
+mean 79.6, sd 45.2, range 20..234; ffmpeg's luma is mean 85.2, sd 52.0,
+range 20..232. The values are in the right domain. The positions are not: no
+layout tried correlates above 0.34, against 1.000 for a planted control.
+
+Tried and rejected: pitch 216 and 256 at every offset, top-down and bottom-up,
+every stride from 200 to 900 under a constraint that the rows lie inside the
+written data, vertical rotation, 4x4 cells stored contiguously in raster and
+column order. The codec's pitch is 256 and does not follow the declared width
+- 216 is the only width it accepts at all.
+
+So the arithmetic and the codebooks are right and the output ADDRESSING is
+wrong, which is a much smaller place to look than where this started. The
+next thing to instrument is the write path itself: which lifted function
+computes the destination pointer for each reconstructed cell, and what it
+believes the pitch and the plane base to be.
 
 Still open:
 
