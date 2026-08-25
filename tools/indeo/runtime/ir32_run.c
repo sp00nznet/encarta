@@ -35,6 +35,12 @@ uint32_t ir32_driver_call(uint32_t driver_id, uint16_t hdrv, uint16_t msg,
 void ne_report_imports(void);
 uint16_t ne_init(uint32_t stack_bytes);
 extern unsigned long g_bridge_calls;
+#ifdef IR32_WATCH
+/* How many accesses fell in the watched window over the whole run. A
+ * bitstream reader that stops after a handful of bytes and one that
+ * consumes the frame look identical from the output alone. */
+extern unsigned g_watch_hits;
+#endif
 
 #define MAX_SEG 64
 static struct { uint32_t off, size; uint16_t flags; } g_seg[MAX_SEG];
@@ -344,6 +350,12 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
      * different problem from a decoder that ran and wrote nothing - and an
      * empty output buffer looks identical either way. */
     printf("crossings into the 32-bit core: %lu\n", g_bridge_calls);
+#ifdef IR32_WATCH
+    /* How much of the watched region was actually touched. A bitstream reader
+     * that stops after a handful of bytes and one that consumes the whole
+     * frame produce output that looks the same. */
+    printf("accesses in the watched window: %u\n", g_watch_hits);
+#endif
 
     /* Did the decoder write anywhere at all?
      *

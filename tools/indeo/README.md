@@ -851,30 +851,42 @@ dispatch while CS keeps the copy.
 
 ### What is left, precisely
 
-The pipeline runs end to end with no faults and `ICERR_OK`. Four things were
-checked individually rather than assumed, and three of them pass:
+The pipeline runs end to end with no faults and `ICERR_OK`, and the decoder
+computes constant output. Measuring rather than guessing found why.
 
-- **The bitstream reaches the decoder.** Watching our input selector shows
-  sequential byte reads - `+0030 +0031 +0032 ...` - which is a bitstream reader
-  working through the frame.
-- **The lookup tables are populated.** `[0xDC88]`, `[0x0180]` and `[0x0280]` in
-  both working buffers hold varied small values, not zeros.
-- **The buffers have structure.** They are not uniform: `04 05 04 04 04 04 04
-  05 05 04` at 0x0180, `07 07 07 ...` at 0x0280.
-- **But none of it is the frame.** `correlate_decode.py` sweeps every offset and
-  a dozen plausible strides across every buffer, correlating against ffmpeg's
-  luma. The best result anywhere is -0.19, which is noise.
+**The bitstream reader consumes 16 bytes.** Watching the input selector across
+a whole decode counts *sixteen* accesses, against a 15,844-byte frame. It reads
+`+0x30` through `+0x3F` and stops. That is the whole explanation for constant
+output: with no coded data consumed, every delta is zero.
 
-That last tool exists because byte-exact matching answers "is this the frame"
-and nothing else. While the pipeline is still wrong, the more useful question is
-"is this the frame's *structure*, in some scaling or layout" - a decoder
-producing a coarse or shifted representation fails the first test and passes the
-second, and the two need very different follow-ups. Here it fails both, which
-rules out "nearly right, wrong scale" as an explanation.
+And the constant is not arbitrary. `3:0000` initialises the plane with
+`0x40404040`; the decode writes `0x04040404`, which is that value shifted right
+by four. The decoder is applying its reconstruction to an untouched base.
 
-The output buffer holds the constant 4 over rows 47..191. The internal buffers
-vary but do not resemble the picture. So the decode loop runs, reads its input,
-consults its tables, writes where it should, and computes the wrong values.
+**The frame's own layout says where the data is:**
+
+```
++10: 20 00 05 00 A0 EE 01 00 00 12 A6 FE C0 00 D8 00    size 0x20, 192 x 216
++20: 98 06 00 00 A4 03 00 00 30 00 00 00 ...            plane offsets 0x698, 0x3A4, 0x30
++30: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00    <- what it reads
++40: 00 00 00 00 61 F7 08 2E 2E 00 15 0B ...            <- coded data starts here
+```
+
+Three plane offsets, and coded data beginning at +0x44. The decoder reads at
++0x30, sixteen zero bytes, so whatever base those offsets are relative to is
+about 0x14 out.
+
+Three things that are *not* wrong, each checked rather than assumed: the tables
+are populated (`[0xDC88]`, `[0x0180]`, `[0x0280]` hold varied small values), the
+buffers have structure rather than being uniform fills, and the frame header is
+parsed correctly - the decoder gets 216x192 from it and sizes its buffers
+accordingly.
+
+`correlate_decode.py` sweeps every offset and a dozen strides across every
+buffer against ffmpeg's luma and finds nothing above 0.19, which is noise. That
+rules out "nearly right, wrong scale" - a decoder producing a coarse or shifted
+version of the picture would show a broad correlation peak. Byte-exact matching
+alone could not have told the difference.
 
 Still open:
 
