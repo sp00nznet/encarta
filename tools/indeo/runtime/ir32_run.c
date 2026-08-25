@@ -492,6 +492,55 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
         }
     }
 
+    /* Write the decoded luma plane, which is the part that is known correct.
+     *
+     * The codec decodes into its own working buffers and only afterwards
+     * converts to whatever DIB was asked for. The decode is byte-exact
+     * against ffmpeg on every frame tested; the conversion is not, because
+     * the six colour converters write at a hardcoded 256-byte row stride
+     * against a base computed at the DIB pitch. So read the plane rather
+     * than the DIB.
+     *
+     * It arrives in two vertical strips. The plane workspace is 176 bytes
+     * wide - 0xB0, hardcoded in 65 places - so a 216-wide frame does not fit
+     * in one pass: the left 168 columns land in the first plane buffer and
+     * the rest in the second, eight bytes further in, both at a 176-byte
+     * stride. The base is the codec's own [E1AC], read here rather than
+     * assumed, so a different frame size still finds it.
+     *
+     * Doubling is the domain, not a correction: Indeo 3 works in six bits,
+     * and ffmpeg scales by four on output where this plane holds twice. */
+    if (out_ppm && strstr(out_ppm, ".pgm")) {
+        enum { PLANE_STRIDE = 176, LEFT_COLS = 168, CTX_PLANE = 0xE1AC };
+        uint16_t s_left = 0x0405, s_right = 0x0406;
+        if (g_segoff[s_left] && g_segoff[s_right]) {
+            const unsigned char *L = g_arena + g_segoff[s_left];
+            const unsigned char *R = g_arena + g_segoff[s_right];
+            uint32_t base = rd32f(L + CTX_PLANE);
+            int lw = w < LEFT_COLS ? w : LEFT_COLS;
+            int rw = w - lw;
+            uint32_t need = base + (uint32_t)PLANE_STRIDE * (h - 1) + lw;
+            if (base && need < g_selsize[s_left]) {
+                FILE *o = fopen(out_ppm, "wb");
+                if (o) {
+                    fprintf(o, "P5\n%d %d\n255\n", w, h);
+                    for (int y = 0; y < h; y++) {
+                        for (int x = 0; x < lw; x++)
+                            fputc(L[base + (size_t)y * PLANE_STRIDE + x] * 2, o);
+                        for (int x = 0; x < rw; x++)
+                            fputc(R[base + 8 + (size_t)y * PLANE_STRIDE + x] * 2, o);
+                    }
+                    fclose(o);
+                    printf("wrote %s (%dx%d luma, from the plane at 0x%X)\n",
+                           out_ppm, w, h, base);
+                }
+            } else {
+                printf("   plane pointer 0x%X does not fit selector %04X\n",
+                       base, s_left);
+            }
+        }
+    }
+
     /* At 8bpp the output bytes are palette indices, not intensities, so
      * comparing them to a reference decoder's luma compares two different
      * things and reports noise however right the decode is. The codec fills
@@ -500,7 +549,7 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
      * IR32_STRIDE overrides the row pitch. The buffer's own autocorrelation
      * says the codec writes 256-byte rows for a 216-wide DIB, and reading it
      * back at 216 shears the picture into something no comparison can match. */
-    if (out_ppm && nonzero && outbits == 8) {
+    if (out_ppm && nonzero && outbits == 8 && !strstr(out_ppm, ".pgm")) {
         const unsigned char *pal = g_arena + g_segoff[SEL_BIOUT] + 40;
         const char *sv = getenv("IR32_STRIDE");
         int stride = sv ? atoi(sv) : w;

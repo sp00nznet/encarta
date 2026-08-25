@@ -13,6 +13,7 @@
 #include "ir32_segs.h"
 #if defined(_WIN32)
 #include <windows.h>
+#include <malloc.h>
 #endif
 
 #define DECL32(n) \
@@ -83,7 +84,7 @@ int ir32_init_test(uint16_t ds, uint16_t ss)
  * produce. What it establishes is that dispatch resolves and the bases hold. */
 int ir32_sweep32(uint16_t ds, uint16_t ss)
 {
-    unsigned ok = 0, faulted = 0;
+    unsigned ok = 0, faulted = 0, overflowed = 0;
     g_dispatch_soft = 1;
     for (unsigned i = 0; i < ir32_seg3_entry_count; i++) {
         CPU c;
@@ -98,15 +99,29 @@ int ir32_sweep32(uint16_t ds, uint16_t ss)
             ir32_seg3_entries[i].fn(&c);
             ok++;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
-            faulted++;
+            /* A stack overflow is not like the other faults.
+             * Reconnecting the functions that run on into the next one
+             * turns a loop spanning two carved functions into C
+             * recursion, and a blank machine has no loop counter to end
+             * it - so some entries run the stack out rather than reading
+             * through an unset selector. The guard page is consumed when
+             * that happens, and without _resetstkoflw the NEXT overflow
+             * takes the process down without reaching this handler, which
+             * is why the whole sweep died instead of one entry failing. */
+            if (GetExceptionCode() == EXCEPTION_STACK_OVERFLOW) {
+                _resetstkoflw();
+                overflowed++;
+            } else {
+                faulted++;
+            }
         }
 #else
         ir32_seg3_entries[i].fn(&c);
         ok++;
 #endif
     }
-    printf("sweep: %u of %u entries returned, %u faulted\n",
-           ok, ir32_seg3_entry_count, faulted);
+    printf("sweep: %u of %u entries returned, %u faulted, %u ran the stack out\n",
+           ok, ir32_seg3_entry_count, faulted, overflowed);
     ne_report_misses();
     return 0;
 }
