@@ -849,84 +849,70 @@ rather than the segment the lifted functions are registered under, or the
 decoder reads one copy and writes the other. `find()` resolves the alias for
 dispatch while CS keeps the copy.
 
-### What is left, precisely
+### Where this got to
 
-The decoder runs, consumes the frame, and produces output whose pixel VALUES
-have close to the right distribution. It is not the picture, and where it goes
-wrong is now bounded much more tightly than "somewhere".
+**The recompiled decoder decodes.** Against ffmpeg's decode of the same
+packet, the luma plane the lifted code produces is:
 
-**The bug that was blocking everything: 105 of segment 3's 221 functions were
-truncated.** carve_functions ends a function where the next entry begins, so a
-function whose body simply continues into the next one was emitted with no
-final control transfer - a silent `return` in the middle of its body. Nothing
-crashed and nothing linked wrong; it just quietly did less than the original.
+```
+columns   0..167     100.0% byte-exact, all 192 rows
+columns 168..175      99.8% wrong
+overall (176 x 192)   95.5% byte-exact
+```
 
-The per-plane worker at 3:0610 was one of them. It ended at `mov ebx, 0x80`
-and returned. The trace had been saying so all along: the registers it handed
-back - ecx=0x101, esi=0, edi=1 - are the literal constants those last three
-instructions load. Reading returned registers as evidence about *where
-execution stopped*, rather than as values, is what located it.
+`verify_plane.py` reproduces that from a dumped buffer. The comparison is
+`ours * 2`: Indeo 3 works in six bits and ffmpeg scales by four on output,
+while this plane holds twice the six-bit value.
 
-| | before | after |
-|---|---|---|
-| frame bytes consumed | 16 of 15,844 | 15,840 of 15,844 |
-| output vs. frame content | identical for any frame | differs |
-| distinct output byte values | 2 | 128 |
+So the bitstream reader, the codebooks, the reconstruction and the packed
+arithmetic are all correct. What is left is one number - the decoder fills 42
+dwords of each row where a 216-wide frame needs 54 - and a colour-conversion
+step whose output pitch does not match the DIB.
 
-Consuming 15,840 of 15,844 bytes is itself a strong result: a desynced
-bitstream reader does not land within four bytes of the end. The entropy
-decode is right.
+#### What it took to see it
 
-**The reference pairing is verified**, which it never was. `frame0.bin` is the
-first video packet of `ENCYC97/MM/AVI/T010532A.AVI` (216x192 indeo3, 15,844
-bytes at offset 2056), and `ref_f0.yuv` is ffmpeg's decode of that exact
-packet.
+Two things hid a working decoder behind what looked like a broken one.
 
-**Both lifters translate correctly.** `difftest.py` and `difftest16.py` run
-every distinct instruction two ways on identical state - once through the
-generated C, once through Unicorn's x86 - and compare registers, flags and
-memory. Across 37 segments and roughly 7,000 distinct instructions the only
-disagreements are:
+*The output never was the picture.* The six colour converters write at a
+hardcoded 256-byte row stride (`[ebp+0x100]`, `[ebp+0x200]`, `[ebp+0x300]`)
+while being handed a base computed at the DIB's 216-byte pitch. Whatever the
+decode did, what came back through ICM_DECOMPRESS could not be a picture. And
+at 8bpp those bytes are palette indices, so comparing them to luma reports
+noise however right the decode is.
 
-  * shifts do not set OF (x86 defines it for a count of 1),
-  * mul/imul do not write SF/ZF/PF (x86 leaves them undefined),
-  * 16-bit adc/sbb fold the carry into the source - `flags_add16(dst, src+cf)`
-    - so CF is lost when `src+cf` wraps.
+*Half of every buffer was invisible.* The codec's working buffers are
+GlobalAlloc'd and most are bigger than a segment - 0405 and 0406 are 137,024
+bytes each - but the dump wrote a hardcoded 65,536 and the report said "of
+65536 bytes" regardless. The plane is at 0x10734 and runs to 0x18B34, which
+are exactly the codec's own [E1AC] and [E198]. Every earlier conclusion that
+"the plane buffers do not correlate" was drawn from the first half of them.
 
-All three are real and all three are irrelevant here: nothing on this path
-branches on OF after a shift or on ZF after an imul, checked, zero occurrences.
+The lesson worth keeping: `verify_plane.py` locates the plane by
+**correlation** and only then checks it byte-exactly. Byte matching alone
+finds nothing when the values are on a different scale, and answers "not
+decoded" - which is what this file said for a long time while the picture sat
+in the buffer.
 
-**What else is ruled out**, each measured rather than assumed:
+#### The bug that got it here
 
-  * *Missing code.* Segment 3 carves at 92.7%; seeding the eight largest
-    unlifted runs adds 0.3% because each decodes two bytes and stops. They are
-    data tables - `2F7D+51` is the `cs:[0x2F7D]` variable the decode uses.
-  * *Jump tables.* A dispatch miss aborts loudly and the decode does not abort.
-  * *The palette.* Compared with a palette-invariant statistic; and
-    ICM_DECOMPRESS_GET_PALETTE returns ICERR_OK while filling nothing.
-  * *Output format.* Only RGB 8, 16 and 24 are accepted - every planar fourcc
-    (YVU9, IF09, YUV9, I420, UYVY, YUY2) is refused with ICERR_BADFORMAT, so
-    the codec must colour-convert and there is no way to read its planes out.
-  * *Buffer size.* The codec writes 12,032 bytes past a 216x192 DIB, and a
-    tight allocation truncated the picture - which reads as "the decoder
-    stopped early" rather than "the buffer was short".
+105 of segment 3's 221 functions were truncated. carve_functions ends a
+function where the next entry begins, so a function whose body continues into
+the next one was emitted with no final control transfer - a silent `return`
+mid-body. The per-plane worker at 3:0610 stopped at `mov ebx, 0x80`, which is
+why the bitstream reader consumed 16 bytes of a 15,844-byte frame. It now
+consumes 15,840.
 
-**Where it actually stands.** Over the written span our values are
-mean 79.6, sd 45.2, range 20..234; ffmpeg's luma is mean 85.2, sd 52.0,
-range 20..232. The values are in the right domain. The positions are not: no
-layout tried correlates above 0.34, against 1.000 for a planted control.
+#### Checked and clean
 
-Tried and rejected: pitch 216 and 256 at every offset, top-down and bottom-up,
-every stride from 200 to 900 under a constraint that the rows lie inside the
-written data, vertical rotation, 4x4 cells stored contiguously in raster and
-column order. The codec's pitch is 256 and does not follow the declared width
-- 216 is the only width it accepts at all.
+Both lifters were differential-tested against Unicorn's x86: every distinct
+instruction run twice on identical state, registers, flags and memory
+compared. Across 37 segments and ~7,000 instructions the only disagreements
+are shifts not setting OF, mul/imul writing flags x86 leaves undefined, and
+16-bit adc/sbb losing CF when `src+cf` wraps. None is read on this path.
 
-So the arithmetic and the codebooks are right and the output ADDRESSING is
-wrong, which is a much smaller place to look than where this started. The
-next thing to instrument is the write path itself: which lifted function
-computes the destination pointer for each reconstructed cell, and what it
-believes the pitch and the plane base to be.
+`KERNEL.197` was popping nothing where one word is pushed, skewing the
+caller's stack through driver initialisation. Fixed; it did not change the
+output.
 
 Still open:
 
