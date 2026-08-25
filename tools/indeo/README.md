@@ -849,19 +849,32 @@ rather than the segment the lifted functions are registered under, or the
 decoder reads one copy and writes the other. `find()` resolves the alias for
 dispatch while CS keeps the copy.
 
-### What is left
+### What is left, precisely
 
-Every pixel written is the value 4:
+The pipeline runs end to end with no faults and `ICERR_OK`. Four things were
+checked individually rather than assumed, and three of them pass:
 
-```
-distinct values: 2   [(4, 27080), (0, 14392)]
-rows with data: 47..191 of 192
-```
+- **The bitstream reaches the decoder.** Watching our input selector shows
+  sequential byte reads - `+0030 +0031 +0032 ...` - which is a bitstream reader
+  working through the frame.
+- **The lookup tables are populated.** `[0xDC88]`, `[0x0180]` and `[0x0280]` in
+  both working buffers hold varied small values, not zeros.
+- **The buffers have structure.** They are not uniform: `04 05 04 04 04 04 04
+  05 05 04` at 0x0180, `07 07 07 ...` at 0x0280.
+- **But none of it is the frame.** `correlate_decode.py` sweeps every offset and
+  a dozen plausible strides across every buffer, correlating against ffmpeg's
+  luma. The best result anywhere is -0.19, which is noise.
 
-Uniform output over most of the frame, so the decode loop runs and writes where
-it should while whatever supplies the pixel values yields a constant. The
-verification still reports no match, which is the honest answer: the frame is
-not decoded yet.
+That last tool exists because byte-exact matching answers "is this the frame"
+and nothing else. While the pipeline is still wrong, the more useful question is
+"is this the frame's *structure*, in some scaling or layout" - a decoder
+producing a coarse or shifted representation fails the first test and passes the
+second, and the two need very different follow-ups. Here it fails both, which
+rules out "nearly right, wrong scale" as an explanation.
+
+The output buffer holds the constant 4 over rows 47..191. The internal buffers
+vary but do not resemble the picture. So the decode loop runs, reads its input,
+consults its tables, writes where it should, and computes the wrong values.
 
 Still open:
 
