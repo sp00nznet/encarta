@@ -37,6 +37,12 @@ void ne_register_code(uint16_t sel, const ne_entry *entries, unsigned count)
 
 static void (*find(uint16_t sel, uint32_t off))(CPU *)
 {
+    /* The selector may be a writable copy of a code segment rather than the
+     * segment itself, and CS has to keep saying the copy - see ne_call32 - so
+     * the lookup resolves it here instead. */
+    uint16_t orig = ne_code_alias(sel, 47);
+    if (orig)
+        sel = orig;
     for (unsigned i = 0; i < g_code_n; i++) {
         if (g_code[i].sel != sel)
             continue;
@@ -273,6 +279,20 @@ unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
 
     CPU c;
     memset(&c, 0, sizeof c);
+    /* CS keeps the selector the caller actually used, which may be a writable
+     * copy of the code segment rather than the segment itself.
+     *
+     * That distinction is the whole reason the copy exists. This codec keeps
+     * mutable variables inside its own code:
+     *
+     *     cmp eax, dword ptr cs:[0x2F7D]     ; read through CS
+     *     mov es, [ebp+4]
+     *     mov dword ptr es:[0x2F7D], eax     ; write through a data alias
+     *
+     * A real code segment cannot be written, so it makes a writable alias and
+     * writes there. Pointing CS at the pristine original would have it reading
+     * one copy and writing the other, and every such variable would read as
+     * whatever the file happened to contain. */
     c.cs = seg;
     c.ss = ss;
     c.esp = sp;

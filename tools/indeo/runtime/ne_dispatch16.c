@@ -331,17 +331,18 @@ static void recomp_dispatch_inner(CPU *cpu, uint16_t seg, uint16_t off)
      * itself - see ne_code_alias. Resolve before deciding anything else, or a
      * call into the copy looks like a call to a segment that was never
      * lifted. */
+    uint16_t code_of = seg;
     if (!find16(seg, off)) {
         uint16_t orig = ne_code_alias(seg, 47);
         if (orig) {
             if (getenv("IR32_TRACE16"))
                 fprintf(stderr, "  (selector %04X is a copy of segment %u)\n",
                         seg, orig);
-            seg = orig;
+            code_of = orig;
         }
     }
 
-    if (seg == 2 || seg == 3) {
+    if (code_of == 2 || code_of == 3) {
         /* SI, DI and BP are 16-bit in this runtime's CPU, so only their low
          * halves survive the trip. That is a real limit of the 16-bit model
          * rather than a shortcut here, and it is worth knowing about if a
@@ -350,6 +351,8 @@ static void recomp_dispatch_inner(CPU *cpu, uint16_t seg, uint16_t off)
         r.eax = cpu->eax; r.ecx = cpu->ecx;
         r.edx = cpu->edx; r.ebx = cpu->ebx;
         r.ebp = cpu->bp;  r.esi = cpu->si;  r.edi = cpu->di;
+        /* `seg`, not `code_of`: the callee's CS must stay the selector the
+         * caller used, because its cs-relative variables live in that copy. */
         unsigned pops = ne_call32(seg, off, cpu->ss, cpu->sp,
                                   cpu->ds, cpu->es, &r);
         cpu->sp += (uint16_t)(4 + pops);
@@ -390,7 +393,7 @@ static void recomp_dispatch_inner(CPU *cpu, uint16_t seg, uint16_t off)
     if (getenv("IR32_TRACE16"))
         fprintf(stderr, "  16-bit %04X:%04X\n", seg, off);
 
-    void (*fn)(CPU *) = find16(seg, off);
+    void (*fn)(CPU *) = find16(code_of, off);
     if (!fn) {
         g_dispatch16_misses++;
         /* Say whether the selector is mapped at all, and who called. An
