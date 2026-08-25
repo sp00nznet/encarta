@@ -346,6 +346,18 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
         { 0x400B, "ICM_DECOMPRESS_QUERY", farptr(SEL_BIIN), farptr(SEL_BIOUT) },
         { 0x400C, "ICM_DECOMPRESS_BEGIN", farptr(SEL_BIIN), farptr(SEL_BIOUT) },
         { 0x400D, "ICM_DECOMPRESS",       farptr(SEL_ICD),  24 },
+        /* At 8bpp the decoded bytes are palette indices. Nothing supplies that
+         * palette unless it is asked for - ICM_DECOMPRESS_GET_PALETTE,
+         * DRV_USER+30 - and without it the output is indices into a table of
+         * zeroes, which compares to a reference decoder's luma as pure noise
+         * no matter how correct the decode is.
+         *
+         * After the decode, not before: asked between BEGIN and DECOMPRESS it
+         * returns success and leaves the decoder unable to produce anything,
+         * so the frame came out empty. The palette is a property of the
+         * stream, so reading it afterwards costs nothing. */
+        { 0x401E, "ICM_DECOMPRESS_GET_PALETTE",
+                                          farptr(SEL_BIIN), farptr(SEL_BIOUT) },
     };
     for (unsigned i = 0; i < 3; i++) {
         uint32_t r = ir32_driver_call(id, 1, seq[i].msg, seq[i].p1, seq[i].p2,
@@ -426,6 +438,38 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
                 printf("   dumped %s\n", path);
             }
         }
+    }
+
+    /* At 8bpp the output bytes are palette indices, not intensities, so
+     * comparing them to a reference decoder's luma compares two different
+     * things and reports noise however right the decode is. The codec fills
+     * the output BITMAPINFO's colour table itself, so resolve through it.
+     *
+     * IR32_STRIDE overrides the row pitch. The buffer's own autocorrelation
+     * says the codec writes 256-byte rows for a 216-wide DIB, and reading it
+     * back at 216 shears the picture into something no comparison can match. */
+    if (out_ppm && nonzero && outbits == 8) {
+        const unsigned char *pal = g_arena + g_segoff[SEL_BIOUT] + 40;
+        const char *sv = getenv("IR32_STRIDE");
+        int stride = sv ? atoi(sv) : w;
+        FILE *o = fopen(out_ppm, "wb");
+        if (o) {
+            fprintf(o, "P6\n%d %d\n255\n", w, h);
+            for (int y = h - 1; y >= 0; y--) {
+                const unsigned char *row = outp + (size_t)y * stride;
+                for (int x = 0; x < w; x++) {
+                    const unsigned char *e = pal + row[x] * 4;
+                    fputc(e[2], o); fputc(e[1], o); fputc(e[0], o);
+                }
+            }
+            fclose(o);
+            printf("wrote %s (8bpp through the codec's palette, stride %d)\n",
+                   out_ppm, stride);
+        }
+        int palnz = 0;
+        for (int i = 0; i < 256 * 4; i++)
+            palnz += pal[i] != 0;
+        printf("   output palette: %d of 1024 bytes non-zero\n", palnz);
     }
 
     if (out_ppm && nonzero && outbits == 24) {
