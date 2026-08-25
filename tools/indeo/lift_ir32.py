@@ -881,6 +881,28 @@ def main():
         print("   %d bytes unreached - tables, or entry points we have not"
               % (len(code) - nb))
         print("   found yet (indirect calls). Not lifted; --seed-unreached forces it.")
+    # Name the gaps. "92.7% covered" does not say whether the rest is one
+    # unreached function or a hundred scattered alignment bytes, and those need
+    # completely different work. --seed-unreached re-runs the whole carve once
+    # per seed, which is quadratic and unusable on a segment this size; the
+    # ranges let the plausible starts be seeded directly with --entry.
+    if a.stats or not a.seed_unreached:
+        gaps, i = [], 0
+        while i < len(covered):
+            if covered[i]:
+                i += 1
+                continue
+            j = i
+            while j < len(covered) and not covered[j]:
+                j += 1
+            gaps.append((i, j - i))
+            i = j
+        big = sorted(gaps, key=lambda g: -g[1])[:8]
+        if big:
+            print("   largest unlifted runs: %s"
+                  % ", ".join("%04X+%d" % (o, n) for o, n in big))
+            print("   %d runs total; %d are 8 bytes or less (alignment)"
+                  % (len(gaps), sum(1 for _o, n in gaps if n <= 8)))
 
     # A code segment returns. Zero returns across everything carved is not a
     # quirk of optimised code, it is the segment not being code - and the
