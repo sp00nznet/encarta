@@ -240,6 +240,21 @@ unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
         fprintf(stderr, "       reads ds:[%X] and ds:[%X]%s\n",
                 idx * 4 + 8, idx * 4 + 0xC,
                 idx > 8 ? "   <- past the table" : "");
+        /* The destination the converter writes through: ss:[bp+0x0C] is
+         * the offset and ss:[bp+0x10] the selector. The converter steps
+         * rows by a hardcoded 0x100 BYTES - the same 256 at 8, 16 and
+         * 24bpp - so it cannot be a DIB pitch, which would be 216, 432
+         * and 648 for this frame. Whatever this pointer names has
+         * 256-byte rows, and if it is the caller's DIB then the caller
+         * is passing the wrong buffer. */
+        {
+            uint32_t dst = (uint32_t)f[0x0C] | ((uint32_t)f[0x0D] << 8) |
+                           ((uint32_t)f[0x0E] << 16) | ((uint32_t)f[0x0F] << 24);
+            uint16_t dsel = (uint16_t)(f[0x10] | (f[0x11] << 8));
+            fprintf(stderr, "       destination %04X:%08X  (%s)\n",
+                    dsel, dst,
+                    g_segoff[dsel] ? "mapped" : "UNMAPPED");
+        }
     }
 
     if (getenv("IR32_TRACE") && seg == 3 && off == 0x610) {
