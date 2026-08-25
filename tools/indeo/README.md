@@ -851,84 +851,89 @@ dispatch while CS keeps the copy.
 
 ### Indeo 3: done
 
-**The recompiled decoder is byte-exact.** Every pixel of every frame tested,
-against ffmpeg decoding the same packet:
+**The recompiled decoder is byte-exact, and the codec's own output is the
+picture.** Two independent checks over every clip on the disc:
 
 ```
-64 of 64 first frames, 216x192, 41,472 pixels each:  100.00% byte-exact
+verify_frames.py   68 of 68   the decoded plane, 100.00% byte-exact vs FFmpeg
+verify_rgb.py      68 of 68   what ICM_DECOMPRESS returns, correlation 1.0000
 ```
 
-`verify_frames.py` runs the whole AVI directory. `ir32_run ... out.pgm` writes
-the decoded frame itself, and that file is byte-identical to ffmpeg's.
+`verify_frames` reads the plane out of the codec's working buffers and compares
+every byte. `verify_rgb` goes through the whole pipeline instead - driver
+messages, colour conversion, the DIB the caller receives - and compares by
+correlation, because the reference is a luma plane while that is RGB.
 
-Keyframes, one per file: every run is a fresh process with fresh codec state,
-so an inter frame has no previous frame to predict from.
+`ir32_run <DLL> decode <frame> 216 192 out.ppm 24` writes the picture.
 
-#### Where the picture is
-
-The codec decodes into its own working buffers and only afterwards converts to
-a DIB. The decode is exact; the conversion is not, so read the plane.
-
-It arrives in **two vertical strips**. The plane workspace is 176 bytes wide -
-`0xB0`, hardcoded in 65 places - so a 216-wide frame does not fit in one pass:
-the left 168 columns land in the first plane buffer and the remaining 48 in
-the second, eight bytes further in, both at a 176-byte stride. The base is the
-codec's own `[E1AC]`.
-
-The comparison is `ours * 2`. Indeo 3 works in six bits; ffmpeg scales by four
-on output and this plane holds twice the six-bit value.
-
-#### Three things had to be true before any of it was visible
+#### The two bugs
 
 **105 of segment 3's 221 functions were truncated.** carve_functions ends a
 function where the next entry begins, so a function whose body continues into
 the next one was emitted with no final control transfer - a silent `return`
-mid-body. Nothing crashed, nothing linked wrong; it did less than the
-original. The per-plane worker at 3:0610 stopped at `mov ebx, 0x80`, which is
-why the bitstream reader consumed 16 bytes of a 15,844-byte frame. It now
-consumes 15,840. The registers it returned had been saying so all along:
-ecx=0x101, esi=0, edi=1 are the constants those last three instructions load.
+mid-body. The per-plane worker at 3:0610 stopped at `mov ebx, 0x80`, which is
+why the bitstream reader consumed 16 bytes of a 15,844-byte frame. The
+registers it returned had been saying so all along: ecx=0x101, esi=0, edi=1 are
+the constants those last three instructions load.
 
-**Half of every buffer was invisible.** The working buffers are GlobalAlloc'd
-and most are larger than a segment - 0405 and 0406 are 137,024 bytes each -
-but the dump wrote a hardcoded 65,536 and reported "of 65536 bytes" whatever
-the size. The plane is at 0x10734. Every earlier conclusion that "the plane
-buffers do not correlate" was drawn from the half that never had it.
+**`__AHINCR` and `__AHSHIFT` were never patched.** KERNEL.114 and KERNEL.113
+are not functions, they are the two constants Win16 huge-pointer arithmetic is
+built on. To reach past 64K, code does
 
-**Byte matching alone could not find it.** The values are on a different
-scale, so an exact-match search reports nothing and concludes "not decoded" -
-which is what this file said for a long time while the picture sat in the
-buffer. `verify_plane.py` locates the plane by correlation first and only then
-checks it byte-exactly.
+```
+sbb bx, bx / and bx, __AHINCR / add dx, bx
+```
 
-#### What is still not right
+and the loader patches that immediate. `apply_selector_fixups` handled far
+pointers and skipped everything else, so the immediate kept an NE chain link:
+segment 15 ran `and bx, 0x163` and stepped the output selector to 4303, which
+nothing is mapped at. That is why 24bpp faulted while 8bpp worked - an 8bpp DIB
+for this frame is 41,472 bytes and never crosses 64K, so the arithmetic never
+runs. The evidence had pointed at a pitch problem for a long time; it was not
+one.
 
-What `ICM_DECOMPRESS` hands back is not a usable picture. The six colour
-converters write at a hardcoded 256-byte row stride (`[ebp+0x100]`,
-`[ebp+0x200]`, `[ebp+0x300]`) against a base computed at the DIB's 216-byte
-pitch, and at 8bpp the result is palette indices into a table the codec
-answers ICERR_OK for and declines to fill. Only RGB 8, 16 and 24 are accepted
-at all - every planar fourcc is refused with ICERR_BADFORMAT. That is a
-conversion problem sitting downstream of a decoder that is now known to be
-exactly right.
+Patching them to the protected-mode 8 and 3 needs the runtime to agree, and
+`ne_huge_alias` resolves `sel + 8k` lazily two ways: to the k-th 64K of a block
+that big, and - because Windows gives consecutive segments consecutive
+selectors while this runtime numbers them by index - to segment N+k. IR32 has
+three 64K data segments in a row, 43 to 45, and DRV_LOAD copies across them.
 
-`sweep` reports most entries running the stack out. Reconnecting the
-fallthroughs turns a loop spanning two carved functions into C recursion, and
-the sweep calls entries with a blank machine, so the loop counters are zero
-and nothing ends them. The real decode terminates normally, which is why it is
-byte-exact.
+#### Where the picture is, if you want the plane
+
+The plane is 176 bytes wide - `0xB0`, hardcoded in 65 places - so a 216-wide
+frame is decoded in two vertical strips: the left 168 columns in the first
+plane buffer at its `[E1AC]`, the remaining 48 in the second, eight bytes
+further in. Compare as `ours * 2`: Indeo 3 works in six bits and FFmpeg scales
+by four on output.
+
+#### What made it hard to see
+
+*Half of every buffer was invisible.* The working buffers are GlobalAlloc'd and
+most are bigger than a segment - 0405 and 0406 are 137,024 bytes - but the dump
+wrote a hardcoded 65,536 and said "of 65536 bytes" whatever the size. The plane
+is at 0x10734. Every earlier conclusion that "the plane buffers do not
+correlate" came from the half that never had it.
+
+*Byte matching alone could not find it.* The values are on a different scale,
+so an exact-match search reports nothing and concludes "not decoded" - which is
+what this file said for a long time while the picture sat in the buffer.
+
+*The message table was read with a literal 3.* Messages added after
+QUERY/BEGIN/DECOMPRESS were silently never sent, so GET_PALETTE looked like a
+codec answering ICERR_OK and filling nothing. It was never asked.
 
 #### Checked and clean
 
 Both lifters were differential-tested against Unicorn's x86 - every distinct
-instruction run twice on identical state, registers, flags and memory
-compared. Across 37 segments and ~7,000 instructions the only disagreements
-are shifts not setting OF, mul/imul writing flags x86 leaves undefined, and
-16-bit adc/sbb losing CF when `src+cf` wraps. None is read on this path.
-`KERNEL.197` was popping nothing where one word is pushed, skewing the
-caller's stack through driver initialisation; fixed.
+instruction run twice on identical state, registers, flags and memory compared.
+Across 37 segments and ~7,000 instructions the only disagreements are shifts
+not setting OF, mul/imul writing flags x86 leaves undefined, and 16-bit adc/sbb
+losing CF when `src+cf` wraps. None is read on this path.
 
-Still open:
+Still open: 16bpp output is populated but not right, and `sweep` reports most
+entries running the stack out - reconnecting the fallthroughs turns a loop
+spanning two carved functions into C recursion, and the sweep calls entries
+with a blank machine so nothing ends them. The real decode terminates normally.
 
 ### After that
 

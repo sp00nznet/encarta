@@ -276,6 +276,9 @@ def apply_selector_fixups(ne, seg_index, code):
     has to agree with, and does.
     """
     import struct
+    # 1-based index into the module reference table; for IR32.DLL that
+    # table is WIN87EM, KERNEL, GDI, USER, MMSYSTEM.
+    KERNEL_MODULE = 2
     out = bytearray(code)
     segs = [x for x in ne.segments if x.index == seg_index]
     if not segs:
@@ -289,6 +292,35 @@ def apply_selector_fixups(ne, seg_index, code):
             # into an ordinary far call that the runtime can name. Left
             # unpatched these read as a call to 0000:FFFF, which is the chain
             # terminator rather than an address, and tells nobody anything.
+            if r.src_type == 5:
+                # __AHSHIFT and __AHINCR - KERNEL.113 and KERNEL.114 - are not
+                # functions but the two constants Win16 huge-pointer arithmetic
+                # is built on. To reach past 64K, code does
+                #
+                #     sbb bx, bx / and bx, __AHINCR / add dx, bx
+                #
+                # and the loader patches that immediate. Unpatched it holds an
+                # NE chain link, so segment 15 ran `and bx, 0x163` and stepped
+                # the output selector to 4303, which nothing is mapped at. That
+                # is why 24bpp faulted while 8bpp worked: an 8bpp DIB for this
+                # frame is 41,472 bytes and never crosses 64K, so the
+                # arithmetic never runs.
+                #
+                # 8 and 3 are the protected-mode values, and ne_huge_alias
+                # binds sel+8k to the k-th 64K of a block to match.
+                AHCONST = {113: 3, 114: 8}
+                if r.module_idx != KERNEL_MODULE or r.ordinal not in AHCONST:
+                    continue
+                off, guard = r.offset, 0
+                while 0 <= off + 1 < len(out) and guard < 4096:
+                    guard += 1
+                    nxt = struct.unpack_from("<H", out, off)[0]
+                    struct.pack_into("<H", out, off, AHCONST[r.ordinal])
+                    n += 1
+                    if nxt == 0xFFFF:
+                        break
+                    off = nxt
+                continue
             if r.src_type not in (3, 11):        # FAR_PTR / PTR48
                 continue
             off, guard = r.offset, 0
