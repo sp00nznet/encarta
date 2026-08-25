@@ -317,6 +317,35 @@ def apply_selector_fixups(ne, seg_index, code):
     return bytes(out), n
 
 
+def _falls_through(c):
+    """Does this lifted function run off its own end?
+
+    carve_functions ends a function where the next entry begins, so a function
+    whose body simply continues into the next one is emitted with no final
+    control transfer. In C that is a silent `return`: the rest of the body
+    never runs, and the caller gets back whatever registers happened to be set
+    at the cut. Nothing crashes and nothing links wrong - it just quietly does
+    less than the original.
+
+    That is how the Indeo per-plane worker at 3:0610 stopped at `mov ebx, 0x80`
+    and returned before decoding anything, which is why the decoder read 16
+    bytes of a 15,844-byte frame. The giveaway was in the trace all along: the
+    registers it returned - ecx=0x101, esi=0, edi=1 - are the literal constants
+    the last three instructions load.
+
+    A trailing CONDITIONAL jump still falls through, so the presence of `goto`
+    is not enough; the last statement has to be an unconditional transfer.
+    """
+    import re as _re
+    lines = [l for l in c.rstrip().split("\n") if l.strip()]
+    if len(lines) < 2 or lines[-1].strip() != "}":
+        return False
+    last = _re.sub(r"/\*.*?\*/", "", lines[-2]).strip()
+    if last.startswith("if"):
+        return True
+    return not (last.startswith("goto ") or last.endswith("return;"))
+
+
 def _fix_stringops(c):
     """Give string operations their segment bases.
 
@@ -1024,6 +1053,8 @@ def main():
                            read_va=lambda va, n: code[va:va + n])
         lifter.image_lo, lifter.image_hi = 0, len(code)
         emitted = set()
+        entry_set = set(s for s, _ in funcs)
+        ran_on = orphaned = 0
         for start, body in funcs:
             # Name and slice from the ENTRY, not from the lowest address the
             # body reached. Descent follows backward jumps, so body[0] can sit
@@ -1057,9 +1088,27 @@ def main():
             # names both segments, so use it.
             c = _fix_stringops(c)
             c = _re_name.sub(lambda m: "L_s%d_%s" % (a.seg, m.group(1)), c)
+            # Reconnect a function that runs into the one after it. The carve
+            # cut it at the next entry, and without this the tail of the body
+            # is simply not executed - silently, with a plausible return.
+            if _falls_through(c):
+                if hi in entry_set:
+                    tail = c.rstrip()
+                    c = (tail[:tail.rfind("}")]
+                         + "    L_s%d_%08X(c); return;"
+                           " /* runs on into the next function */\n}\n"
+                           % (a.seg, hi))
+                    ran_on += 1
+                else:
+                    orphaned += 1
             unhandled += c.count("UNHANDLED") + c.count("abort()")
             emitted_entries.append(lo)
             parts.append(c)
+        if ran_on or orphaned:
+            print("   %d functions run on into the next and were reconnected"
+                  "%s" % (ran_on,
+                          "; %d end mid-body with nothing to fall into"
+                          % orphaned if orphaned else ""))
     else:
         lifter = lift16.Lifter()
         # Without this an indirect jump emits a comment and falls through to

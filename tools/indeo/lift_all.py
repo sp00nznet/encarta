@@ -37,6 +37,21 @@ def main():
     ne = ne_parse.parse_ne(a.ne_file)
     os.makedirs(a.out, exist_ok=True)
 
+    # Entries only running the code can find. The relocation walk finds far
+    # calls, and the descent finds near ones, but a call made through a pointer
+    # names its target nowhere in the image - it is computed at run time. The
+    # runtime prints "dispatch: no entry for SEG:OFF" when it meets one, and
+    # those go here so the next build has them as roots.
+    runtime_entries = {}
+    seeds = os.path.join(HERE, "runtime_entries.txt")
+    if os.path.exists(seeds):
+        for line in open(seeds):
+            line = line.split("#")[0].strip()
+            if not line:
+                continue
+            s, off = line.split(":")
+            runtime_entries.setdefault(int(s, 16), []).append(off)
+
     lifted16, lifted32, skipped = [], [], []
     for seg in ne.code_segments:
         if not seg.data:
@@ -45,6 +60,8 @@ def main():
         out = os.path.join(a.out, "ir32_seg%d.c" % idx)
         cmd = [sys.executable, os.path.join(HERE, "lift_ir32.py"), a.ne_file,
                "--seg", str(idx), "-o", out, "--pcrecomp", a.pcrecomp]
+        for e in runtime_entries.get(idx, []):
+            cmd += ["--entry", e]
         r = subprocess.run(cmd, capture_output=True, text=True)
         log = r.stdout + r.stderr
 
