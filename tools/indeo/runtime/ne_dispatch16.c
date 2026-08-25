@@ -94,7 +94,8 @@ enum { K_GLOBALALLOC = 15, K_GLOBALREALLOC = 16, K_GLOBALFREE = 17,
        K_GLOBALLOCK = 18, K_GLOBALUNLOCK = 19, K_GLOBALSIZE = 20,
        K_GETVERSION = 3,
        K_LOCALALLOC = 5, K_LOCALREALLOC = 6, K_LOCALFREE = 7,
-       K_LOCALLOCK = 8, K_LOCALUNLOCK = 9, K_LOCALSIZE = 10 };
+       K_LOCALLOCK = 8, K_LOCALUNLOCK = 9, K_LOCALSIZE = 10,
+       K_GETWINFLAGS = 132 };
 
 static uint16_t g_next_heap_sel = 0x0400;
 
@@ -127,6 +128,16 @@ static int kernel_argbytes(uint16_t ord)
     case K_GLOBALSIZE:      return 2;   /* HGLOBAL */
     case 171:               return 2;   /* one word at the call site */
     case 188:               return 2;   /* one word at the call site */
+    /* GetWinFlags: no arguments, DWORD result. Its one caller does
+     * `test al, 2` (WF_CPU286) and branches to the next instruction either
+     * way, so the value cannot steer anything - but leaving the ordinal
+     * unknown had it reported as skewing the stack on every call. */
+    case K_GETWINFLAGS:     return 0;
+    /* One word at the call site: `mov dx, 3 / push dx / call KERNEL.197`,
+     * and again with 2. Left unknown this popped nothing instead of two
+     * bytes, so every call skewed the caller's stack by a word - inside
+     * driver initialisation, where the damage lands on everything after. */
+    case 197:               return 2;
     default:                return -1;  /* unknown - say so */
     }
 }
@@ -134,6 +145,11 @@ static int kernel_argbytes(uint16_t ord)
 static void kernel_import(CPU *cpu, uint16_t ord)
 {
     switch (ord) {
+    case K_GETWINFLAGS:
+        /* Protected mode, 386, enhanced mode, coprocessor present. */
+        cpu->ax = 0x0425;
+        cpu->dx = 0;
+        break;
     case K_GLOBALALLOC: {
         /* GlobalAlloc(flags, dwBytes) -> handle, Pascal order: the last
          * argument pushed is nearest the top. lift16 pushed the far return
