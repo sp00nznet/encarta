@@ -42,6 +42,21 @@ unsigned ne_call32(uint16_t seg, uint32_t off, uint16_t ss, uint16_t sp,
 
 void recomp_dispatch(CPU *cpu, uint16_t seg, uint16_t off);
 
+/* An indirect far call - `call far word ds:[bx]` - reads its target from
+ * memory, so lift16 cannot name a function and emits this instead. It is a
+ * far call like any other: the selector and offset are already resolved by
+ * the time they get here, and the same dispatch has to route them, because
+ * the target may be in either half of the DLL.
+ *
+ * Declared here rather than left to the linker: without it the generated
+ * code names a symbol nothing defines, and the failure is a link error
+ * listing four segments with no hint that the cause is one missing
+ * one-line thunk. */
+static inline void dispatch_far(CPU *cpu, uint16_t seg, uint16_t off)
+{
+    recomp_dispatch(cpu, seg, off);
+}
+
 typedef struct {
     uint16_t off;
     void (*fn)(CPU *cpu);
