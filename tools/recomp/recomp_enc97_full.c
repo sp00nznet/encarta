@@ -291,6 +291,193 @@ static int run_leaf(uint32_t va, uint8_t *buf, uint32_t *out_l, uint32_t *out_r)
     *out_l = al; *out_r = ar;
     return (al == ar || al + (uint32_t)g_image_delta == ar) ? 1 : 0;
 }
+/* ---- C2: the same, for leaves that WRITE ---------------------------------
+ *
+ * The no-write sweep excluded any function that stores to memory, for fear of
+ * corruption. That fear was misplaced: a store through a pointer derived from
+ * a zeroed register lands near null and raises a catchable access violation,
+ * exactly like the reads those functions already do. What has to stay excluded
+ * is the loop - a backward branch can spin forever or walk memory until it
+ * finds something, and neither is recoverable.
+ *
+ * These are the more valuable half. A function whose only observable effect is
+ * on memory is invisible to a comparison of eax, so this compares the buffer
+ * too, which is a stronger check than the 818 no-write leaves get.
+ *
+ * Both runs use the SAME buffer address, sequentially, with the contents
+ * restored in between. Two buffers at different addresses would be the obvious
+ * approach and would report a false mismatch the moment a function stored a
+ * pointer to its own argument.
+ */
+#include "enc97_write_leaves.h"
+
+/* As call_real_leaf, but with sixteen arguments instead of eight.
+ *
+ * Eight was enough while nothing wrote memory. It is not enough here:
+ * sub_50BC50 does `lea edi, [esp+0x14]` and copies a run of stack slots into
+ * its object, reaching past the eighth. Beyond that point the emulated stack
+ * and the real one hold different values - consistently, so the two-pass check
+ * calls both sides reproducible - and the copied bytes differ for a reason
+ * that has nothing to do with the lift.
+ *
+ * Pushing more identical arguments extends the region both sides agree on.
+ */
+static uint32_t call_real_leaf16(uint32_t target, uint32_t argval, uint32_t ecx)
+{
+    RL_tgt = target; RL_arg = argval; RL_ecx = ecx;
+    __asm {
+        push ebx
+        push esi
+        push edi
+        push ebp
+        mov RL_save, esp
+        mov eax, RL_arg
+        mov ecx, 16
+      push_loop:
+        push eax
+        dec ecx
+        jnz push_loop
+        mov ecx, RL_ecx
+        xor eax, eax
+        xor edx, edx
+        xor ebx, ebx
+        xor esi, esi
+        xor edi, edi
+        xor ebp, ebp
+        call dword ptr [RL_tgt]
+        mov RL_eax, eax
+        mov esp, RL_save
+        pop ebp
+        pop edi
+        pop esi
+        pop ebx
+    }
+    return RL_eax;
+}
+
+/* Leave a known pattern in the stack memory just below esp.
+ *
+ * Some of these functions read stack they never wrote - an uninitialised local,
+ * or an argument past the eight this harness pushes. Their result is then not a
+ * function of their inputs at all, and the lifted and real runs disagree simply
+ * because an emulated stack and the real one hold different rubbish. Comparing
+ * them would report a lifter bug that is not there.
+ *
+ * Dirtying the stack deliberately, with two different patterns, turns that into
+ * something detectable: run each side twice, and if a side disagrees with
+ * ITSELF, its answer depends on memory nobody defined.
+ */
+static void dirty_stack(uint32_t pattern)
+{
+    volatile uint32_t pad[256];
+    for (int i = 0; i < 256; i++)
+        pad[i] = pattern ^ (uint32_t)i;
+    /* the compiler must not decide this is dead */
+    if (pad[0] == 0xFFFFFFFFu)
+        printf("");
+}
+
+static int run_write_leaf(uint32_t va, uint8_t *buf, uint8_t *snapl, uint8_t *snapr,
+                          uint32_t *out_l, uint32_t *out_r, int *memdiff)
+{
+    lfn fn = lookup(va); if (!fn) return -1;
+    uint32_t al = 0, ar = 0; volatile int lfault = 0, rfault = 0;
+    uint32_t bp = (uint32_t)(uintptr_t)buf;
+
+    /* A pattern rather than zeroes: a function that copies its input somewhere
+     * is indistinguishable from one that zeroes the destination when the input
+     * is already zero. */
+    /* Each side runs twice, under different stack rubbish. A side that
+     * disagrees with itself is reading memory nobody defined, and there is
+     * nothing to compare - see dirty_stack. */
+    uint32_t al2 = 0, ar2 = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        uint32_t pat = pass ? 0xA5A5A5A5u : 0x5A5A5A5Au;
+        for (int i = 0; i < SCRATCH; i++)
+            buf[i] = (uint8_t)(i * 7 + 13);
+        dirty_stack(pat);
+        __try {
+            CPU c; cpu_init(&c, bp);
+            for (int i = 0; i < 16; i++) push32(&c, bp);
+            push32(&c, 0xDEADBEEFu);
+            fn(&c); if (pass) al2 = c.eax; else al = c.eax;
+        } __except (EXCEPTION_EXECUTE_HANDLER) { lfault = 1; }
+        if (!pass) memcpy(snapl, buf, SCRATCH);
+        else if (memcmp(snapl, buf, SCRATCH)) return -2;   /* not reproducible */
+    }
+    if (al != al2) return -2;
+
+    for (int pass = 0; pass < 2; pass++) {
+        uint32_t pat = pass ? 0xA5A5A5A5u : 0x5A5A5A5Au;
+        for (int i = 0; i < SCRATCH; i++)
+            buf[i] = (uint8_t)(i * 7 + 13);
+        dirty_stack(pat);
+        __try {
+            uint32_t v = call_real_leaf16(va + g_image_delta, bp, bp);
+            if (pass) ar2 = v; else ar = v;
+        } __except (EXCEPTION_EXECUTE_HANDLER) { rfault = 1; }
+        if (!pass) memcpy(snapr, buf, SCRATCH);
+        else if (memcmp(snapr, buf, SCRATCH)) return -2;
+    }
+    if (ar != ar2) return -2;
+
+    if (lfault || rfault) return -1;
+    *out_l = al; *out_r = ar;
+    *memdiff = memcmp(snapl, snapr, SCRATCH) != 0;
+    if (*memdiff) return 0;
+    return (al == ar || al + (uint32_t)g_image_delta == ar) ? 1 : 0;
+}
+
+/* Where the two runs first disagree, and by how much.
+ *
+ * "memory differs" on its own does not distinguish a wrong result from a
+ * rounding difference, and those want opposite responses. pcrecomp models the
+ * x87 stack as C doubles where the hardware carries 80-bit extended, so a
+ * chain of multiplies is expected to part company in the low bits of a stored
+ * double - and expected is not the same as wrong.
+ */
+static void show_first_diff(const uint8_t *a, const uint8_t *b)
+{
+    int o = 0;
+    while (o < SCRATCH && a[o] == b[o]) o++;
+    if (o >= SCRATCH) return;
+    int n = 0;
+    for (int i = 0; i < SCRATCH; i++) n += (a[i] != b[i]);
+    printf("      %d of %d bytes differ, first at +%d:\n"
+           "        lifted %02X %02X %02X %02X %02X %02X %02X %02X\n"
+           "        real   %02X %02X %02X %02X %02X %02X %02X %02X\n",
+           n, SCRATCH, o,
+           a[o], a[o+1], a[o+2], a[o+3], a[o+4], a[o+5], a[o+6], a[o+7],
+           b[o], b[o+1], b[o+2], b[o+3], b[o+4], b[o+5], b[o+6], b[o+7]);
+}
+
+static int test_write_leaf_sweep(void)
+{
+    uint8_t *region = VirtualAlloc(NULL, SCRATCH + 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    DWORD old; VirtualProtect(region + SCRATCH, 0x1000, PAGE_NOACCESS, &old);
+    uint8_t *snapl = (uint8_t *)malloc(SCRATCH), *snapr = (uint8_t *)malloc(SCRATCH);
+    int matched = 0, mism = 0, skip = 0, shown = 0, memmism = 0, indet = 0;
+    #define WSWEEP(va, ret) do { \
+        uint32_t l, r; int md = 0; \
+        int res = run_write_leaf((va), region, snapl, snapr, &l, &r, &md); \
+        if (res == -2) indet++; \
+        else if (res < 0) skip++; else if (res) matched++; else { mism++; if (md) memmism++; \
+            if (shown++ < 8) { \
+                printf("    MISMATCH 0x%06x: lifted eax=%08X real eax=%08X%s\n", \
+                       (va), l, r, md ? "  and memory differs" : ""); \
+                if (md) show_first_diff(snapl, snapr); } } \
+    } while (0);
+    WRITE_LEAVES(WSWEEP)
+    #undef WSWEEP
+    free(snapl); free(snapr);
+    VirtualFree(region, 0, MEM_RELEASE);
+    int ok = (mism == 0 && matched > 0);
+    printf("%s [C2] writing pure-leaf sweep (eax AND memory): %d matched, %d mismatch"
+           " (%d in memory), %d skipped, %d indeterminate\n",
+           ok ? "PASS" : "FAIL", matched, mism, memmism, skip, indet);
+    return ok;
+}
+
 static int test_leaf_sweep(void)
 {
     /* buffer with a NOACCESS guard page after it: any over-read faults (caught) */
@@ -325,6 +512,7 @@ int main(int argc, char **argv)
     ok &= test_table();
     ok &= test_chains();
     ok &= test_leaf_sweep();
+    ok &= test_write_leaf_sweep();
     printf("%s ENC97 full recomp exercised at scale\n", ok ? "ALL PASS:" : "FAIL:");
     return ok ? 0 : 1;
 }

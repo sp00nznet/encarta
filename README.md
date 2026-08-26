@@ -318,7 +318,7 @@ approach proven on DECO_32, rather than hand-reimplementation:
 - [x] Static disassembly + function map of ENC97.EXE (IDA Pro idalib, 7,326 fns)
 - [x] **Whole binary lifts to compilable C** — all 7,326 functions, 0 unhandled
       opcodes (`enc97_full.c`, ~452k lines, compiles clean)
-- [x] Dispatch table validated at scale — **818 functions differential-match the
+- [x] Dispatch table validated at scale — **974 functions differential-match the
       real originals**, byte-exact
 - [x] **All 914 imports wire to real code** (MFC40/MSVCRT40 ship in SysWOW64; the
       "MFC40 wall" was a myth)
@@ -433,7 +433,7 @@ reconstructs the data image from a generated blob). See
 
 **ENC97.EXE — the whole 1.3 MB MFC app lifts, and the recompiled entry boots it.**
 All **7,326 functions** lift to compilable C (0 unhandled opcodes); the dispatch
-table is validated at scale (**818 functions differential-match** the originals);
+table is validated at scale (**974 functions differential-match** the originals);
 all **914 imports wire to real code** (MFC40/MSVCRT40 ship in SysWOW64). The
 lifter gained `fs:`/SEH and `.reloc`-driven address-immediate relocation, so the
 **lifted entry point boots the application** — CRT init → `AfxWinMain` →
@@ -595,7 +595,11 @@ bugs the way `sub_4BB6F0` did.
       the decoder's byte-exactness, both video paths, the phrase encoding,
       article text, the media list and the app reaching its window. Fast set
       ~4s, `--full` ~30s; a missing CD reports SKIP, never a pass
-- [ ] Raise differential validation past the current 818/7,326 functions
+- [x] **Differential validation raised to 974/7,326** — the 818 no-write
+      leaves plus 156 that write memory, those compared on the buffer as
+      well as `eax`. 2 float leaves held back, 1 indeterminate
+- [ ] Past the leaves: the remaining 6,134 functions all call something,
+      so comparing them needs a callee policy, not just safer inputs
 
 **2. Shrink the real-code surface.** This is the actual work of becoming a port,
 in cost order:

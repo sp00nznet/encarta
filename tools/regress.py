@@ -203,6 +203,27 @@ def check_app_boots(a):
     return "fail", last[0][:70]
 
 
+def check_differential(a):
+    """974 ENC97 functions still match the real originals.
+
+    The one check that compares lifted code against the code it was translated
+    from, rather than against an expectation of what it should do.
+    """
+    exe = os.path.join(REPO, "build", "tools", "recomp", "Release",
+                       "recomp_enc97_full.exe")
+    app = os.path.join(REPO, "analysis", "ENC97.EXE")
+    if not os.path.exists(exe):
+        return "skip", "recomp_enc97_full.exe not built (needs enc97_full.c)"
+    if not os.path.exists(app):
+        return "skip", "no analysis/ENC97.EXE"
+    rc, out = run([exe, app], timeout=600)
+    got = sum(int(m) for m in re.findall(r"(\d+) matched", out))
+    if "ALL PASS" in out:
+        return "pass", "%d functions match the originals" % got
+    bad = [l.strip() for l in out.splitlines() if "MISMATCH" in l][:1]
+    return "fail", bad[0][:60] if bad else "sweep did not pass"
+
+
 # No check here for the lifter's instruction semantics, deliberately.
 #
 # difftest.py compares every distinct instruction against Unicorn and is worth
@@ -226,6 +247,7 @@ CHECKS = [
     ("article text",       check_article_text),
     ("media list",         check_media_list),
     ("app reaches window", check_app_boots),
+    ("974 fns match real", check_differential),
 ]
 
 
