@@ -78,9 +78,9 @@ directly. Nothing is hooked and the app is not modified.
 **Clips play.** Driven interactively, the Media Gallery lists all 68 videos and
 plays them - decoded frame, transport controls, the lot.
 
-![Encarta 97 playing a video through the recompiled Indeo codec](docs/encarta97-video.png)
+![Encarta 97 playing video through the recompiled Indeo codec](docs/encarta97-video.gif)
 
-Every pixel of that cheetah came out of a 16-bit driver Windows cannot load,
+Every pixel of that came out of a 16-bit driver Windows cannot load,
 translated to C and called back through Video for Windows. Nothing else on the
 machine could have done it: `Drivers32` registers cvid, iyuv, mrle, msvc,
 msyuv and tsbyuv, and no Indeo at all, so the only `IV32` handler in that
