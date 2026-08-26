@@ -9,6 +9,7 @@ Run m20dump first to extract the internal files:
 Then:
     py mvbtext.py <dir> titles            # all article titles (_TTLBTREE)
     py mvbtext.py <dir> phrases           # the |Phrases dictionary, decoded
+    py mvbtext.py <dir> check             # pin the phrase encoding
     py mvbtext.py <dir> prose <entry>     # decompress a topic and read it
     py mvbtext.py <dir> text <entry>      # raw (undecompressed) topic scan
     py mvbtext.py <dir> grep <substr>     # find titles containing substr
@@ -103,25 +104,59 @@ def topic_stream(raw, scan_limit=4096):
     return bytes(lz77(raw[best[1]:])), best[1]
 
 
-def expand_refs(buf, ph):
-    """Topic text -> readable text.
+def expand_refs(buf, ph, stats=None):
+    """Decompressed topic text -> readable prose.
 
-    Inside a decompressed topic, bytes 0x20-0x7E are literal and bytes with the
-    high bit set reference the phrase dictionary. Single-byte references
-    (phrase = byte - 0x80) are confirmed: `Sib<84>ia` is "Siberia" (phrase 4 =
-    "er") and `ext<9C>c<89><85>` is "extraction" ("ra" + "ti" + "on").
+    Phrase references are one byte or two:
 
-    High phrase indices are NOT solved. All 128 high bytes occur, and the most
-    frequent (0xB0-0xB6) cannot be their single-byte reading - phrase 54 is
-    "According", which is not plausible thousands of times in one article. They
-    are either a multi-byte escape or interleaved formatting codes. Until that
-    is settled this renders those bytes as their single-byte phrase, which is
-    why some words come out wrong."""
+        0x80-0x9F   phrase (b & 0x1F)          the 32 two-letter fragments
+        0xA0-0xBF   phrase ((b & 0x0F) << 8) | next,
+                    plus a trailing space when b & 0x10
+
+    The two-byte form is what took the longest to see, and the frequencies
+    gave it away. Over 400 topics the commonest codes are
+
+        B6 6D  ->  0x66D = 1645  "the"
+        A4 C8  ->  0x4C8 = 1224  "of "
+        B1 A1  ->  0x1A1 =  417  "and"
+        A3 C6  ->  0x3C6 =  966  "in "
+
+    which are the four commonest words in English, in order. Reading the low
+    nibble of the first byte as the top four bits of a 12-bit index is the only
+    arrangement that puts them there, and 1,808 phrases need exactly 11 bits.
+
+    Bit 0x10 is a trailing space, which is why "of " and "in " carry their own
+    space in the dictionary while "the" and "and" do not - the encoder picked
+    whichever form was shorter overall and flagged the rest.
+
+    Reading every high byte as a single reference - which is what this did
+    before - can only reach 128 of the 1,808 phrases, and lands in the middle
+    of the alphabetical section: 0xB6 came out as "According", thousands of
+    times per article.
+
+    First bytes are 0xA0-0xBF: over 1,500 topics that range is 99.8% in-range
+    against the dictionary, while 0xC0-0xFF is 12-78% and is therefore not this
+    code. Those bytes are left alone (2% of high bytes, still unidentified) and
+    counted in `stats` rather than guessed at.
+    """
     out = []
-    for b in buf:
-        if b >= 0x80:
-            idx = b - 0x80
+    i, n = 0, len(buf)
+    while i < n:
+        b = buf[i]
+        i += 1
+        if 0x80 <= b <= 0x9F:
+            idx = b & 0x1F
             out.append(ph[idx] if ph and idx < len(ph) else "")
+        elif 0xA0 <= b <= 0xBF and i < n:
+            idx = ((b & 0x0F) << 8) | buf[i]
+            i += 1
+            if ph and idx < len(ph):
+                out.append(ph[idx] + (" " if b & 0x10 else ""))
+            elif stats is not None:
+                stats["out_of_range"] = stats.get("out_of_range", 0) + 1
+        elif b >= 0xC0:
+            if stats is not None:
+                stats["unknown_hi"] = stats.get("unknown_hi", 0) + 1
         elif 0x20 <= b < 0x7F or b in (9, 10, 13):
             out.append(chr(b))
         else:
@@ -177,6 +212,39 @@ def image_refs(text):
     return sorted(set(refs)), media
 
 
+def check(d):
+    """Pin the phrase encoding to the four codes that identify it.
+
+    These are the commonest codes in the corpus and they decode to the four
+    commonest words in English, in order. If a change to expand_refs or to the
+    dictionary reader breaks the indexing, this says so immediately instead of
+    the damage showing up as slightly-wrong prose thousands of articles later.
+    """
+    ph = phrases(d)
+    cases = [(0xB6, 0x6D, 1645, "the "),      # 0x66D, bit 0x10 adds the space
+             (0xA4, 0xC8, 1224, "of "),       # 0x4C8, already spaced
+             (0xB1, 0xA1, 417,  "and "),      # 0x1A1
+             (0xA3, 0xC6, 966,  "in ")]       # 0x3C6
+    ok = True
+    for hi, lo, idx, want in cases:
+        got = expand_refs(bytes([hi, lo]), ph)
+        # expand_refs strips, so compare on the stripped form
+        if ((hi & 0x0F) << 8 | lo) != idx or got != want.strip():
+            print("  FAIL %02X %02X -> index %d %r, wanted %d %r"
+                  % (hi, lo, (hi & 0x0F) << 8 | lo, got, idx, want.strip()))
+            ok = False
+        else:
+            print("  ok   %02X %02X -> phrase %-4d %r" % (hi, lo, idx, want))
+    # the single-byte form: "Sib<84>ia" is Siberia, phrase 4 being "er"
+    if expand_refs(b"Sib\x84ia", ph) != "Siberia":
+        print("  FAIL single-byte reference: %r" % expand_refs(b"Sib\x84ia", ph))
+        ok = False
+    else:
+        print("  ok   Sib<84>ia -> Siberia")
+    print("phrase encoding: %s" % ("all checks passed" if ok else "BROKEN"))
+    return 0 if ok else 1
+
+
 def main():
     if len(sys.argv) < 3:
         print(__doc__); return 1
@@ -191,6 +259,8 @@ def main():
         print(f"# {len(ps)} phrases")
         for i, p in enumerate(ps):
             print(f"{i:5d}  {p}")
+    elif cmd == "check":
+        return check(d)
     elif cmd == "grep":
         sub = sys.argv[3].lower()
         for t in titles(d):
