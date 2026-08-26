@@ -122,10 +122,32 @@ static LRESULT decompress_query(ICDECOMPRESS *icd, const BITMAPINFOHEADER *in,
         return ICERR_BADFORMAT;
     if (out->biWidth != in->biWidth || abs(out->biHeight) != abs(in->biHeight))
         return ICERR_BADFORMAT;
-    /* 8, 16 and 24 are what the codec accepts; it answers ICERR_BADFORMAT for
-     * 1, 4 and 32 itself, and asking it costs a full message round trip. */
-    if (out->biBitCount != 8 && out->biBitCount != 16 && out->biBitCount != 24)
-        return ICERR_BADFORMAT;
+    /* Only 24bpp, which is the format the codec asks for itself:
+     * ICM_DECOMPRESS_GET_FORMAT answers 24bpp BI_RGB.
+     *
+     * The codec will also accept 8 and 16, and offering them was a mistake -
+     * neither comes out right, and one of them is actively harmful:
+     *
+     *   8bpp gives palette INDICES into a table the codec never publishes.
+     *   ICM_DECOMPRESS_GET_PALETTE returns ICERR_OK and fills nothing, so
+     *   there is no way to resolve them. Worse, a palettised DIB makes the
+     *   player realize a palette, and on a display that honours it every other
+     *   window is remapped to the video's colours - which is exactly the
+     *   symptom of the UI taking on hues from the clip.
+     *
+     *   16bpp is populated but wrong: correlation +0.04 against a reference
+     *   decode, against +1.0000 for 24bpp.
+     *
+     * Advertising a format that cannot be rendered correctly is a bug in this
+     * shim, not a feature of the codec. IR32_ALLOW_PALETTE=1 restores the old
+     * behaviour for anyone who wants to look at it. */
+    if (out->biBitCount != 24) {
+        static int allow = -1;
+        if (allow < 0)
+            allow = getenv("IR32_ALLOW_PALETTE") != NULL;
+        if (!(allow && (out->biBitCount == 8 || out->biBitCount == 16)))
+            return ICERR_BADFORMAT;
+    }
     return ICERR_OK;
 }
 
@@ -162,6 +184,12 @@ static LRESULT decompress_begin(const BITMAPINFOHEADER *in,
         g.w = in->biWidth;
         g.h = abs(in->biHeight);
         g.bits = out->biBitCount;
+        /* Which format the player settled on. It is the one number that says
+         * whether the picture will be right and whether a palette gets
+         * realized over the rest of the UI. */
+        fprintf(stderr, "ir32: decompressing %ldx%ld -> %u bpp%s\n",
+                (long)in->biWidth, (long)abs(in->biHeight), out->biBitCount,
+                out->biBitCount == 24 ? "" : "   <- not the codec's own format");
     }
     return (LRESULT)(int32_t)r;
 }
