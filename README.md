@@ -34,7 +34,7 @@ From an interactive session against the real CD:
 | **Audio** - narration clips, background music, MindMaze effects | works |
 | **MindMaze** - category select, levels, scoring, progression | works |
 | Article pictures (SPAM media) | works - see note |
-| Video | **no** - see below |
+| Video | **not yet** - the codec is done, the wiring is not; see below |
 
 **Article pictures** initially failed with *"Encarta is not set up properly"*
 (ENCTITLE.DLL string 25). Imagery comes through **SPAM**, Encarta's media
@@ -45,14 +45,22 @@ load at all. They ship on CD1 at `AAMSSTP\SYSTEM32\`; copy them beside
 `ENC97.EXE` (the harness puts that directory on the DLL search path) and
 pictures resolve.
 
-**Video decodes.** All 68 clips are **Indeo 3.2** (`IV32`). Microsoft removed
-the Indeo codecs from Windows years ago and the CD ships only the *16-bit*
-driver (`AAMSSTP\SYSTEM16\IR32.DLL`), which a 32-bit process cannot
-load - so the driver itself was statically recompiled. It is byte-exact, and
-the codec's own colour conversion works too: 68 of 68 first frames decode to
-100.00% identical pixels against FFmpeg, and the RGB frame `ICM_DECOMPRESS`
-hands back matches at correlation 1.0000. See
+**Video: the decoder is finished, playback is not wired up.** Those are two
+different things and the table above means the second one.
+
+All 68 clips are **Indeo 3.2** (`IV32`). Microsoft removed the Indeo codecs
+from Windows years ago and the CD ships only the *16-bit* driver
+(`AAMSSTP\SYSTEM16\IR32.DLL`), which a 32-bit process cannot load - so the
+driver itself was statically recompiled, and it is exact: 68 of 68 first frames
+decode to 100.00% identical pixels against FFmpeg, and the RGB frame
+`ICM_DECOMPRESS` hands back matches at correlation 1.0000. You can decode any
+clip on the disc today with `ir32_run`; see
 [`tools/indeo`](tools/indeo/README.md).
+
+What is missing is the join. Encarta plays video through Video for Windows, so
+something has to register the recompiled codec as the `IV32` handler that the
+app's playback path opens - and nothing does yet. Until then the decoder is a
+tool you run beside the app rather than something the app uses.
 
 ## Why?
 
@@ -313,11 +321,15 @@ approach proven on DECO_32, rather than hand-reimplementation:
       artwork decoded and drawn ([screenshot](docs/encarta97-running.png))
 - [x] **Driven interactively** — article browsing, search, dictionary, the media
       archive, audio and MindMaze all work from recompiled code
-- [x] **Indeo 3.2 video** — the 16-bit `IR32.DLL` driver statically
+- [x] **Indeo 3.2 decoder** — the 16-bit `IR32.DLL` driver statically
       recompiled and **byte-exact**: 68 of 68 first frames decode to 100.00%
       identical pixels against FFmpeg, and the RGB frame the codec itself
       returns matches at correlation 1.0000
       ([`tools/indeo`](tools/indeo/README.md))
+- [ ] **Video playback in the app** — the decoder above is a standalone
+      tool. Encarta opens its clips through Video for Windows, so the
+      recompiled codec still has to be registered as the `IV32` handler that
+      path asks for
 - [x] SPAM media (article pictures) — `AM16.DLL`/`AMF16.DLL` beside the app
 - [ ] Shrink the real-code surface: replace MFC40/EEUIL10 with native equivalents
 
