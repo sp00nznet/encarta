@@ -21,9 +21,16 @@ maze map fills in as you explore, and scoring accumulates across the run:
 ![MindMaze, a new area of the map](docs/mindmaze3.png)
 
 **Video plays too.** All 68 clips, decoded by the CD's own 16-bit Indeo driver
-recompiled to C and handed back to Video for Windows:
+recompiled to C and handed back to Video for Windows — here the Media Gallery
+playing *Rodeo*, one of the 68:
 
 ![Encarta 97 playing video through the recompiled Indeo codec](docs/encarta97-video.gif)
+
+Note that the interface keeps its own colours throughout. An earlier build let
+the clip'''s palette leak into the UI chrome, because the codec advertised 8- and
+16-bit output it did not actually produce correctly; it now offers 24bpp only.
+Measured over the frames above, the toolbar button colour moves by 2, 2 and 6
+levels out of 255 — GIF dither noise, not a palette shift.
 
 ## What works
 
