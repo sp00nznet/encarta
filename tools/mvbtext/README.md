@@ -16,9 +16,9 @@ py mvbtext.py enc_dir text _00006060                # literal text + image refs
 - **Titles — complete.** All ~31,517 article titles from `_TTLBTREE`
   (e.g. *Aardvark, Abacus, Einstein Albert, Lincoln, Russia, …*).
 - **Phrase dictionary — complete.** 1,808 phrases, see below.
-- **Topic bodies — partial.** Topic entries (`_XXXXXXXX`) are *text + phrase
-  references* inside formatted records. The extractable stream yields
-  identifiable content — proper nouns, section titles, captions, and **media /
+- **Topic prose — readable.** Topic entries (`_XXXXXXXX`) are *text + phrase
+  references* inside formatted records. The phrase references are solved (see
+  below), so `prose` produces running article text, along with **media /
   image references** that link an article to its pictures (e.g. `11280A.RLE`,
   `ENCEW MEDIA97 R04 2420`), decodable via [`../recomp`](../recomp). Example:
   `_00006060` = the **Russia** article; `_000071A0` = the **USSR** article.
@@ -42,17 +42,66 @@ Sorted and revealing: the first ~200 entries are the commonest English bigrams
 
 `text` now expands references instead of eliding them.
 
+## Phrase references: solved
+
+Article prose comes out as prose. `_00006060` now reads:
+
+> Russia, independent republic in eastern Europe and Asia, which was
+> established on December 25, 1991, and includes 21 ethnically based
+> republics, 6 *krays* (territories), 10 *okrugs* (national areas), 49
+> *oblasts* (districts), 1 autonomous region, and 2 cities with federal
+> status. Officially named the Russian Federation (Russian *Rossiyskaya
+> Federatsiya*), Russia was once the largest and most prominent republic of
+> the Union of Soviet Socialist Republics...
+
+A reference is one byte or two:
+
+```
+0x80-0x9F   phrase (b & 0x1F)                       the 32 two-letter fragments
+0xA0-0xBF   phrase ((b & 0x0F) << 8) | next         plus a space when b & 0x10
+```
+
+**How the two-byte form was found: frequency.** Over 400 topics the commonest
+codes are
+
+```
+B6 6D  ->  0x66D = 1645  "the"
+A4 C8  ->  0x4C8 = 1224  "of "
+B1 A1  ->  0x1A1 =  417  "and"
+A3 C6  ->  0x3C6 =  966  "in "
+```
+
+the four commonest words in English, in order. Reading the low nibble of the
+first byte as the top four bits of a 12-bit index is the only arrangement that
+puts them there, and 1,808 phrases need exactly 11 bits. Bit 0x10 is a trailing
+space, which is why `of ` and `in ` carry their own space in the dictionary
+while `the` and `and` do not - the encoder used whichever form was shorter and
+flagged the rest.
+
+Reading every high byte as a single reference, which is what this did before,
+can only reach 128 of the 1,808 phrases and lands in the alphabetical section:
+`0xB6` came out as *According*, thousands of times per article. Its being
+implausible was the clue; frequency was what settled it.
+
+First bytes are 0xA0-0xBF. Over 1,500 topics that range decodes 99.8%
+in-range against the dictionary while 0xC0-0xFF manages 12-78%, so those bytes
+are not this code; they are 2% of all high bytes, are left alone, and are
+counted rather than guessed at.
+
+```bash
+py mvbtext.py enc_dir check            # pins the four codes above
+py mvbtext.py enc_dir prose _00006060  # the Russia article
+```
+
 ## What's left: topic records
 
-Expanding a topic byte-for-byte yields real phrases and real captions, but
-interleaved with record structure rather than as running prose - the topic
-entries are **formatted records**, not a flat text stream, and whole-file LZ77
-is not how they are packed (it expands into zeroes).
-
-So the blocker has moved: it is no longer the dictionary, it is parsing the
-topic record layout (WinHelp `TOPICLINK`-style: block size, prev/next, record
-type, then `LinkData1` formatting and `LinkData2` text). Ref: helpdeco /
-Winterhoff `helpfile.txt`.
+The prose is right; the surrounding structure is not. A topic entry is a
+sequence of formatted records - WinHelp `TOPICLINK` style: block size,
+prev/next, record type, then `LinkData1` formatting and `LinkData2` text - and
+`prose` runs the phrase decoder over the whole decompressed block, so the
+non-text regions come out as repeated fragments after the article body ends.
+Parsing the record layout would separate them. Ref: helpdeco / Winterhoff
+`helpfile.txt`.
 
 **Alternative path**, mirroring the DECO_32 recompilation: use the MVB engine
 DLLs (`MVBK20N.DLL` / `MVMG20N.DLL`, registered in `_SYSTEM`) as an oracle -
