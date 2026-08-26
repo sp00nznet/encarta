@@ -13,7 +13,7 @@ image codec is Iterated Systems' fractal codec, licensed into the product.
 |---|---|---|
 | [M20 / MVB container](#m20--mvb-20-container) | the archive everything lives in | **complete** |
 | [`\|Phrases`](#phrases-the-phrase-dictionary) | phrase-compression dictionary | **complete** |
-| [`\|TTLBTREE`](#ttlbtree-article-titles) | article titles | complete |
+| [`\|TTLBTREE`](#ttlbtree-article-titles) | article titles | complete - 31,108 |
 | [Topic entries](#topic-entries) | article bodies | **text complete**; record structure partly open |
 | [FTC / FTT / FIF](#ftc--ftt--fif-images) | fractal-compressed images | complete (decoder) |
 | [`.RLE` baggage](#rle-baggage-files) | inline article graphics | complete |
@@ -174,8 +174,33 @@ against the bytes rather than against the documentation of the parent format.
 
 ## `|TTLBTREE`: article titles
 
-A B-tree of title strings; index nodes repeat keys, so deduplicate while
-scanning. Encarta 97 holds **31,517** unique article titles.
+A WinHelp B-tree of title strings, with 32-bit fields. Encarta 97 holds
+**31,108** articles, of which 31,104 titles are distinct - a few articles
+genuinely share a title and are told apart by their rank.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 2 | magic `0x293B` |
+| 4 | 2 | page size (2048) |
+| 6 | 16 | structure string (`Lz`) |
+| 38 | 4 | page count (588) |
+| 42 | 2 | level count (3) |
+| 44 | 4 | **entry count (31,108)** |
+
+The header is 48 bytes, and `48 + 588 * 2048` is the file size exactly. A leaf
+page is `u16` free, `u16` entries, `u32` previous page, `u32` next page, then
+the entries; previous and next are `-1` at the two ends. Each entry is a `u32`
+rank followed by the NUL-terminated title.
+
+**Do not scrape printable runs out of this file.** That was done here first and
+it is wrong in both directions: index-page separator keys are counted as
+articles while every title shorter than three characters is dropped, giving
+31,517. No character test can fix it - `Aar` is a real article (a
+cross-reference to `Aare`) and `ngk` is a fragment of one. Only the structure
+separates them, and the walk has two free checks: the entry count in the header,
+and the ranks, which come out contiguous from 0. The correct count was
+independently measured in
+[issue #2](https://github.com/sp00nznet/encarta/issues/2).
 
 ```bash
 py tools/mvbtext/mvbtext.py <extract-dir> titles
@@ -250,6 +275,53 @@ Bit `0x10` being a trailing space is why `of ` and `in ` carry their own space
 in the dictionary while `the` and `and` do not - the encoder picked whichever
 form was shorter in context.
 
+### `0x01` is a literal escape
+
+`0x01` means *emit the next byte as-is, do not phrase-expand it*, and what it
+escapes is cp1252 punctuation. Contributed in
+[issue #2](https://github.com/sp00nznet/encarta/issues/2); the byte counts make
+the case on their own. Across 156 topics:
+
+| Escape | Count | Character |
+|---|---|---|
+| `01 93` | 27 | `"` U+201C left double quote |
+| `01 94` | 27 | `"` U+201D right double quote |
+| `01 97` | 26 | em dash U+2014 |
+| `01 92` | 2 | `'` U+2019 apostrophe |
+
+Twenty-seven opening quotes against twenty-seven closing ones is not a
+coincidence. It decodes unambiguously because no phrase in `|Phrases` contains
+a byte >= 0x7F, so a `0x80`-`0x9F` byte in the *output* can only have come from
+an escape.
+
+Missing it is not harmless: `01 93` then reads as phrase 19 (`se`), so a quoted
+paper title in the Einstein article opens `seOn the Electrodynamics of Moving
+Bodies,` instead of with a quote mark.
+
+`01 00` also occurs, and often - 496 times across the same sample, mostly in
+non-text records. An escaped NUL is a field the renderer fills in rather than a
+character, so `mvbtext` drops it. It is worth knowing about for a different
+reason: `records()` splits the stream on NUL runs *before* phrase expansion, so
+an escaped NUL is indistinguishable from a separator at the point the split
+happens.
+
+### `0xC0`-`0xFF` in opcode position is a cp1252 literal
+
+Rare and easy to mismeasure. A naive census of the Russia stream finds 5,259
+bytes >= 0xC0 and concludes they are common - but most are the *second byte* of
+a two-byte reference, which is arbitrary. Walking the stream properly, so
+operands are consumed rather than read as codes, gives 805 across 156 topics;
+restricting that to records `is_text` accepts gives **89 out of ~74,000
+opcodes, 0.12%**, and out-of-range two-byte indices fall from 98 to 2.
+
+That residue sits in the first tenth of each stream, which is exactly where
+`topic_stream` guessing the stream start would leave it - so it is an artefact
+of the unparsed header below, not of this encoding.
+
+They are emitted rather than dropped. What comes back is `ö`, `é`, `ü` and `°`
+- ordinary encyclopedia text - and emitting a wrong glyph is visible where
+silently deleting a byte is not.
+
 The earlier reading of this section was wrong in an instructive way: it took
 `0xB0`-`0xB6` at their single-byte value, found index 54 (`According`) decoding
 2,918 times in one article, and concluded the *dictionary* broke at index 48.
@@ -279,6 +351,23 @@ on every run.
    a heading, three close it) and the media list reads as data - 1,001
    references across 120 topics - but **138 of 240 record types are still
    recognised only by their byte profile**, not parsed.
+
+   [Issue #2](https://github.com/sp00nznet/encarta/issues/2) proposes a fuller
+   set of rules, not yet implemented here:
+
+   | Pattern | Meaning |
+   |---|---|
+   | ` {4,}` heading ` {3,}` | section heading (the span keeps a trailing space) |
+   | ` {2}` link ` {2}` | cross-reference |
+   | `[.!?"]   [A-Z0-9"]` | paragraph break |
+   | ` ` anywhere else | inline field separator |
+
+   A lone NUL is genuinely ambiguous - it is both a paragraph break and a field
+   separator - and what separates them is sentence-ending punctuation before
+   and a sentence start after. Measured there against OCR of the real
+   application rendering the Einstein article: 95% boundary agreement, the one
+   mismatch being a trailing citation line the app generates at display time
+   rather than reading from the body.
 
 An alternative to (2), mirroring the DECO_32 recompilation: use the MVB engine
 DLLs (`MVBK20N.DLL` / `MVMG20N.DLL`, registered in `|SYSTEM`) as an oracle -
