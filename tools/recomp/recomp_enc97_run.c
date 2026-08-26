@@ -19,6 +19,10 @@
  *   R2L_HEAPCHECK=1  HeapValidate after each real->lifted call; =2 after every call
  *   R2L_TRACE=1      log real->lifted entries; =2 also log every call inside one
  *   RUN_TRACE=N      log the first N import calls
+ *   ENC97_REDIRECT=FROM=TO   serve the content tree from TO instead of
+ *                    FROM, so it can live on a hard disk
+ *   ENC97_CDROM=X    make drive X: answer as a CD-ROM, so content can live
+ *                    on a hard disk (with ENC97_CDLABEL for its label)
  *   IR32_DLL         where IR32.DLL is, for the video codec bridge
  *   NO_VIDEO         do not register the recompiled Indeo decoder
  *   MSGBOX_LOG       log the app's message boxes and answer OK without showing them
@@ -488,6 +492,37 @@ static HFILE  (WINAPI *real_openfile)(LPCSTR,OFSTRUCT*,UINT);
 static HFILE  (WINAPI *real_lopen)(LPCSTR,int);
 static HANDLE (WINAPI *real_findfirst)(LPCSTR,LPWIN32_FIND_DATAA);
 
+/* ENC97_REDIRECT=FROM=TO: serve content from somewhere other than the CD.
+ *
+ * Pointing BookPath at a local copy does not work, because the app never asks
+ * for BookPath - it locates its books itself and opens absolute paths on the
+ * drive it decided on. Whatever it decided, those opens come through here, so
+ * rewriting the prefix is what actually moves the content.
+ *
+ *   ENC97_REDIRECT="H:\ENCYC97=G:\encarta97\ENCYC97"
+ *
+ * Prefix match, case-insensitive, first match wins. A path that does not start
+ * with FROM is passed through untouched, so this cannot affect anything but
+ * the content tree it is aimed at.
+ */
+static char g_redir_from[MAX_PATH], g_redir_to[MAX_PATH];
+static int  g_redir_hits;
+
+static const char *redirect(const char *name, char *buf, size_t bufsz)
+{
+    if (!g_redir_from[0] || !name)
+        return name;
+    size_t n = strlen(g_redir_from);
+    if (_strnicmp(name, g_redir_from, n) != 0)
+        return name;
+    _snprintf(buf, bufsz, "%s%s", g_redir_to, name + n);
+    buf[bufsz - 1] = 0;
+    if (g_file_log > 1 && g_redir_hits < 20)
+        fprintf(stderr, "  redir  %s -> %s\n", name, buf);
+    g_redir_hits++;
+    return buf;
+}
+
 static void file_note(const char *api, const char *name, int ok)
 {
     if (!name) return;
@@ -498,27 +533,97 @@ static void file_note(const char *api, const char *name, int ok)
 static HANDLE WINAPI createfile_hook(LPCSTR name, DWORD acc, DWORD share, void *sa,
                                      DWORD disp, DWORD flags, HANDLE tmpl)
 {
+    char rb[MAX_PATH];
+    name = redirect(name, rb, sizeof rb);
     HANDLE h = real_createfile(name, acc, share, sa, disp, flags, tmpl);
     file_note("CreateFile", name, h != INVALID_HANDLE_VALUE);
     return h;
 }
 static HFILE WINAPI openfile_hook(LPCSTR name, OFSTRUCT *of, UINT style)
 {
+    char rb[MAX_PATH];
+    name = redirect(name, rb, sizeof rb);
     HFILE h = real_openfile(name, of, style);
     file_note("OpenFile", name, h != HFILE_ERROR);
     return h;
 }
 static HFILE WINAPI lopen_hook(LPCSTR name, int mode)
 {
+    char rb[MAX_PATH];
+    name = redirect(name, rb, sizeof rb);
     HFILE h = real_lopen(name, mode);
     file_note("_lopen", name, h != HFILE_ERROR);
     return h;
 }
 static HANDLE WINAPI findfirst_hook(LPCSTR name, LPWIN32_FIND_DATAA fd)
 {
+    char rb[MAX_PATH];
+    name = redirect(name, rb, sizeof rb);
     HANDLE h = real_findfirst(name, fd);
     file_note("FindFirst", name, h != INVALID_HANDLE_VALUE);
     return h;
+}
+
+/* ENC97_CDROM: make a local content directory answer as the CD.
+ *
+ * Encarta checks that its content lives on a CD-ROM and that the disc has the
+ * right volume label, and refuses to run otherwise. That is the last thing
+ * tying the whole project to a physical disc: point BookPath at a copy on a
+ * hard drive and the app opens every file happily, then declines because the
+ * drive is fixed and unlabelled.
+ *
+ *   ENC97_CDROM=G          answer for that drive letter
+ *   ENC97_CDLABEL=<label>  the label to report (default CD1ENC97ENC, which is
+ *                          what CD1 of Encarta 97 actually carries)
+ *
+ * Scoped to one drive letter and one process. Nothing is mounted, no drive is
+ * emulated, and the machine is not touched - the app is simply told the truth
+ * it expects about where its content is.
+ */
+static char g_cdrom_drive;                       /* 'G', or 0 when unset */
+static char g_cdlabel[64] = "CD1ENC97ENC";
+
+static int is_cdrom_path(const char *p)
+{
+    return g_cdrom_drive && p && p[0] && p[1] == ':' &&
+           (p[0] | 32) == (g_cdrom_drive | 32);
+}
+
+static UINT (WINAPI *real_getdrivetype)(LPCSTR);
+static UINT WINAPI getdrivetype_hook(LPCSTR root)
+{
+    if (is_cdrom_path(root)) {
+        if (g_file_log)
+            fprintf(stderr, "  cd     GetDriveType %s -> CDROM\n", root);
+        return DRIVE_CDROM;
+    }
+    return real_getdrivetype(root);
+}
+
+static BOOL (WINAPI *real_getvolinfo)(LPCSTR, LPSTR, DWORD, LPDWORD, LPDWORD,
+                                      LPDWORD, LPSTR, DWORD);
+static BOOL WINAPI getvolinfo_hook(LPCSTR root, LPSTR name, DWORD namelen,
+                                   LPDWORD serial, LPDWORD maxcomp,
+                                   LPDWORD flags, LPSTR fs, DWORD fslen)
+{
+    if (is_cdrom_path(root)) {
+        if (name && namelen) {
+            strncpy(name, g_cdlabel, namelen - 1);
+            name[namelen - 1] = 0;
+        }
+        if (serial)  *serial  = 0x1E97CD01;
+        if (maxcomp) *maxcomp = 255;
+        if (flags)   *flags   = FS_CASE_IS_PRESERVED;
+        if (fs && fslen) {
+            strncpy(fs, "CDFS", fslen - 1);
+            fs[fslen - 1] = 0;
+        }
+        if (g_file_log)
+            fprintf(stderr, "  cd     GetVolumeInformation %s -> %s (CDFS)\n",
+                    root, g_cdlabel);
+        return TRUE;
+    }
+    return real_getvolinfo(root, name, namelen, serial, maxcomp, flags, fs, fslen);
 }
 
 /* MSGBOX_LOG: log the app's message boxes and answer OK without showing them.
@@ -692,7 +797,7 @@ static int map_and_wire(const char *path)
                     if(g_msgbox_log && !(ent&0x80000000u) &&
                        !strncmp((const char*)(base+(ent&0x7FFFFFFF)+2),"MessageBox",10))
                         iat[i]=(uint32_t)(uintptr_t)msgbox_hook;
-                    if(g_file_log && !(ent&0x80000000u)){
+                    if((g_file_log || g_redir_from[0]) && !(ent&0x80000000u)){
                         const char *fn=(const char*)(base+(ent&0x7FFFFFFF)+2);
                         if(!strcmp(fn,"CreateFileA")){ *(void**)&real_createfile=(void*)p;
                             iat[i]=(uint32_t)(uintptr_t)createfile_hook; }
@@ -702,6 +807,13 @@ static int map_and_wire(const char *path)
                             iat[i]=(uint32_t)(uintptr_t)lopen_hook; }
                         else if(!strcmp(fn,"FindFirstFileA")){ *(void**)&real_findfirst=(void*)p;
                             iat[i]=(uint32_t)(uintptr_t)findfirst_hook; }
+                    }
+                    if(g_cdrom_drive && !(ent&0x80000000u)){
+                        const char *fn=(const char*)(base+(ent&0x7FFFFFFF)+2);
+                        if(!strcmp(fn,"GetDriveTypeA")){ *(void**)&real_getdrivetype=(void*)p;
+                            iat[i]=(uint32_t)(uintptr_t)getdrivetype_hook; }
+                        else if(!strcmp(fn,"GetVolumeInformationA")){ *(void**)&real_getvolinfo=(void*)p;
+                            iat[i]=(uint32_t)(uintptr_t)getvolinfo_hook; }
                     }
                     if(g_no_printdlg && !(ent&0x80000000u) &&
                        !strncmp((const char*)(base+(ent&0x7FFFFFFF)+2),"PrintDlg",8))
@@ -889,6 +1001,23 @@ int main(int argc, char **argv)
     { const char *fl = getenv("FILE_LOG");
       g_file_log = fl ? (!strcmp(fl, "all") ? 2 : 1) : 0; }
     g_reg_log      = getenv("REG_LOG")      != NULL;
+    { const char *rd = getenv("ENC97_REDIRECT");
+      if (rd) { const char *eq = strchr(rd, '=');
+          if (eq) { size_t n = eq - rd;
+              if (n >= sizeof g_redir_from) n = sizeof g_redir_from - 1;
+              memcpy(g_redir_from, rd, n); g_redir_from[n] = 0;
+              strncpy(g_redir_to, eq + 1, sizeof g_redir_to - 1);
+              g_redir_to[sizeof g_redir_to - 1] = 0;
+              fprintf(stderr, "content: %s -> %s\n",
+                      g_redir_from, g_redir_to); } } }
+    { const char *cd = getenv("ENC97_CDROM");
+      if (cd && cd[0]) g_cdrom_drive = cd[0];
+      const char *lb = getenv("ENC97_CDLABEL");
+      if (lb && lb[0]) { strncpy(g_cdlabel, lb, sizeof g_cdlabel - 1);
+                         g_cdlabel[sizeof g_cdlabel - 1] = 0; }
+      if (g_cdrom_drive)
+          fprintf(stderr, "content: %c: answers as CD-ROM labelled %s\n",
+                  g_cdrom_drive, g_cdlabel); }
     { const char *pf = getenv("ENC97_PROFILE");
       if (pf) { strncpy(g_profile, pf, sizeof g_profile - 1); g_profile[sizeof g_profile - 1] = 0; } }
     { const char *h = getenv("R2L_HEAPCHECK"); g_heapcheck = h ? (atoi(h) ? atoi(h) : 1) : 0; }
