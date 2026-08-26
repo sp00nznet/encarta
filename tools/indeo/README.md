@@ -3,11 +3,39 @@
 Encarta 97's 68 video clips are **Indeo 3.2**. Microsoft removed the Indeo
 codecs from Windows years ago, and the CD ships only the 16-bit driver
 (`AAMSSTP\SYSTEM16\IR32.DLL`, an NE binary), which a 32-bit process cannot
-load. So the recompiled application runs, and its videos do not.
+load.
 
-This is the start of our own decoder.
+**That driver is now recompiled to C, and it is byte-exact.** All 68 clips
+decode to 100.00% identical pixels against FFmpeg, the codec is registered with
+Video for Windows, and the clips play in the application.
 
-## Method
+```
+verify_frames.py   68 of 68   the decoded plane, 100.00% byte-exact vs FFmpeg
+verify_rgb.py      68 of 68   what ICM_DECOMPRESS returns, correlation 1.0000
+verify_vfw.py      68 of 68   through ICLocate / ICDecompress, as the app does
+```
+
+### How to read this file
+
+It is a log, in the order the work happened, and it changes direction partway
+through. Two approaches were tried:
+
+1. **A clean-room decoder** written from the bitstream — the next three
+   sections. It got as far as the container, the frame header and the plane
+   layout, and then stalled: the pixel decoding was never written. It is kept
+   because the format notes are independently derived and still correct, and
+   because they are what made the lifted codec's output checkable.
+2. **Lifting the shipping driver** — [everything from *Lifting IR32.DLL*
+   onward](#lifting-ir32dll). This is the one that worked, and it is what the
+   numbers above measure.
+
+If you want the outcome rather than the route, jump to
+[*Indeo 3: done*](#indeo-3-done).
+
+## The format, derived from the bitstream
+
+*(The first approach. The notes here are sound; the decoder built on them was
+abandoned in favour of lifting the real driver.)*
 
 The DECO_32 image codec was cracked with an **oracle**: run the original, diff
 against it, and lift leaf-up. Indeo cannot work that way — the only Indeo
@@ -113,18 +141,20 @@ ffmpeg -i clip.avi -pix_fmt yuv410p -f rawvideo ref.yuv
 indeodec -r clip.avi ref.yuv
 ```
 
-The current "decoder" is deliberately the dumbest thing consistent with what is
-established - null frames hold the previous picture, everything else is flat
-mid-grey. On the sample clip that scores **17.50 dB**. It is not a decoder, it
-is the number to beat.
+The clean-room "decoder" never got past the dumbest thing consistent with what
+was established - null frames hold the previous picture, everything else flat
+mid-grey, **17.50 dB** on the sample clip. It was the number to beat, and it was
+never beaten, because lifting the real driver overtook it.
 
-## Not done
+## What the clean-room decoder never did
 
 **The pixel decoding.** Indeo 3 codes each plane as a tree of cells with
-vector-quantised deltas, and none of that is implemented yet. That is the bulk
-of the work and it is untouched.
+vector-quantised deltas, and none of that was implemented. That is the bulk of
+the work and it stayed untouched - the lifted driver does it instead.
 
-Order of attack:
+The order of attack, if anyone picks this up (the recompiled codec is now
+available as the oracle, which is a much better position than this started
+from):
 
 1. Plane header and the cell-splitting tree.
 2. The VQ delta tables, of which the ramp above is likely one.
@@ -977,24 +1007,6 @@ Still open: 16bpp output is populated but not right, and `sweep` reports most
 entries running the stack out - reconnecting the fallthroughs turns a loop
 spanning two carved functions into C recursion, and the sweep calls entries
 with a blank machine so nothing ends them. The real decode terminates normally.
-
-### After that
-
-
-
-Deriving a whole codec from its output is slow, and this one has a shortcut
-that fits what this project already does well. `IR32.DLL` on CD1 **is the
-decoder** - it is just a 16-bit NE binary, so it cannot be loaded in-process
-the way `DECO_32.DLL` was.
-
-But it can be *lifted*. pcrecomp carries 16-bit tooling (`tools/lift/lift16.py`,
-`tools/disasm/decode16.py`, `runtime/recomp16/`), and at 151 KB `IR32.DLL` is
-the same order of size as `DECO_32.DLL` (134 KB), which was recompiled to
-byte-exact C. That is the proven playbook here: lift it, run it, and use it
-both as the working decoder and as the oracle that validates a clean-room one.
-
-It also keeps the licensing clean - the result derives from a binary you own,
-not from anyone else's source.
 
 ## Usage
 

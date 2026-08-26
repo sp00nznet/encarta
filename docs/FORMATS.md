@@ -14,7 +14,7 @@ image codec is Iterated Systems' fractal codec, licensed into the product.
 | [M20 / MVB container](#m20--mvb-20-container) | the archive everything lives in | **complete** |
 | [`\|Phrases`](#phrases-the-phrase-dictionary) | phrase-compression dictionary | **complete** |
 | [`\|TTLBTREE`](#ttlbtree-article-titles) | article titles | complete |
-| [Topic entries](#topic-entries) | article bodies | **LZ77 solved**, phrase escapes open |
+| [Topic entries](#topic-entries) | article bodies | **text complete**; record structure partly open |
 | [FTC / FTT / FIF](#ftc--ftt--fif-images) | fractal-compressed images | complete (decoder) |
 | [`.RLE` baggage](#rle-baggage-files) | inline article graphics | complete |
 
@@ -222,15 +222,39 @@ Bytes `0x20`-`0x7E` are literal. Bytes with the high bit set reference
 | `Sib` `84` `ia` | "Sib" + phrase 4 (`er`) + "ia" | **Siberia** |
 | `ext` `9C` `c` `89` `85` | "ext" + `ra` + "c" + `ti` + `on` | **extraction** |
 
-**High phrase indices are not solved.** All 128 high byte values occur, and the
-most frequent (`0xB0`-`0xB6`, thousands of times each) cannot be their
-single-byte reading: index 54 is `According`, which is not plausible 2,918
-times in one article. Index 48 is exactly where the dictionary stops being
-bigrams and starts being whole words, which is also where decoded output starts
-going wrong - so the break is real, but the escape encoding above it is not yet
-identified. Adjacent high bytes do not resolve it either: a legitimate pair of
-consecutive single-byte references (`ti` + `on`) is indistinguishable from a
-two-byte code by inspection.
+**High indices are a two-byte form, and it is solved.** The full encoding:
+
+| Byte | Meaning |
+|---|---|
+| `0x20`-`0x7E` | literal |
+| `0x80`-`0x9F` | phrase `b & 0x1F` - the 32 two-letter fragments |
+| `0xA0`-`0xBF` | phrase `((b & 0x0F) << 8) \| next`, **two bytes**, plus a trailing space when `b & 0x10` |
+
+What made this hard is that a legitimate pair of consecutive single-byte
+references (`ti` + `on`) is indistinguishable from a two-byte code by
+inspection, so the structure cannot be read off an example. **Frequency settled
+it.** Over 400 topics the commonest codes decode as:
+
+| Code | Index | Count | Phrase |
+|---|---|---|---|
+| `B6 6D` | 0x66D | 1,645 | `the` |
+| `A4 C8` | 0x4C8 | 1,224 | `of ` |
+| `A3 C6` | 0x3C6 | 966 | `in ` |
+| `B1 A1` | 0x1A1 | 417 | `and` |
+
+Those are the four commonest words in English, in order. Reading the low nibble
+of the first byte as the top four bits of a 12-bit index is the only
+arrangement that puts them there, and 1,808 phrases need exactly 11 bits.
+
+Bit `0x10` being a trailing space is why `of ` and `in ` carry their own space
+in the dictionary while `the` and `and` do not - the encoder picked whichever
+form was shorter in context.
+
+The earlier reading of this section was wrong in an instructive way: it took
+`0xB0`-`0xB6` at their single-byte value, found index 54 (`According`) decoding
+2,918 times in one article, and concluded the *dictionary* broke at index 48.
+The implausible frequency was the clue, but it pointed at the encoding, not the
+dictionary.
 
 ### What comes out today
 
@@ -238,31 +262,28 @@ two-byte code by inspection.
 py tools/mvbtext/mvbtext.py <extract-dir> prose _00006060     # Russia
 ```
 
-Real article prose, with wrong words wherever a high reference appears. From
-the Russia article, verbatim and all independently correct:
+Running article prose. From the Russia article, verbatim:
 
 > ...25, 1991 ... 6 krays, 10 okrugs ... 49 oblasts ... Rossiyskaya Federatsiya
 > ... Commonwealth of Independent States (CIS) ... 17,075,200 sq km (6,592,800
 > sq mi) ... Moscow (1755), Petersburg (1819), Kazan (1804), Novosibirsk (1959)
 
-Windows of the decoded text reach ~43% common-English-word density against
-~40% for genuine prose, so the text is substantially there; what is missing is
-the correct expansion of the high-index references.
+`tools/regress.py` checks two articles (Russia and `A`) still come out as prose
+on every run.
 
 ### Remaining work
 
-1. Identify the high-index phrase encoding. The signal to optimise against is
-   the common-word density above - a correct decoder should push the whole
-   document, not just its best window, past 40%.
-2. Parse the pre-stream header so the stream offset is read rather than
-   searched for.
-3. Then the record structure inside the decompressed text: paragraph and
-   formatting boundaries, links, fonts.
+1. Parse the topic entry header so the LZ77 stream offset is read rather than
+   searched for. `topic_stream` currently finds it by trying every offset.
+2. The rest of the record structure. Records are NUL-separated (five NULs open
+   a heading, three close it) and the media list reads as data - 1,001
+   references across 120 topics - but **138 of 240 record types are still
+   recognised only by their byte profile**, not parsed.
 
-An alternative to (1) and (3), mirroring the DECO_32 recompilation: use the MVB
-engine DLLs (`MVBK20N.DLL` / `MVMG20N.DLL`, registered in `|SYSTEM`) as an
-oracle - call them to expand topics and validate a clean-room decoder against
-their output, rather than inferring the encoding.
+An alternative to (2), mirroring the DECO_32 recompilation: use the MVB engine
+DLLs (`MVBK20N.DLL` / `MVMG20N.DLL`, registered in `|SYSTEM`) as an oracle -
+call them to expand topics and validate a clean-room decoder against their
+output, rather than inferring the structure.
 
 ---
 

@@ -37,7 +37,8 @@ py tools/encextract/encextract.py <drive>:\ENCYC97 out_dir --max-images 200
 
 - Decodes Encarta's **entire image library** (thumbnails + full-size photos +
   inline graphics) — see [`../recomp`](../recomp) for the codec recompilation.
-- Article **titles** are complete; **literal** topic text + image references are
-  available via `mvbtext text <entry>`. Full prose awaits the WinHelp `|PhrIndex`
-  phrase-index decode (see [`../mvbtext`](../mvbtext)).
+- Article **titles** are complete, and so is the prose: the phrase encoding was
+  decoded, so `mvbtext prose <entry>` reads real article text rather than
+  fragments (see [`../mvbtext`](../mvbtext)). This pipeline still writes only
+  titles - wiring the prose into the HTML is not done.
 - Output is Microsoft's content — keep it local; do not redistribute.

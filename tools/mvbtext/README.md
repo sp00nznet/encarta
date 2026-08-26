@@ -9,6 +9,7 @@ m20dump -x "G:\ENCYC97\ENCARTA.M20" -o enc_dir     # extract internal files
 py mvbtext.py enc_dir titles                        # ~31,517 article titles
 py mvbtext.py enc_dir grep Einstein                 # titles matching a substring
 py mvbtext.py enc_dir text _00006060                # literal text + image refs
+py mvbtext.py enc_dir prose _00006060               # running article prose
 ```
 
 ## What works
