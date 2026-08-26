@@ -381,8 +381,11 @@ See `tools/recomp/README.md` for the full ENC97 recompilation writeup.
       16-bit Indeo driver was recompiled and handed back to Video for
       Windows, so no FFmpeg or reimplementation was needed
 - [ ] MIDI playback
-- [ ] Remove CD-check / volume label verification
-- [ ] Support reading content from local directory (no CD needed)
+- [x] CD check / volume label — answered per-process for one drive letter
+      ([`tools/localcontent`](tools/localcontent/README.md))
+- [x] Content from a local directory — mirror the disc once and run from
+      it: a full startup does 26 file operations on the copy and none on
+      the CD
 - [ ] Testing and compatibility
 
 ## Building
@@ -407,6 +410,7 @@ cmake --build build --config Release --target m20dump
 | `decooracle` | `tools/decooracle/` | Faithful DECO_32.DLL bridge → full-colour FTC; ground-truth oracle | **Working — perfect colour** |
 | `ftcdecode` | `tools/ftcdecode/` | Clean-room FTC/FTT/FIF image decoder | Working (FTC grayscale, FTT/FIF perfect) |
 | `m20dump` | `tools/m20dump/` | M20/MVB 2.0 container extractor | Working |
+| `localcontent` | `tools/localcontent/` | Mirror the CD and run from a hard disk (redirect + CD-check answers) | Working — 0 CD reads at startup ([details](tools/localcontent/README.md)) |
 | `mvbtext` | `tools/mvbtext/` | Encarta article title/text extractor (MVB 2.0) | Titles ✓; phrase encoding solved, article prose reads ([details](tools/mvbtext/README.md)) |
 | `encextract` | `tools/encextract/` | End-to-end pipeline: disc → decoded image gallery + titles + HTML | Working ([details](tools/encextract/README.md)) |
 | `strdump` | `tools/strdump/` | STR string table dumper | Working |
@@ -598,7 +602,9 @@ in cost order:
 - [ ] `ENCTITLE.DLL` — blocked on its 16-bit `AM16`/`AMF16` thunks
 - [ ] `MFC40.DLL` — 398 imports by ordinal. Keep it real (it works) or
       reimplement the used subset; a decision, not an obligation
-- [ ] Drop the CD check and run from a local content directory
+- [x] Run from a local content directory — `mirror-cd.ps1` copies the
+      disc, `run-encarta.ps1` runs from the copy
+      ([`tools/localcontent`](tools/localcontent/README.md))
 
 **3. The 1997 assumptions.** Palette-based 256-colour rendering, GDI, ACM audio,
 Indeo/Cinepak AVI, MIDI. Replace with modern equivalents once the code above is
