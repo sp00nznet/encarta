@@ -45,6 +45,16 @@ if(MSVC)
         # (delta=0; the lifter doesn't relocate address immediates).
         target_link_options(recomp_enc97_run PRIVATE /LARGEADDRESSAWARE:NO /BASE:0x60000000 /DYNAMICBASE:NO /MAP)
         target_compile_options(recomp_enc97_run PRIVATE /Od /bigobj /wd4244 /wd4146)
+        # The video bridge, if it has been built. The harness LoadLibrary's it
+        # by name to register the recompiled Indeo codec, so it has to sit
+        # beside the executable; built by tools/indeo/runtime/build.bat, which
+        # generates forty segments of lifted C and is not a CMake target.
+        set(IR32VFW ${CMAKE_SOURCE_DIR}/tools/indeo/runtime/build/ir32vfw.dll)
+        if(EXISTS ${IR32VFW})
+            add_custom_command(TARGET recomp_enc97_run POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        ${IR32VFW} $<TARGET_FILE_DIR:recomp_enc97_run>)
+        endif()
     endif()
 endif()
 target_include_directories(recomp_decode PRIVATE ${CMAKE_SOURCE_DIR}/tools/decooracle)

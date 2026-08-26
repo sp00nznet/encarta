@@ -19,6 +19,8 @@
  *   R2L_HEAPCHECK=1  HeapValidate after each real->lifted call; =2 after every call
  *   R2L_TRACE=1      log real->lifted entries; =2 also log every call inside one
  *   RUN_TRACE=N      log the first N import calls
+ *   IR32_DLL         where IR32.DLL is, for the video codec bridge
+ *   NO_VIDEO         do not register the recompiled Indeo decoder
  *   MSGBOX_LOG       log the app's message boxes and answer OK without showing them
  *   NO_PRINTDLG      stub PrintDlgA -> FALSE (the startup printer query can stall)
  *   HOLD             keep running after the app's window appears (to look at it)
@@ -812,6 +814,57 @@ static DWORD WINAPI run_thread(LPVOID arg)
     return 0;
 }
 
+/* Give the app a video codec.
+ *
+ * Encarta plays its clips through MCI, so the chain is mciSendCommand ->
+ * MCIAVI -> ICLocate("vidc", "IV32"). All 68 clips are Indeo 3.2, Microsoft
+ * removed that codec from Windows years ago, and the copy on the CD is a
+ * 16-bit NE this process cannot load - which is why it was recompiled.
+ *
+ * ir32vfw.dll registers the recompiled decoder with ICInstall for this process
+ * only, so the ICLocate MCIAVI makes on the app's behalf finds it. The app is
+ * unchanged and unaware; nothing is hooked.
+ *
+ * Loaded rather than linked so the two builds stay independent - the codec is
+ * forty generated segments built by its own script. Absent, video simply fails
+ * the way it did before, and everything else runs.
+ *
+ *   IR32_DLL=<path>   where IR32.DLL is (default: the CD's SYSTEM16)
+ *   NO_VIDEO=1        skip it
+ */
+static void install_video_codec(void)
+{
+    if (getenv("NO_VIDEO"))
+        return;
+    HMODULE h = LoadLibraryA("ir32vfw.dll");
+    if (!h) {
+        fprintf(stderr, "video: ir32vfw.dll not found; clips will not play\n");
+        return;
+    }
+    int (*install)(const char *) =
+        (int (*)(const char *))(void *)GetProcAddress(h, "ir32_vfw_install");
+    if (!install) {
+        fprintf(stderr, "video: ir32vfw.dll has no ir32_vfw_install\n");
+        return;
+    }
+    const char *dll = getenv("IR32_DLL");
+    if (!dll) dll = "H:\\AAMSSTP\\SYSTEM16\\IR32.DLL";
+    int r = install(dll);
+    if (r) {
+        fprintf(stderr, "video: codec install failed (%d) using %s\n", r, dll);
+        return;
+    }
+    /* Installed is not the same as findable. Ask VFW to locate an IV32
+     * decompressor the way MCIAVI will when the app plays a clip - the
+     * same ICLocate, from inside the same process. */
+    int (*probe)(int, int) =
+        (int (*)(int, int))(void *)GetProcAddress(h, "ir32_vfw_probe");
+    int found = probe ? probe(216, 192) == 0 : -1;
+    fprintf(stderr, "video: IV32 registered (%s); ICLocate %s\n",
+            dll, found == 1 ? "finds it" :
+                 found == 0 ? "DOES NOT find it" : "not probed");
+}
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0); setvbuf(stderr, NULL, _IONBF, 0);
@@ -857,6 +910,7 @@ int main(int argc, char **argv)
         *((char **(*)(void))(uintptr_t)g_acmdln)() = cmd;
         fprintf(stderr, "app command line: %s\n", cmd);
     }
+    install_video_codec();
     fprintf(stderr,"[2] mapped+wired\n");
     qsort(g_lifted,NLIFTED,sizeof *g_lifted,cmp_entry);
     if(g_lift_hi - g_lift_lo == 1 && g_lift_lo < (int)NLIFTED)

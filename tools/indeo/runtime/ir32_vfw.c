@@ -31,6 +31,15 @@
 #include <vfw.h>
 #include "ne_mem.h"
 
+/* Built either into a test executable or as ir32vfw.dll, which is how the
+ * ENC97 harness picks it up: one LoadLibrary and one call, and the two
+ * builds stay independent of each other. */
+#ifdef IR32_VFW_DLL
+#define IR32VFW_API __declspec(dllexport)
+#else
+#define IR32VFW_API
+#endif
+
 uint32_t ir32_driver_call(uint32_t driver_id, uint16_t hdrv, uint16_t msg,
                           uint32_t lp1, uint32_t lp2,
                           uint16_t ds, uint16_t ss, uint16_t sp);
@@ -300,7 +309,7 @@ LRESULT CALLBACK ir32_DriverProc(DWORD_PTR dwDriverID, HDRVR hDriver,
  * including the ones MCIAVI makes on behalf of an application that only ever
  * calls mciSendCommand and knows nothing about any of this.
  */
-int ir32_vfw_install(const char *ne_path)
+IR32VFW_API int ir32_vfw_install(const char *ne_path)
 {
     if (g.loaded)
         return 0;
@@ -339,7 +348,35 @@ int ir32_vfw_install(const char *ne_path)
     return 0;
 }
 
-void ir32_vfw_remove(void)
+/* Ask VFW, the way MCIAVI will, whether an IV32 decompressor exists.
+ *
+ * ICInstall returning success only says the codec went into the list. This
+ * says the list is searched and finds it - the same ICLocate the AVI driver
+ * performs when the app calls mciSendCommand, made from inside the same
+ * process. Returns 0 when found.
+ */
+IR32VFW_API int ir32_vfw_probe(int w, int h)
+{
+    BITMAPINFOHEADER in, out;
+    memset(&in, 0, sizeof in);
+    in.biSize = sizeof in;
+    in.biWidth = w ? w : 216;
+    in.biHeight = h ? h : 192;
+    in.biPlanes = 1;
+    in.biBitCount = 24;
+    in.biCompression = mmioFOURCC('I', 'V', '3', '2');
+    out = in;
+    out.biCompression = BI_RGB;
+    out.biSizeImage = (DWORD)in.biWidth * in.biHeight * 3;
+    HIC hic = ICLocate(ICTYPE_VIDEO, mmioFOURCC('I', 'V', '3', '2'),
+                       &in, &out, ICMODE_DECOMPRESS);
+    if (!hic)
+        return 1;
+    ICClose(hic);
+    return 0;
+}
+
+IR32VFW_API void ir32_vfw_remove(void)
 {
     if (g.loaded)
         ICRemove(ICTYPE_VIDEO, mmioFOURCC('I', 'V', '3', '2'), 0);
