@@ -66,6 +66,17 @@ cl /nologo /W3 /O2 /EHa %WATCH% ^
    /I "%HERE%" /I "%OUT%" /I "%PCRECOMP%\runtime" ^
    /Fo:"%OUT%\vfwobj\\" /Fe:"%OUT%\ir32_vfwtest.exe" ^
    /link vfw32.lib /STACK:0x20000000 || exit /b 1
+rem The same bridge as a DLL, so the ENC97 harness can pick it up with one
+rem LoadLibrary instead of compiling forty generated segments of its own.
+cl /nologo /W3 /O2 /EHa /LD %WATCH% /DIR32_VFW_DLL /DIR32_NO_MAIN ^
+   "%OUT%"\ir32_seg*.c ^
+   "%HERE%\ne_mem.c" "%HERE%\ne_dispatch16.c" "%HERE%\ne_dispatch32.c" ^
+   "%HERE%\ir32_reg16.c" "%HERE%\ir32_reg32.c" ^
+   "%HERE%\ir32_run.c" "%HERE%\ir32_vfw.c" ^
+   /I "%HERE%" /I "%OUT%" /I "%PCRECOMP%\runtime" ^
+   /Fo:"%OUT%\dllobj\\" /Fe:"%OUT%\ir32vfw.dll" ^
+   /link vfw32.lib || exit /b 1
+
 echo.
 echo built %OUT%\ir32_run.exe
 echo   ir32_run ^<IR32.DLL^> init     the decoder's own initialisation
@@ -73,4 +84,5 @@ echo   ir32_run ^<IR32.DLL^> sweep    every lifted 32-bit entry
 echo   ir32_run ^<IR32.DLL^> driver   DriverProc, the 16-bit entry point
 echo   ir32_vfwtest ^<IR32.DLL^> ^<frame^> ^<w^> ^<h^> [out.ppm] [bits]
 echo                                  decode through Video for Windows
+echo   ir32vfw.dll                    the bridge, for the ENC97 harness
 endlocal

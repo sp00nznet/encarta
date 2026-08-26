@@ -849,6 +849,44 @@ rather than the segment the lifted functions are registered under, or the
 decoder reads one copy and writes the other. `find()` resolves the alias for
 dispatch while CS keeps the copy.
 
+### Reaching it from an application
+
+The codec registers itself with Video for Windows, so anything that goes
+through ICM finds it - including MCIAVI, which is how Encarta plays a clip:
+the app calls `mciSendCommand` on the `AVIVideo` device and knows nothing
+about codecs at all. `ENC97.EXE` references `.AVI`, `AVIVideo` and `mciSend`;
+`ENCTITLE.DLL` references `AVIVideo`, `MSVFW` and `mciSend`, so the decode
+happens in the app's own process, which is what makes this possible.
+
+`ICInstall` with `ICINSTALL_FUNCTION` registers a DriverProc for one process,
+and every `ICLocate` in it afterwards finds that driver. Nothing is hooked and
+the app is not modified.
+
+```
+verify_vfw.py      68 of 68   decoded through Video for Windows, correlation 1.0000
+```
+
+Nothing in `verify_vfw.py` calls the codec. It installs it and then asks VFW
+for a decompressor for `IV32`, so every call leaves through msvfw32 and comes
+back through the registered DriverProc - pixel-identical to driving the
+recompiled driver directly.
+
+`ir32vfw.dll` is the same bridge as a DLL. The ENC97 harness loads it by name
+and calls `ir32_vfw_install`, then `ir32_vfw_probe` to confirm the codec is not
+merely installed but findable:
+
+```
+video: IV32 registered (H:\AAMSSTP\SYSTEM16\IR32.DLL); ICLocate finds it
+```
+
+Env: `IR32_DLL` says where IR32.DLL is, `NO_VIDEO=1` skips the bridge.
+
+**Not yet demonstrated:** a clip actually playing in the running application.
+Everything up to the codec is verified - it is registered, VFW finds it, and it
+decodes correctly through ICM - but driving the app to a video and watching it
+run needs an interactive session, and until someone does that "video plays" is
+not a claim this file makes.
+
 ### Indeo 3: done
 
 **The recompiled decoder is byte-exact, and the codec's own output is the
