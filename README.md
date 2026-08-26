@@ -377,7 +377,9 @@ See `tools/recomp/README.md` for the full ENC97 recompilation writeup.
 
 ### Phase 4: Multimedia & Polish
 - [ ] Replace ACM stream wrappers with modern audio APIs
-- [ ] Update AVI playback (Indeo codec → FFmpeg/native)
+- [x] AVI playback — done, and not the way this line assumed: the CD's own
+      16-bit Indeo driver was recompiled and handed back to Video for
+      Windows, so no FFmpeg or reimplementation was needed
 - [ ] MIDI playback
 - [ ] Remove CD-check / volume label verification
 - [ ] Support reading content from local directory (no CD needed)
