@@ -225,6 +225,46 @@ def is_text(rec, ph=None):
     return ctl < 10 and hi >= 30
 
 
+MEDIA_KINDS = {"I": "image", "A": "audio", "V": "video", "M": "map",
+               "C": "chart", "T": "table", "S": "sound"}
+
+
+def media_records(stream):
+    """The article's media list: what links it to its pictures, audio and video.
+
+    These are the records that used to come out as nonsense. They are not
+    binary at all - they are NUL-separated fields, and once split they read
+    plainly:
+
+        "ENCEW" 00 "MEDIA97EW" 00 "R041133 I Red Square, Moscow" 00 ...
+
+    a collection, a media database, then an ID, a one-letter kind and a
+    caption. Feeding that to the phrase decoder is what produced "thherring"
+    and "ck, ck," - the NULs are field separators, not text.
+
+    Yields (id, kind, caption). The kind letter is looked up in MEDIA_KINDS and
+    passed through when it is not one we have seen, so an unknown kind shows as
+    itself rather than being dropped.
+    """
+    out = []
+    for _off, rec in records(stream):
+        if not rec.startswith(b"ENC"):
+            continue
+        parts = [p for p in rec.split(b"\x00") if p]
+        if len(parts) < 3:
+            continue
+        body = parts[2].decode("latin-1", "replace").strip()
+        m = re.match(r"^(\S+)\s+(\S)\s+(.*)$", body)
+        if not m:
+            continue
+        ident, kind, caption = m.group(1), m.group(2), m.group(3).strip()
+        caption = re.sub(r"[^\x20-\x7e].*$", "", caption).strip()
+        if not caption:
+            continue
+        out.append((ident, MEDIA_KINDS.get(kind, kind), caption))
+    return out
+
+
 def topic_prose(stream, ph):
     """The article body: every record that holds text, in order.
 
@@ -359,11 +399,13 @@ def main():
         # the media list lives in the records after the body, and its captions
         # are readable even though the records around them are not
         refs, media = image_refs(expand_refs(stream, ph))
+        mrecs = media_records(stream)
         print(f"# {sys.argv[3]}: {len(raw)} bytes -> LZ77 stream at {start} "
               f"-> {len(stream)} bytes -> {used} of {total} records are text "
               f"-> {len(txt)} chars")
         if refs:  print("# image refs:", ", ".join(refs))
-        if media: print("# media refs:", ", ".join(media))
+        for ident, kind, caption in mrecs:
+            print(f"# media  {kind:<6} {ident:<9} {caption}")
         print(txt)
     elif cmd == "text":
         topic = open(os.path.join(d, sys.argv[3]), "rb").read()

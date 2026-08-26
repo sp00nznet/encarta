@@ -128,10 +128,45 @@ Both halves are needed - some structure records are mostly high bytes and give
 themselves away by their control bytes, while the media list is the other way
 round, largely literal text with few references.
 
-This is a heuristic and is labelled as one in the code: the record type byte
-has not been identified. It costs a few short records, including a 77-byte
-cross-reference note that scores 23% control bytes and goes with them. Finding
-that type byte is what would replace it.
+This is a heuristic and is labelled as one in the code: no record type byte has
+been found. It costs a few short records, including a 77-byte cross-reference
+note that scores 23% control bytes and goes with them.
+
+## The media list
+
+Looking for that type byte turned up something better. The structure records
+are not one kind: 102 of 240 begin with the literal bytes `ENC`, and those are
+not binary at all - they are NUL-separated fields:
+
+```
+"ENCEW" 00 "MEDIA97EW" 00 "R041133 I Red Square, Moscow" 00 ...
+```
+
+a collection, a media database, then an ID, a one-letter kind and a caption.
+The NULs are field separators; running the phrase decoder over them is what
+produced `thherring` and `ck, ck,`.
+
+So `media_records()` reads them instead of discarding them, and the article's
+media list comes out as data:
+
+```
+# media  image  R041133   Red Square, Moscow
+# media  audio  R034589   Borodin's Polovtsian Dances
+# media  audio  R035706   Traditional Throat Singing of Tyva
+# media  image  R054777   Kirov Ballet
+```
+
+Across 120 topics that is 1,001 references - 725 images, 123 audio, 49 maps,
+39 tables, 28 charts, 4 video. An unrecognised kind letter passes through as
+itself rather than being dropped, so nothing is silently lost.
+
+That leaves two things unread: the remaining 138 structure records, which
+expand to repeated fragments and are still only recognised by their byte
+profile, and the topic entry's own header - `topic_stream` still finds the LZ77
+stream by trying every offset because no field pointing at it has been found.
+The header is not compressed and holds a tagged table of the same media
+references, with strings split by control bytes (`MVIMG` + `AGE`, `Suzda` +
+`l&rsquo;`).
 
 ## Inline images are plain BMPs
 
