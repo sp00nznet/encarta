@@ -93,11 +93,39 @@ static void call_machine(CPU *c, uint32_t target)
     c->eax = S_feax; c->esp = S_fesp;
 }
 
+/* Set while the calling-function sweep runs. Outside it, dispatch behaves as
+ * it always did - the validated chains in [B] depend on that. */
+int g_sweep_mode;
+uint8_t *g_import_stub_p;
+uint8_t *g_stub_pool_end;
+#define SWEEP_BAD_TARGET 0xE0000001u
+
 void dispatch(CPU *c, uint32_t target)
 {
+    if (g_sweep_mode) {
+        /* An import. Model `xor eax,eax; ret` directly on the emulated stack:
+         * eax is zero and the return address the lift pushed goes away. Running
+         * the real stub instead would mean call_machine, whose esp switch makes
+         * a fault inside it uncatchable - and that is what took the process
+         * down the first time this sweep ran. */
+        if ((uint8_t *)(uintptr_t)target >= g_import_stub_p &&
+            (uint8_t *)(uintptr_t)target < g_stub_pool_end) {
+            c->eax = 0;
+            c->esp += 4;
+            return;
+        }
+        /* An indirect call whose target came out of synthetic state. The real
+         * side faults on this and is caught; the lifted side must fail the same
+         * way rather than jump there, so raise something __except can see. */
+        if (target < PREF_BASE || target >= PREF_BASE + g_imgsz) {
+            RaiseException(SWEEP_BAD_TARGET, 0, 0, NULL);
+            return;
+        }
+    }
     if (target >= PREF_BASE && target < PREF_BASE + g_imgsz) {
         lfn fn = lookup(target);
         if (fn) { g_dispatched++; fn(c); return; }
+        if (g_sweep_mode) { RaiseException(SWEEP_BAD_TARGET, 0, 0, NULL); return; }
         call_machine(c, target + g_image_delta);   /* unlifted internal -> real */
         return;
     }
@@ -220,6 +248,8 @@ static int test_chains(void)
 #include "enc97_pure_leaves.h"
 #define SCRATCH 4096
 
+static void dirty_stack(uint32_t pattern);
+
 /* Call a real function on the REAL C stack (push 8 identical args, set ecx for
    thiscall), so that if it faults on synthetic input the exception unwinds
    normally and __except catches it. (call_machine's esp-switch makes faults
@@ -275,22 +305,169 @@ static int run_leaf(uint32_t va, uint8_t *buf, uint32_t *out_l, uint32_t *out_r)
 #ifdef LEAF_TRACE
     fprintf(stderr, "L %06x\n", va); fflush(stderr);
 #endif
-    __try {
-        CPU c; cpu_init(&c, bp);
-        for (int i = 0; i < 8; i++) push32(&c, bp);
-        push32(&c, 0xDEADBEEFu);
-        fn(&c); al = c.eax;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { lfault = 1; }
+    /* Twice per side, under different stack rubbish.
+     *
+     * This sweep was not deterministic before: three runs in four passed at
+     * 818 and the fourth failed with sub_50BE80 returning 0 lifted against 1
+     * real. Nothing was wrong with the lift - the function's answer depends on
+     * stack it never wrote, so it changes with whatever the harness happened to
+     * leave below esp, and an intermittently failing check is worse than none.
+     * A side that disagrees with ITSELF is reported indeterminate. */
+    uint32_t al2 = 0, ar2 = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        dirty_stack(pass ? 0xA5A5A5A5u : 0x5A5A5A5Au);
+        __try {
+            CPU c; cpu_init(&c, bp);
+            for (int i = 0; i < 8; i++) push32(&c, bp);
+            push32(&c, 0xDEADBEEFu);
+            fn(&c); if (pass) al2 = c.eax; else al = c.eax;
+        } __except (EXCEPTION_EXECUTE_HANDLER) { lfault = 1; }
+    }
+    if (!lfault && al != al2) return -2;
 #ifdef LEAF_TRACE
     fprintf(stderr, "R %06x\n", va); fflush(stderr);
 #endif
-    __try {
-        ar = call_real_leaf(va + g_image_delta, bp, bp);
-    } __except (EXCEPTION_EXECUTE_HANDLER) { rfault = 1; }
+    for (int pass = 0; pass < 2; pass++) {
+        dirty_stack(pass ? 0xA5A5A5A5u : 0x5A5A5A5Au);
+        __try {
+            uint32_t v = call_real_leaf(va + g_image_delta, bp, bp);
+            if (pass) ar2 = v; else ar = v;
+        } __except (EXCEPTION_EXECUTE_HANDLER) { rfault = 1; }
+    }
+    if (!rfault && ar != ar2) return -2;
     if (lfault || rfault) return -1;
     *out_l = al; *out_r = ar;
     return (al == ar || al + (uint32_t)g_image_delta == ar) ? 1 : 0;
 }
+/* ---- the import policy -------------------------------------------------
+ *
+ * 5,316 of 7,326 functions call something, which is why the sweeps only ever
+ * ran leaves. Measuring showed the two barriers are entangled - against a 1,059
+ * baseline, stubbing imports alone reaches 1,127 and tolerating indirect calls
+ * alone 1,196, while both together reach 3,292 loop-free functions - so the
+ * policy is a pair.
+ *
+ * IMPORTS are replaced, in the mapped image's IAT, by one stub. Left real they
+ * would allocate, do I/O, or hand back a heap pointer that differs between two
+ * runs, none of which is a lift bug and all of which reads as one. Pointing
+ * the IAT at a stub covers BOTH sides at once: the real code reaches it
+ * through `call dword ptr [iat]`, and the lifted code reaches it because the
+ * lifter reads that same slot and dispatches to whatever it finds.
+ *
+ * The stub returns zero and pops nothing. Popping the right number of bytes
+ * would need each import's stdcall signature, which is not knowable here - and
+ * it turns out not to matter, because both sides are skewed identically and
+ * the comparison is between them, not against the original program. Functions
+ * with a frame pointer recover in their epilogue; those that do not read the
+ * same shifted stack on both sides, and if that leads somewhere invalid both
+ * fault and the function is skipped rather than counted as a mismatch.
+ *
+ * INDIRECT CALLS are tolerated rather than disqualifying, for the same reason:
+ * both sides compute the target from identical state, so both go to the same
+ * place - the lifted side through its dispatch table, the real side to real
+ * code. A target computed from a zeroed register is not an address and faults.
+ *
+ * LOOPS stay disqualifying anywhere in the closure. A pointer can fault and be
+ * caught; a spin cannot.
+ */
+extern uint8_t *g_import_stub_p;
+extern uint8_t *g_stub_pool_end;
+
+/* How many argument bytes does this import pop?
+ *
+ * It has to be right. A stub that pops nothing leaves a stdcall caller's stack
+ * skewed, and the caller's own `ret N` then unwinds past the harness's saved
+ * esp and restores rubbish into ebx/esi/edi/ebp - which crashes outside any
+ * __try and takes the process with it. That is the stack corruption the leaf
+ * sweeps were written to avoid, and "both sides are skewed identically" does
+ * not save it: identical corruption is still corruption.
+ *
+ * The number is discoverable. Resolve the real export and read its epilogue:
+ * a stdcall API ends in `ret imm16`, a cdecl one in `ret`. Hot-patch prologues
+ * and jmp thunks are followed first. Anything that cannot be read is reported,
+ * not guessed - a wrong guess here is worse than skipping the import.
+ */
+static int import_pop_bytes(const void *fn, int *known)
+{
+    const uint8_t *p = (const uint8_t *)fn;
+    *known = 0;
+    if (!p) return 0;
+    for (int hop = 0; hop < 4; hop++) {
+        if (p[0] == 0xE9)                       /* jmp rel32 -> follow */
+            p = p + 5 + *(const int32_t *)(p + 1);
+        else if (p[0] == 0xFF && p[1] == 0x25)  /* jmp [mem] -> follow */
+            p = *(const uint8_t **)(*(const uint8_t ***)(p + 2));
+        else if (p[0] == 0x8B && p[1] == 0xFF)  /* mov edi,edi hot-patch pad */
+            p += 2;
+        else break;
+    }
+    /* Linear scan for the first return. Good enough for an epilogue that is
+     * reached without an intervening call, which is the common shape; anything
+     * more elaborate simply does not resolve and the import is left alone. */
+    for (int i = 0; i < 256; i++) {
+        if (p[i] == 0xC3) { *known = 1; return 0; }
+        if (p[i] == 0xC2) { *known = 1; return *(const uint16_t *)(p + i + 1); }
+        if (p[i] == 0xE8 || p[i] == 0xFF) break;   /* a call: stop guessing */
+    }
+    return 0;
+}
+
+static uint8_t *g_stub_pool;
+static uint32_t g_stub_used;
+
+/* One stub per distinct pop count: xor eax,eax ; ret N */
+static uint8_t *stub_for(int pop)
+{
+    uint8_t *p = g_stub_pool + g_stub_used;
+    p[0] = 0x31; p[1] = 0xC0;                 /* xor eax, eax */
+    if (pop) { p[2] = 0xC2; p[3] = (uint8_t)pop; p[4] = (uint8_t)(pop >> 8); g_stub_used += 8; }
+    else     { p[2] = 0xC3; g_stub_used += 8; }
+    return p;
+}
+
+static int wire_imports_to_stub(uint8_t *base, uint32_t imgsz)
+{
+    g_stub_pool = (uint8_t *)VirtualAlloc(NULL, 0x8000, MEM_RESERVE | MEM_COMMIT,
+                                          PAGE_EXECUTE_READWRITE);
+    if (!g_stub_pool) return 0;
+    g_import_stub_p = g_stub_pool;            /* the pool, for the range test */
+
+    uint32_t pe = *(uint32_t *)(base + 0x3C);
+    uint16_t magic = *(uint16_t *)(base + pe + 24);
+    uint32_t dd = pe + 24 + (magic == 0x10B ? 96 : 112);
+    uint32_t imp = *(uint32_t *)(base + dd + 8);
+    if (!imp || imp >= imgsz) return 0;
+
+    int n = 0, unknown = 0;
+    for (uint8_t *d = base + imp; ; d += 20) {
+        uint32_t oft = *(uint32_t *)d, nrva = *(uint32_t *)(d + 12),
+                 first = *(uint32_t *)(d + 16);
+        if (!oft && !first) break;
+        if (!nrva || nrva >= imgsz) break;
+        HMODULE h = LoadLibraryA((char *)(base + nrva));
+        uint32_t names = oft ? oft : first;
+        uint32_t *slot = (uint32_t *)(base + (first ? first : oft));
+        uint32_t *name = (uint32_t *)(base + names);
+        for (; *name; name++, slot++) {
+            void *real = NULL;
+            if (h) {
+                if (*name & 0x80000000u)
+                    real = (void *)GetProcAddress(h, (LPCSTR)(uintptr_t)(*name & 0xFFFF));
+                else if ((*name) < imgsz)
+                    real = (void *)GetProcAddress(h, (char *)(base + *name + 2));
+            }
+            int known = 0, pop = import_pop_bytes(real, &known);
+            if (!known) unknown++;
+            *slot = (uint32_t)(uintptr_t)stub_for(known ? pop : 0);
+            n++;
+        }
+    }
+    g_stub_pool_end = g_stub_pool + g_stub_used;
+    printf("[*] %d import slots stubbed (%d pop counts not resolvable, popping 0)\n",
+           n, unknown);
+    return n;
+}
+
 /* ---- C2: the same, for leaves that WRITE ---------------------------------
  *
  * The no-write sweep excluded any function that stores to memory, for fear of
@@ -478,25 +655,101 @@ static int test_write_leaf_sweep(void)
     return ok;
 }
 
+/* ---- C3: functions that CALL, under the import policy ------------------- */
+#include "enc97_callable.h"
+
+static int run_callable(uint32_t va, uint8_t *buf, uint8_t *snapl, uint8_t *snapr,
+                        uint32_t *out_l, uint32_t *out_r, int *memdiff)
+{
+    lfn fn = lookup(va); if (!fn) return -1;
+    uint32_t al = 0, ar = 0, al2 = 0, ar2 = 0;
+    volatile int lfault = 0, rfault = 0;
+    uint32_t bp = (uint32_t)(uintptr_t)buf;
+
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < SCRATCH; i++) buf[i] = (uint8_t)(i * 7 + 13);
+        dirty_stack(pass ? 0xA5A5A5A5u : 0x5A5A5A5Au);
+        __try {
+            CPU c; cpu_init(&c, bp);
+            for (int i = 0; i < 16; i++) push32(&c, bp);
+            push32(&c, 0xDEADBEEFu);
+            fn(&c); if (pass) al2 = c.eax; else al = c.eax;
+        } __except (EXCEPTION_EXECUTE_HANDLER) { lfault = 1; }
+        if (!pass) memcpy(snapl, buf, SCRATCH);
+        else if (memcmp(snapl, buf, SCRATCH)) return -2;
+    }
+    if (al != al2) return -2;
+
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < SCRATCH; i++) buf[i] = (uint8_t)(i * 7 + 13);
+        dirty_stack(pass ? 0xA5A5A5A5u : 0x5A5A5A5Au);
+        __try {
+            uint32_t v = call_real_leaf16(va + g_image_delta, bp, bp);
+            if (pass) ar2 = v; else ar = v;
+        } __except (EXCEPTION_EXECUTE_HANDLER) { rfault = 1; }
+        if (!pass) memcpy(snapr, buf, SCRATCH);
+        else if (memcmp(snapr, buf, SCRATCH)) return -2;
+    }
+    if (ar != ar2) return -2;
+
+    if (lfault || rfault) return -1;
+    *out_l = al; *out_r = ar;
+    *memdiff = memcmp(snapl, snapr, SCRATCH) != 0;
+    if (*memdiff) return 0;
+    return (al == ar || al + (uint32_t)g_image_delta == ar) ? 1 : 0;
+}
+
+static int test_callable_sweep(void)
+{
+    g_sweep_mode = 1;
+    uint8_t *region = VirtualAlloc(NULL, SCRATCH + 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    DWORD old; VirtualProtect(region + SCRATCH, 0x1000, PAGE_NOACCESS, &old);
+    uint8_t *snapl = (uint8_t *)malloc(SCRATCH), *snapr = (uint8_t *)malloc(SCRATCH);
+    int matched = 0, mism = 0, skip = 0, shown = 0, memmism = 0, indet = 0;
+    #define CSWEEP(va, ret, nclosure) do { \
+        uint32_t l, r; int md = 0; \
+        int res = run_callable((va), region, snapl, snapr, &l, &r, &md); \
+        if (res == -2) indet++; \
+        else if (res < 0) skip++; else if (res) matched++; else { mism++; if (md) memmism++; \
+            if (shown++ < 6) { \
+                printf("    MISMATCH 0x%06x (reaches %d fns): lifted eax=%08X real eax=%08X%s\n", \
+                       (va), (nclosure), l, r, md ? "  and memory differs" : ""); \
+                if (md) show_first_diff(snapl, snapr); } } \
+    } while (0);
+    CALLABLE(CSWEEP)
+    #undef CSWEEP
+    free(snapl); free(snapr);
+    VirtualFree(region, 0, MEM_RELEASE);
+    int ok = (mism == 0 && matched > 0);
+    g_sweep_mode = 0;
+    printf("%s [C3] calling-function sweep (imports stubbed): %d matched, %d mismatch"
+           " (%d in memory), %d skipped, %d indeterminate\n",
+           ok ? "PASS" : "FAIL", matched, mism, memmism, skip, indet);
+    return ok;
+}
+
 static int test_leaf_sweep(void)
+
 {
     /* buffer with a NOACCESS guard page after it: any over-read faults (caught) */
     uint8_t *region = VirtualAlloc(NULL, SCRATCH + 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     DWORD old; VirtualProtect(region + SCRATCH, 0x1000, PAGE_NOACCESS, &old);
     uint8_t *buf = region;
     memset(buf, 0, SCRATCH);
-    int matched = 0, mism = 0, skip = 0, mism_shown = 0;
+    int matched = 0, mism = 0, skip = 0, mism_shown = 0, indet = 0;
     #define SWEEP(va, ret) do { \
         uint32_t l, r; int res = run_leaf((va), buf, &l, &r); \
-        if (res < 0) skip++; else if (res) matched++; else { mism++; \
+        if (res == -2) indet++; \
+        else if (res < 0) skip++; else if (res) matched++; else { mism++; \
             if (mism_shown++ < 8) printf("    MISMATCH 0x%06x: lifted eax=%08X real eax=%08X\n", (va), l, r); } \
     } while (0);
     PURE_LEAVES(SWEEP)
     #undef SWEEP
     VirtualFree(region, 0, MEM_RELEASE);
     int ok = (mism == 0 && matched > 0);
-    printf("%s [C] no-write pure-leaf differential sweep: %d matched, %d mismatch, %d skipped "
-           "(faulted on synthetic input)\n", ok ? "PASS" : "FAIL", matched, mism, skip);
+    printf("%s [C] no-write pure-leaf differential sweep: %d matched, %d mismatch, "
+           "%d skipped, %d indeterminate\n", ok ? "PASS" : "FAIL",
+           matched, mism, skip, indet);
     return ok;
 }
 
@@ -513,6 +766,32 @@ int main(int argc, char **argv)
     ok &= test_chains();
     ok &= test_leaf_sweep();
     ok &= test_write_leaf_sweep();
+    /* [C3] is not run by default, and the reason is worth stating precisely.
+     *
+     * The policy it implements is sound and the candidate set is real (see
+     * find_callable.py: 1,243 callers whose whole call graph is known code
+     * with no loop). What is not solved is the import stub. It must pop the
+     * caller's stdcall arguments, and a stub that pops the wrong number leaves
+     * the REAL side's stack skewed - the caller's own `ret N` then unwinds
+     * past this harness's saved esp and restores rubbish into ebx/esi/edi/ebp,
+     * which crashes outside any __try. "Both sides are skewed identically" is
+     * no defence: identical corruption is still corruption.
+     *
+     * Reading the count from each API's epilogue does not work - 785 of 914
+     * did not resolve, because a Windows API starts with a hot-patch pad and a
+     * prologue containing calls, so a linear scan for `ret N` never reaches
+     * one. Guessing is worse than skipping.
+     *
+     * What would work is deriving the count from ENC97's own call sites:
+     * count the pushes before each `call dword ptr [iat_slot]`, and take it
+     * when the sites agree. That is static analysis over code find_callable.py
+     * already parses, and it is where this picks up.
+     *
+     * ENC97_SWEEP_CALLS=1 runs it anyway, and it will crash. */
+    if (getenv("ENC97_SWEEP_CALLS")) {
+        wire_imports_to_stub((uint8_t *)(uintptr_t)(PREF_BASE + g_image_delta), g_imgsz);
+        ok &= test_callable_sweep();
+    }
     printf("%s ENC97 full recomp exercised at scale\n", ok ? "ALL PASS:" : "FAIL:");
     return ok ? 0 : 1;
 }

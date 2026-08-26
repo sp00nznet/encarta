@@ -19,10 +19,22 @@ Three separate things assume a disc, and each needed its own answer.
 **The app never asks where its content is.** There is a `BookPath` profile
 value, and it is not consulted at startup - the app works out a drive letter
 itself and opens absolute paths on it. Pointing `BookPath` at a copy changes
-nothing; the log still showed every book being read from `H:`. What works is
-rewriting the prefix on the file opens themselves, which is `ENC97_REDIRECT`.
-It applies to `CreateFileA`, `OpenFile`, `_lopen` and `FindFirstFileA` - the
-four the app uses - and only to paths that start with the prefix.
+nothing; the log still showed every book being read from `H:`.
+
+So the mirror is mapped onto the letter the app asks for, with `subst`. That is
+a per-user drive mapping - nothing is mounted, no disc is emulated, and the
+machine is not modified - and the run script prints how to undo it
+(`subst H: /d`).
+
+The first version did not do this. It rewrote the prefix on the app's own file
+opens instead (`ENC97_REDIRECT`, still there behind `-NoSubst`), hooking
+`CreateFileA`, `OpenFile`, `_lopen` and `FindFirstFileA`. Every article and
+picture loaded. **No video played**, and the reason is the limit of that whole
+approach: the app does not open the AVI. It hands the filename to MCI, MCI
+loads MCIAVI, and MCIAVI calls its own `CreateFileA` - in its own module, whose
+imports we never touched. A patch applied inside one module reaches only what
+that module does. A drive letter is resolved by the whole process, which is why
+`subst` fixes what the redirect structurally could not.
 
 **It checks the drive is a CD-ROM.** `ENC97.EXE` imports
 `GetVolumeInformationA`, `GetLogicalDrives` and `GetDriveTypeA`;
@@ -39,13 +51,16 @@ books still reads as "no disc".
 
 ## What it is worth
 
-With the mirror in place, a full startup does **26 file operations on the local
-copy and none at all on the CD drive**. Measured, not assumed: `-FileLog all`
-logs every open and the redirect prints each rewrite, so the two can be counted
-separately.
+With the mirror in place, a full startup does **26 file operations, none of
+them on a CD drive**. Measured with `-FileLog all`, which logs every open with
+its full path: 22 land on the mirror, 3 in the folder holding `ENC97.EXE`, and
+one is `encart97.ann` opened by relative path - the annotations file, which the
+app creates beside itself.
 
 Video works from the mirror too - `IR32.DLL` is at `AAMSSTP\SYSTEM16\` on the
-disc and the run script points the codec bridge at the copied one.
+disc and the run script points the codec bridge at the copied one. It needs the
+`subst` mapping, for the reason above; with `-NoSubst` the articles still load
+and the videos do not.
 
 ## With the disc ejected
 
@@ -53,10 +68,9 @@ It runs. Same 26 operations on the mirror, none anywhere else, window up.
 
 The reason is worth stating, because it is not the one expected. The app does
 not go looking for a drive: it asks for `H:\ENC97.CD1` and `H:\ENCYC97\...`
-unconditionally, whatever is or is not mounted. Since the redirect rewrites the
-path before the call reaches the filesystem, **whether that drive exists never
-comes up** - with no CD-ROM in the machine at all, 20 rewrites happen and not
-one request reaches a real `H:`.
+unconditionally, whatever is or is not mounted. That letter is now the mirror,
+so **whether a real drive exists never comes up** - with no CD-ROM in the
+machine at all, every one of those opens lands on the local copy.
 
 So `-CdDrive` is not "the drive your CD is in", it is "the drive letter this
 copy of the app asks for". If yours asks for a different one - because it was
