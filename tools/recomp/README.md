@@ -158,8 +158,20 @@ functions, ~452k lines) and builds the **full 7,326-entry dispatch table**
   identical register + stack state, and `eax` is compared. Result:
 
   ```
-  PASS [C] no-write pure-leaf differential sweep: 818 matched, 0 mismatch, 11 skipped
+  PASS [C] no-write pure-leaf differential sweep: 818 matched, 0 mismatch, 11 skipped, 0 indeterminate
   ```
+
+  This check used to be **flaky**, which is worse than absent - three runs in
+  four passed at 818 and the fourth failed with `sub_50BE80` returning 0 lifted
+  against 1 real. Nothing was wrong with that lift. The function is a distance
+  test that reads its arguments as doubles from `[esp+0xc]`, `[esp+0x14]` and
+  `[esp+0x2c]` and ends in `ret 0x30`, so with no arguments supplied it compares
+  whatever the harness happened to leave below `esp`, and a float comparison
+  turns that into a boolean that flips. It now fills the stack with a known
+  pattern before each call and runs each side twice under two different
+  patterns, the same guard [C2] already had; a side that disagrees with itself
+  is reported indeterminate rather than compared. Fifteen consecutive runs give
+  the same number.
 
   **974 distinct ENC97 functions match the real originals byte-exactly** once the
   writing leaves below are included; the 11
@@ -204,12 +216,54 @@ functions, ~452k lines) and builds the **full 7,326-entry dispatch table**
   hardware and on a huge value in the model, and on garbage input there is no
   way to tell that from a lift bug.
 
+- **[C3]**, the sweep for functions that **call**, is written but does not run
+  (`ENC97_SWEEP_CALLS=1` runs it, and it crashes). It is left in because the
+  measurement behind it is the useful part.
+
+  Leaves are all that can be compared without a policy for callees, and
+  **5,316 of the 7,326 functions call something**. `find_callable.py` measures
+  what relaxing each barrier buys, counting functions that are loop-free with a
+  fully known closure, and the answer is that the barriers are **entangled**:
+
+  | barrier relaxed | loop-free | gain |
+  | --- | --- | --- |
+  | neither | 1,059 | - |
+  | imports stubbed only | 1,127 | +68 |
+  | indirect calls tolerated only | 1,196 | +137 |
+  | **both** | **3,292** | **+2,233** |
+
+  Almost every function that calls an import also makes an indirect call
+  somewhere in its closure, so either alone is not worth having and the pair is
+  worth 3.1x. Of the 3,292, **1,243 actually call** and are the candidates.
+  Loops stay disqualifying everywhere: a bad pointer faults and is caught, a
+  spin cannot be. The table is reproducible - `--strict-imports` and
+  `--strict-indirect` put each barrier back.
+
+  What blocks it is the import stub, and specifically its argument count. The
+  stub is reached by both sides at once - the real code through
+  `call dword ptr [iat]`, the lifted code because the lifter reads that same
+  slot - which is what makes stubbing in the mapped IAT the right lever. But it
+  must pop the caller's stdcall arguments. Pop the wrong number and the real
+  side's stack is skewed, its own `ret N` unwinds past the harness's saved
+  `esp`, and rubbish is restored into `ebx/esi/edi/ebp` - a crash outside any
+  `__try`. "Both sides are skewed identically" is no defence; identical
+  corruption is still corruption.
+
+  Reading the count from each API's own epilogue does not work: **785 of 914**
+  did not resolve, because a Windows API begins with a hot-patch pad and a
+  prologue containing calls, so a linear scan for `ret N` never reaches one.
+  Guessing is worse than skipping. The count is recoverable from ENC97 itself -
+  count the pushes before each `call dword ptr [iat_slot]` and take it where the
+  sites agree - over code `find_callable.py` already parses. That is where this
+  picks up, and until then the honest count stays 974.
+
 This target is only built when the regenerated `enc97_full.c` is present locally
 (it is too large to commit and is derived from the user's own `ENC97.EXE`).
 Regenerate it and the sweep inputs with:
 ```
 py lift.py ENC97.EXE funcs.txt enc97_full.c              # full 7,326-fn lift
 py find_pure_chain.py                                    # -> enc97_pure_leaves.h
+py find_callable.py                                      # -> enc97_callable.h ([C3])
 ```
 
 Notes from building it: MSVC's optimizer chokes for many minutes on the 40 MB

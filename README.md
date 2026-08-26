@@ -598,8 +598,18 @@ bugs the way `sub_4BB6F0` did.
 - [x] **Differential validation raised to 974/7,326** — the 818 no-write
       leaves plus 156 that write memory, those compared on the buffer as
       well as `eax`. 2 float leaves held back, 1 indeterminate
-- [ ] Past the leaves: the remaining 6,134 functions all call something,
-      so comparing them needs a callee policy, not just safer inputs
+- [x] **The sweep made deterministic** — it passed 3 runs in 4 and failed the
+      fourth on `sub_50BE80`, a distance test reading its arguments as doubles
+      from a stack the harness never filled. Now filled with a known pattern
+      and each side run twice under two of them; 15 runs, same number
+- [~] **Past the leaves: the callee policy is measured, not yet running.**
+      5,316 functions call something. The two barriers are entangled — against
+      a 1,059 baseline, stubbing imports alone reaches 1,127 and tolerating
+      indirect calls alone 1,196, but both together reach 3,292 loop-free
+      functions, 1,243 of which call. What blocks it is that the import stub
+      must pop each callee's stdcall arguments, and 785 of 914 counts could not
+      be read from the API epilogues. Next: count the pushes at ENC97's own
+      call sites
 
 **2. Shrink the real-code surface.** This is the actual work of becoming a port,
 in cost order:

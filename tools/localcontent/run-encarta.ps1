@@ -35,8 +35,12 @@
 param(
     # the local mirror made by mirror-cd.ps1
     [Parameter(Mandatory = $true)][string]$Content,
-    # the drive letter the app looks for its CD on; the mirror stands in for it
+    # the drive letter this copy of the app asks for. The mirror is mapped to it
+    # with subst, so every component resolves it - not just the app.
     [string]$CdDrive = "H:",
+    # Fall back to rewriting paths inside the app instead of mapping a drive.
+    # Content works; VIDEO DOES NOT - see the README.
+    [switch]$NoSubst,
     # ENC97.EXE and its DLLs (AM16/AMF16 must be here too - see the README)
     [string]$AppDir,
     [int]$TimeoutMs = 900000,
@@ -73,9 +77,40 @@ if (-not (Test-Path (Join-Path $Content "ENCYC97\ENCARTA.M20"))) {
 # and no separator of its own, so "…\analysis" + "ENCART97.DAT" becomes one
 # nonexistent path and it reports a missing CD.
 $appPath = $AppDir.TrimEnd('\') + '\'
-$env:ENC97_PROFILE  = "CodePath=$appPath;DATPath=$appPath;BookPath=$Content\ENCYC97\"
-$env:ENC97_REDIRECT = "$($CdDrive.TrimEnd('\'))\=$Content\"
-$env:ENC97_CDROM    = $Content.Substring(0, 1)
+$letter = $CdDrive.TrimEnd('\', ':')
+
+if ($NoSubst) {
+    # Rewrite the paths inside the app. Enough for the content, because those
+    # opens go through the app's own import table - but the video does not:
+    # MCI hands the file to MCIAVI, which opens it with its own CreateFileA and
+    # never passes through anything we patched.
+    $env:ENC97_REDIRECT = "$letter`:\=$Content\"
+    $env:ENC97_CDROM    = $Content.Substring(0, 1)
+    $books = "$Content\ENCYC97\"
+    $ir32  = Join-Path $Content "AAMSSTP\SYSTEM16\IR32.DLL"
+    Write-Warning "-NoSubst: video will not play. Only the app's own file opens are redirected."
+} else {
+    # Map the mirror to the drive letter the app asks for. A real drive letter
+    # is resolved by every component in the process - the app, MCIAVI, and
+    # anything else - which is what makes video work.
+    $existing = (subst) | Where-Object { $_ -match "^$letter`:" }
+    if (-not $existing) {
+        subst "$letter`:" $Content
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "subst $letter`: $Content failed. Pick a free letter with -CdDrive, or use -NoSubst (no video)."
+            exit 1
+        }
+        Write-Host "mapped  : $letter`: -> $Content   (remove later with: subst $letter`: /d)"
+    } elseif ($existing -notmatch [regex]::Escape($Content)) {
+        Write-Warning "$letter`: is already substituted elsewhere: $existing"
+    }
+    Remove-Item Env:ENC97_REDIRECT -ErrorAction SilentlyContinue
+    # subst reports as a fixed disk, so the CD-ROM answer is still needed.
+    $env:ENC97_CDROM = $letter
+    $books = "$letter`:\ENCYC97\"
+    $ir32  = "$letter`:\AAMSSTP\SYSTEM16\IR32.DLL"
+}
+$env:ENC97_PROFILE = "CodePath=$appPath;DATPath=$appPath;BookPath=$books"
 $env:MSGBOX_LOG     = "1"     # answer the startup dialogs instead of blocking
 $env:NO_PRINTDLG    = "1"     # the printer query can stall on a machine with none
 if ($Hold)     { $env:HOLD = "1" }     else { Remove-Item Env:HOLD -ErrorAction SilentlyContinue }
@@ -85,7 +120,6 @@ if ($NoVideo) {
     $env:NO_VIDEO = "1"
 } else {
     Remove-Item Env:NO_VIDEO -ErrorAction SilentlyContinue
-    $ir32 = Join-Path $Content "AAMSSTP\SYSTEM16\IR32.DLL"
     if (Test-Path $ir32) {
         $env:IR32_DLL = $ir32
     } else {
@@ -102,7 +136,7 @@ if ($NoVideo) {
     }
 }
 
-Write-Host "content : $Content  (as $CdDrive, answering as CD-ROM)"
+Write-Host "content : $Content  (as $letter`:, answering as CD-ROM)"
 Write-Host "app     : $AppDir"
 Write-Host "video   : $(if ($NoVideo) { 'disabled' } else { 'IV32 via the recompiled codec' })"
 Write-Host ""
