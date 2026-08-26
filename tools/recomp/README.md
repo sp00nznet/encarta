@@ -1,4 +1,17 @@
-# DECO_32 Static Recompilation
+# Static recompilation (x86 to C)
+
+Three binaries are recompiled here, in the order they were done: the DECO_32
+image codec, ENCAPI32.DLL, and the ENC97.EXE application itself. They share one
+lifter (`lift.py`) and one CPU model (`cpu.h`); each section below picks up
+where the previous one left off.
+
+| | |
+|---|---|
+| [DECO_32.DLL](#deco_32dll) | byte-exact, no original code executed, no DLL file needed |
+| [ENCAPI32.DLL](#second-binary-encapi32dll--win32-import-trampoline) | lifted, validated across the real Win32 boundary |
+| [ENC97.EXE](#enc97exe-the-application) | all 7,326 functions lift; the application runs |
+
+## DECO_32.DLL
 
 A **mechanical static recompilation** of the Encarta 97 FTC image codec
 (`DECO_32.DLL`). The decode pipeline — header parsing, fractal decompression,
@@ -78,6 +91,22 @@ py -3.11 lift.py <DECO_32.DLL> <ida_funcs.txt> lifted_codec.c 0xADDR 0xADDR ...
 `ida_funcs.txt` (function `addr  size  name`) comes from IDA/Ghidra; it supplies
 function boundaries. Capstone supplies the per-instruction disassembly.
 
+## DECO_32: status
+
+- [x] Decode path lifted, pixel-exact (FTC mode `01 01 02 01`, self-contained)
+- [x] Setup path lifted (whole pipeline recompiled)
+- [x] Data-only standalone mode (no original code executed)
+- [x] FTC mode `04 03 04 01` (FTT-referenced) lifted — 110-function closure,
+      decodes real PICON content to clean full colour
+- [x] **No DLL file at runtime** — `recomp_decode_standalone` reconstructs the
+      data image from a generated blob; 5/5 picons byte-exact with no `DECO_32.DLL`
+- [ ] Non-full-resolution scaling paths and the `"FIFF"` FIF variant
+- [ ] Clean public C API + integration into a user-facing decoder
+
+The recomp decodes both FTC encoding modes found in PICON.M20. For mode-04 it is
+verified more robust than the DLL-bridge oracle (which exhibits a chroma-speckle
+divergence under standalone setup); the recomp produces the correct clean image.
+
 ## Second binary: ENCAPI32.DLL + Win32 import trampoline
 
 `lift.py` now reads the PE's ImageBase, so it lifts any module. **ENCAPI32.DLL**
@@ -100,7 +129,7 @@ cmake --build build --config Release --target recomp_encapi
 build\tools\recomp\Release\recomp_encapi.exe   # -> PASS fGetArticleID
 ```
 
-## ENC97.EXE (main app) — scoped, lifter proven to scale
+## ENC97.EXE: the application
 
 The 1.32 MB MFC 4.0 application: **7,326 functions**, entry `0x50DB70`, **914
 imports across 13 DLLs** (398 from MFC40 by ordinal + USER32/GDI32/KERNEL32/
@@ -464,7 +493,7 @@ app gets past its install check, loads content, and **runs** - toolbar,
 article text, and its illuminated-manuscript artwork decoded and drawn.
 Nothing is written to the machine.
 
-![Encarta 97 running under the recompilation harness](../docs/encarta97-running.png)
+![Encarta 97 running under the recompilation harness](../../docs/encarta97-running.png)
 
 ```
 recomp_enc97_run.exe analysis\ENC97.EXE 25000
@@ -513,19 +542,3 @@ real startup on Win11 with no code/dependency blocker; getting past that dialog
 is a content/install step — Encarta ships custom fonts its installer registers —
 not a recompilation problem. (Launched under a watchdog that force-terminates the
 modal dialog; nothing was installed system-wide.)
-
-## Status / future
-
-- [x] Decode path lifted, pixel-exact (FTC mode `01 01 02 01`, self-contained)
-- [x] Setup path lifted (whole pipeline recompiled)
-- [x] Data-only standalone mode (no original code executed)
-- [x] FTC mode `04 03 04 01` (FTT-referenced) lifted — 110-function closure,
-      decodes real PICON content to clean full colour
-- [x] **No DLL file at runtime** — `recomp_decode_standalone` reconstructs the
-      data image from a generated blob; 5/5 picons byte-exact with no `DECO_32.DLL`
-- [ ] Non-full-resolution scaling paths and the `"FIFF"` FIF variant
-- [ ] Clean public C API + integration into a user-facing decoder
-
-The recomp decodes both FTC encoding modes found in PICON.M20. For mode-04 it is
-verified more robust than the DLL-bridge oracle (which exhibits a chroma-speckle
-divergence under standalone setup); the recomp produces the correct clean image.
