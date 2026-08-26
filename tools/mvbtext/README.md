@@ -93,20 +93,45 @@ py mvbtext.py enc_dir check            # pins the four codes above
 py mvbtext.py enc_dir prose _00006060  # the Russia article
 ```
 
-## What's left: topic records
+## Topic records
 
-The prose is right; the surrounding structure is not. A topic entry is a
-sequence of formatted records - WinHelp `TOPICLINK` style: block size,
-prev/next, record type, then `LinkData1` formatting and `LinkData2` text - and
-`prose` runs the phrase decoder over the whole decompressed block, so the
-non-text regions come out as repeated fragments after the article body ends.
-Parsing the record layout would separate them. Ref: helpdeco / Winterhoff
-`helpfile.txt`.
+A topic is not a flat run of text. Records are separated by runs of NUL, and
+the runs mean something - five introduce a section heading, three end it:
 
-**Alternative path**, mirroring the DECO_32 recompilation: use the MVB engine
-DLLs (`MVBK20N.DLL` / `MVMG20N.DLL`, registered in `_SYSTEM`) as an oracle -
-call them to expand topics and validate a clean-room parser against their
-output.
+```
+...unmatched by their felsic rocks. 00000 Physiographic Regions 000 To the
+east of the Urals the plain region continues...
+```
+
+`records()` splits on them; `topic_prose()` keeps the ones holding text. The
+Russia article is 212 records, of which 86 are prose.
+
+**The rest are structure, and they are why `prose` used to trail off.** After
+the body comes the media list - what links the article to its pictures, audio
+and video. Run through the phrase decoder those produce fluent-looking
+nonsense: `thherring`, `ck, ck,`, `irsractith`, for tens of kilobytes. In the
+Russia article, junk markers drop from 134 occurrences to 2, and across the
+twenty largest topics vowel-less "words" fall from 0.17% to 0.06% while 81% of
+the text is retained.
+
+**Classified on the raw bytes, not on what they expand to.** Expanding first is
+the obvious approach and it fails: nonsense made of letters passes any test for
+letters, which is why the first attempt at this changed nothing. The raw
+profile separates them:
+
+```
+prose records       0-6%  control bytes, 31-48% phrase references
+structure records  10-42% control bytes, or under 30% references
+```
+
+Both halves are needed - some structure records are mostly high bytes and give
+themselves away by their control bytes, while the media list is the other way
+round, largely literal text with few references.
+
+This is a heuristic and is labelled as one in the code: the record type byte
+has not been identified. It costs a few short records, including a 77-byte
+cross-reference note that scores 23% control bytes and goes with them. Finding
+that type byte is what would replace it.
 
 ## Inline images are plain BMPs
 

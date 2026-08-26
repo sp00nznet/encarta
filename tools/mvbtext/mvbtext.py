@@ -164,6 +164,86 @@ def expand_refs(buf, ph, stats=None):
     return re.sub(r"[ \t]{2,}", " ", "".join(out)).strip()
 
 
+def records(stream, min_nulls=3):
+    """Split a decompressed topic into its records.
+
+    A topic is not a flat run of text. Records are separated by runs of NUL,
+    and the runs mean something: five introduce a section heading and three end
+    it, so the stream reads
+
+        ...unmatched by their felsic rocks. 00000 Physiographic Regions 000 To
+        the east of the Urals...
+
+    Yields (offset, bytes) and drops the separators.
+    """
+    out, i, n = [], 0, len(stream)
+    start = 0
+    while i < n:
+        if stream[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and not stream[j]:
+            j += 1
+        if j - i >= min_nulls:
+            if j > start:
+                out.append((start, bytes(stream[start:i])))
+            start = j
+        i = j
+    if start < n:
+        out.append((start, bytes(stream[start:])))
+    return out
+
+
+def is_text(rec, ph=None):
+    """Does this record hold prose, or the article's structure?
+
+    Judged on the RAW bytes, not on what they expand to. Expanding first is the
+    obvious approach and it does not work: a structure record run through the
+    phrase decoder produces fluent-looking nonsense - "thherring", "ck, ck,",
+    "irsractith" - which is made of letters and passes any test for letters.
+    That is what `prose` printed after the article ended.
+
+    The raw profile separates them cleanly. Across the Russia article:
+
+        prose records       0-6%  control bytes, 31-48% phrase references
+        structure records  10-42% control bytes, or under 30% references
+
+    Both halves are needed. Some structure records are mostly high bytes and
+    give themselves away by their control bytes; the media list is the other
+    way round, being largely literal text with few references.
+
+    A heuristic, and labelled as one: the record type byte has not been
+    identified yet. It costs a handful of short records - a 77-byte
+    cross-reference note scores 23% control and is dropped with them.
+    """
+    if len(rec) < 24:
+        return False
+    n = len(rec)
+    hi = sum(1 for b in rec if b >= 0x80) * 100 // n
+    ctl = sum(1 for b in rec if b < 0x20) * 100 // n
+    return ctl < 10 and hi >= 30
+
+
+def topic_prose(stream, ph):
+    """The article body: every record that holds text, in order.
+
+    Keeps every text record rather than stopping at the first that is not one.
+    Stopping sounds tidier and is wrong: a topic opens with several very short
+    structural records, so the first test fails immediately and the body never
+    starts. The media records at the end are binary and get filtered on their
+    own merits.
+
+    Returns (text, records_used, records_total).
+    """
+    recs = records(stream)
+    kept = []
+    for _off, rec in recs:
+        if is_text(rec):
+            kept.append(expand_refs(rec, ph))
+    return re.sub(r"\s{2,}", " ", " ".join(kept)).strip(), len(kept), len(recs)
+
+
 def titles(d):
     """All readable, NUL/printable-delimited title strings from _TTLBTREE."""
     data = open(os.path.join(d, "_TTLBTREE"), "rb").read()
@@ -275,10 +355,13 @@ def main():
         stream, start = topic_stream(raw)
         if start < 0:
             print("# no LZ77 stream found"); return 1
-        txt = expand_refs(stream, ph)
-        refs, media = image_refs(txt)
+        txt, used, total = topic_prose(stream, ph)
+        # the media list lives in the records after the body, and its captions
+        # are readable even though the records around them are not
+        refs, media = image_refs(expand_refs(stream, ph))
         print(f"# {sys.argv[3]}: {len(raw)} bytes -> LZ77 stream at {start} "
-              f"-> {len(stream)} bytes -> {len(txt)} chars")
+              f"-> {len(stream)} bytes -> {used} of {total} records are text "
+              f"-> {len(txt)} chars")
         if refs:  print("# image refs:", ", ".join(refs))
         if media: print("# media refs:", ", ".join(media))
         print(txt)
