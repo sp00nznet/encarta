@@ -411,6 +411,7 @@ cmake --build build --config Release --target m20dump
 | `ftcdecode` | `tools/ftcdecode/` | Clean-room FTC/FTT/FIF image decoder | Working (FTC grayscale, FTT/FIF perfect) |
 | `m20dump` | `tools/m20dump/` | M20/MVB 2.0 container extractor | Working |
 | `localcontent` | `tools/localcontent/` | Mirror the CD and run from a hard disk (redirect + CD-check answers) | Working — 0 CD reads at startup ([details](tools/localcontent/README.md)) |
+| `regress` | `tools/regress.py` | One command that re-checks everything that works | 8 checks, fast set ~4s |
 | `mvbtext` | `tools/mvbtext/` | Encarta article title/text extractor (MVB 2.0) | Titles ✓; phrase encoding solved, article prose reads ([details](tools/mvbtext/README.md)) |
 | `encextract` | `tools/encextract/` | End-to-end pipeline: disc → decoded image gallery + titles + HTML | Working ([details](tools/encextract/README.md)) |
 | `strdump` | `tools/strdump/` | STR string table dumper | Working |
@@ -590,8 +591,10 @@ bugs the way `sub_4BB6F0` did.
 - [ ] Drive the UI and fix what falls out, using the `R2L_LO/HI` and
       `LIFT_LO/HI` bisects — they turn "it crashed 30,000 calls in" into a
       named function in ~14 runs
-- [ ] A scripted regression run (window appears, N real→lifted calls, no
-      faults) so a lifter change can't silently break the boot
+- [x] **A scripted regression run** — `py tools/regress.py` checks the codec,
+      the decoder's byte-exactness, both video paths, the phrase encoding,
+      article text, the media list and the app reaching its window. Fast set
+      ~4s, `--full` ~30s; a missing CD reports SKIP, never a pass
 - [ ] Raise differential validation past the current 818/7,326 functions
 
 **2. Shrink the real-code surface.** This is the actual work of becoming a port,
@@ -626,8 +629,11 @@ thing — a memory model that isn't "the register is the address".
       `((b & 0x0F) << 8) | next`, plus a space when `b & 0x10`). Frequency
       settled it: the commonest codes are `the`, `of `, `and`, `in ` in order.
       Article prose now reads as prose
-- [ ] **Topic record structure** — `prose` runs the phrase decoder over the
-      whole decompressed block, so the non-text regions come out as repeated
-      fragments after the article body ends
+- [x] **Topic records split** — records are NUL-separated (five NULs open a
+      heading, three close it) and the media list is read as data: 1,001
+      references across 120 topics
+- [ ] **The remaining structure records** — 138 of 240 are still recognised
+      only by their byte profile, and the entry header is unparsed, so
+      `topic_stream` finds the LZ77 stream by trying every offset
 - [ ] Clean-room regeneration of the codec's constant tables (drop DLL-data dep)
 - [ ] `"FIFF"` FIF variant + non-full-resolution scaling paths
