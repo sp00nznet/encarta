@@ -384,8 +384,8 @@ See `tools/recomp/README.md` for the full ENC97 recompilation writeup.
 - [x] CD check / volume label — answered per-process for one drive letter
       ([`tools/localcontent`](tools/localcontent/README.md))
 - [x] Content from a local directory — mirror the disc once and run from
-      it: a full startup does 26 file operations on the copy and none on
-      the CD
+      it, **with no disc in the machine**: 26 file operations on the copy and
+      none anywhere else
 - [ ] Testing and compatibility
 
 ## Building

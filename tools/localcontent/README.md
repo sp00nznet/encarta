@@ -47,15 +47,23 @@ separately.
 Video works from the mirror too - `IR32.DLL` is at `AAMSSTP\SYSTEM16\` on the
 disc and the run script points the codec bridge at the copied one.
 
-## Two things this does not do
+## With the disc ejected
 
-The app still *believes* it is reading `H:`, because that is the drive letter it
-worked out; the redirect changes where those opens land, not what it thinks.
-That means **the CD-absent case is untested** - with the disc ejected the app
-would have to arrive at some drive letter on its own, and it was not possible
-to check that with the disc mounted. If it picks nothing, `subst`ing a letter
-to the mirror should give it one, and `ENC97_CDROM` will make that letter
-answer correctly.
+It runs. Same 26 operations on the mirror, none anywhere else, window up.
+
+The reason is worth stating, because it is not the one expected. The app does
+not go looking for a drive: it asks for `H:\ENC97.CD1` and `H:\ENCYC97\...`
+unconditionally, whatever is or is not mounted. Since the redirect rewrites the
+path before the call reaches the filesystem, **whether that drive exists never
+comes up** - with no CD-ROM in the machine at all, 20 rewrites happen and not
+one request reaches a real `H:`.
+
+So `-CdDrive` is not "the drive your CD is in", it is "the drive letter this
+copy of the app asks for". If yours asks for a different one - because it was
+installed against a different drive - set `-CdDrive` to that and the mirror
+answers for it just the same.
+
+## One thing to know
 
 `AM16.DLL` and `AMF16.DLL` still have to sit beside `ENC97.EXE` rather than in
 the mirror, because `ENCTITLE.DLL` imports them statically and the loader
