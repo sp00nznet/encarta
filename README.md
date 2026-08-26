@@ -57,10 +57,23 @@ decode to 100.00% identical pixels against FFmpeg, and the RGB frame
 clip on the disc today with `ir32_run`; see
 [`tools/indeo`](tools/indeo/README.md).
 
-What is missing is the join. Encarta plays video through Video for Windows, so
-something has to register the recompiled codec as the `IV32` handler that the
-app's playback path opens - and nothing does yet. Until then the decoder is a
-tool you run beside the app rather than something the app uses.
+**The join is built.** Encarta plays video through MCI - `ENC97.EXE` references
+`.AVI`, `AVIVideo` and `mciSend`, `ENCTITLE.DLL` references `MSVFW` too - so
+MCIAVI runs in the app's own process and asks Video for Windows for an `IV32`
+decompressor. `ir32vfw.dll` registers the recompiled codec with `ICInstall`, and
+the harness reports at startup:
+
+```
+video: IV32 registered (H:\AAMSSTP\SYSTEM16\IR32.DLL); ICLocate finds it
+```
+
+68 of 68 clips decode through that path, pixel-identical to driving the codec
+directly. Nothing is hooked and the app is not modified.
+
+What is *not* demonstrated is a clip playing in the running application. Every
+piece up to the codec is verified - registered, found by VFW, decoding
+correctly through ICM - but watching a video play needs an interactive session,
+so the table above still says "not yet".
 
 ## Why?
 
@@ -326,10 +339,11 @@ approach proven on DECO_32, rather than hand-reimplementation:
       identical pixels against FFmpeg, and the RGB frame the codec itself
       returns matches at correlation 1.0000
       ([`tools/indeo`](tools/indeo/README.md))
-- [ ] **Video playback in the app** — the decoder above is a standalone
-      tool. Encarta opens its clips through Video for Windows, so the
-      recompiled codec still has to be registered as the `IV32` handler that
-      path asks for
+- [x] **Video codec bridged to VFW** — `ir32vfw.dll` registers the
+      recompiled decoder with `ICInstall`, and the ENC97 harness confirms VFW
+      finds it in-process. 68 of 68 clips decode through `ICM`
+- [ ] **A clip playing in the app** — everything up to the codec is
+      verified; driving the UI to a video and watching it run has not been done
 - [x] SPAM media (article pictures) — `AM16.DLL`/`AMF16.DLL` beside the app
 - [ ] Shrink the real-code surface: replace MFC40/EEUIL10 with native equivalents
 
