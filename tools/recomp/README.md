@@ -161,10 +161,48 @@ functions, ~452k lines) and builds the **full 7,326-entry dispatch table**
   PASS [C] no-write pure-leaf differential sweep: 818 matched, 0 mismatch, 11 skipped
   ```
 
-  **818 distinct ENC97 functions match the real originals byte-exactly**; the 11
+  **974 distinct ENC97 functions match the real originals byte-exactly** once the
+  writing leaves below are included; the 11
   skips faulted identically on the synthetic (zeroed) input. Because the lift was
   modelled at delta 0, address-returning leaves are compared modulo the load
   delta (same logical pointer).
+
+- **[C2]** the same for the 186 pure leaves that **write memory**. Writes were
+  excluded originally for fear of corruption, and that fear was misplaced: a
+  store through a pointer derived from a zeroed register lands near null and
+  raises a catchable access violation, exactly like the reads. What must stay
+  excluded is the loop, which can spin forever or walk memory until it finds
+  something. These are the more valuable half - a function whose only effect is
+  on memory is invisible to a comparison of `eax` - so the buffer is compared
+  too.
+
+  ```
+  PASS [C2] writing pure-leaf sweep (eax AND memory): 156 matched, 0 mismatch, 29 skipped, 1 indeterminate
+  ```
+
+  Two things had to be handled before that number meant anything, and both came
+  from real mismatches this sweep reported:
+
+  *Indeterminate results.* `sub_48DA20` reserves a local with `sub esp, 4` and
+  one path returns it without ever writing it, so its answer is whatever lies
+  below the frame - `0x80000000` on the real stack, `0` on the emulated one.
+  Neither is wrong. Each side is now run twice under different stack rubbish,
+  and a side that disagrees with itself is reported as indeterminate rather than
+  compared.
+
+  *Arguments past the eighth.* `sub_50BC50` does `lea edi, [esp+0x14]` and
+  copies a run of stack slots into its object, reaching beyond the eight
+  arguments the harness pushed - consistently, so the two-pass check called both
+  sides reproducible. Sixteen identical arguments extend the region both sides
+  agree on.
+
+  Float leaves are held back, not counted as passes. pcrecomp models the x87
+  stack as C doubles where the hardware carries 80-bit extended; on synthetic
+  input - pointer bits reinterpreted as doubles - that diverges completely
+  rather than in the low bits, because intermediates that overflow a 64-bit
+  double are representable in 80-bit. `sub_50BCD0` lands on negative zero in
+  hardware and on a huge value in the model, and on garbage input there is no
+  way to tell that from a lift bug.
 
 This target is only built when the regenerated `enc97_full.c` is present locally
 (it is too large to commit and is derived from the user's own `ENC97.EXE`).
