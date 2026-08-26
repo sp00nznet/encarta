@@ -12,6 +12,11 @@ driven by translated code.
 
 ![Encarta 97 running as recompiled code](docs/encarta97-running.png)
 
+Video works too - all 68 clips, decoded by the CD's own 16-bit Indeo driver
+recompiled to C and handed back to Video for Windows:
+
+![Encarta 97 playing a video through the recompiled Indeo codec](docs/encarta97-video.png)
+
 It is not a static screenshot either - the encyclopedia is **navigable**. Below
 is MindMaze, Encarta's trivia game, played from the recompiled binary:
 
@@ -71,7 +76,12 @@ video: IV32 registered (H:\AAMSSTP\SYSTEM16\IR32.DLL); ICLocate finds it
 directly. Nothing is hooked and the app is not modified.
 
 **Clips play.** Driven interactively, the Media Gallery lists all 68 videos and
-plays them - decoded frame, transport controls, the lot. Nothing else on the
+plays them - decoded frame, transport controls, the lot.
+
+![Encarta 97 playing a video through the recompiled Indeo codec](docs/encarta97-video.png)
+
+Every pixel of that cheetah came out of a 16-bit driver Windows cannot load,
+translated to C and called back through Video for Windows. Nothing else on the
 machine could have done it: `Drivers32` registers cvid, iyuv, mrle, msvc,
 msyuv and tsbyuv, and no Indeo at all, so the only `IV32` handler in that
 process is the recompiled one.
@@ -349,8 +359,9 @@ approach proven on DECO_32, rather than hand-reimplementation:
       recompiled decoder with `ICInstall`, and the ENC97 harness confirms VFW
       finds it in-process. 68 of 68 clips decode through `ICM`
 - [x] **Clips play in the app** — the Media Gallery lists all 68 videos and
-      plays them; no other Indeo decoder exists on the machine, so the frames
-      are the recompiled codec's. 10 fps content, 59 fps decode
+      plays them ([screenshot](docs/encarta97-video.png)); no other Indeo
+      decoder exists on the machine, so those frames are the recompiled
+      codec's. 10 fps content, 59 fps decode
 - [x] SPAM media (article pictures) — `AM16.DLL`/`AMF16.DLL` beside the app
 - [ ] Shrink the real-code surface: replace MFC40/EEUIL10 with native equivalents
 
