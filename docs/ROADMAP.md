@@ -175,7 +175,7 @@ thing — a memory model that isn't "the register is the address".
 - [x] M20/MVB 2.0 container, B-tree directory, internal file layout
 - [x] **`|Phrases` phrase dictionary decoded** — 1,808 entries, byte-exact
       against the size its own header declares
-- [x] `|TTLBTREE` titles (31,517), `.RLE` baggage (plain BMPs), FTC/FTT/FIF
+- [x] `|TTLBTREE` titles (31,108), `.RLE` baggage (plain BMPs), FTC/FTT/FIF
 - [x] **Topic entries are LZ77** — same encoder as `|Phrases`; `mvbtext prose`
       decompresses them and reads real article text out
 - [x] **Phrase references decoded** — one byte for the 32 fragments

@@ -14,10 +14,10 @@ Then:
     py mvbtext.py <dir> text <entry>      # raw (undecompressed) topic scan
     py mvbtext.py <dir> grep <substr>     # find titles containing substr
 
-Status: titles and |Phrases are complete. Topic bodies are **LZ77 compressed**
-(the same WinHelp LZ77 that packs the phrase dictionary) and `prose` reads real
-article text out of them. What is not finished is the encoding of high phrase
-indices inside a topic, so some references still come out wrong - see
+Status: titles, |Phrases and the topic text encoding are complete - `prose`
+reads real article prose. What is not finished is the topic entry header, so
+`topic_stream` still finds the LZ77 stream by trying every start, and the record
+structure inside the decompressed text is only partly parsed. See
 docs/FORMATS.md for exactly what is known and what is not.
 """
 import os, re, struct, sys
@@ -136,15 +136,38 @@ def expand_refs(buf, ph, stats=None):
 
     First bytes are 0xA0-0xBF: over 1,500 topics that range is 99.8% in-range
     against the dictionary, while 0xC0-0xFF is 12-78% and is therefore not this
-    code. Those bytes are left alone (2% of high bytes, still unidentified) and
-    counted in `stats` rather than guessed at.
+    code.
+
+    0x01 is a literal escape: emit the next byte as-is, do not phrase-expand it.
+    Reported in issue #2, and the counts say it plainly - across 156 topics the
+    escaped bytes are 0x93 x27 against 0x94 x27, which are cp1252's opening and
+    closing double quotes in matched pairs, plus 0x97 x26 (em dash). Without it
+    the 0x93 is read as a phrase reference and a quoted paper title in the
+    Einstein article opens with "se" instead of a quote mark.
+
+    0xC0-0xFF in opcode position is a cp1252 literal. It is rare - 89 of ~74,000
+    opcodes across the same sample, 0.12% - and most apparent occurrences are
+    not opcodes at all but the second byte of a two-byte reference, which is
+    arbitrary. Restricting the walk to records `is_text` accepts drops them from
+    805 to 89 and out-of-range indices from 98 to 2; that residue sits in the
+    first tenth of the stream, which is where `topic_stream` guessing the start
+    would leave it. It is emitted rather than dropped: emitting a wrong glyph is
+    visible, silently deleting a byte is not.
     """
     out = []
     i, n = 0, len(buf)
     while i < n:
         b = buf[i]
         i += 1
-        if 0x80 <= b <= 0x9F:
+        if b == 0x01 and i < n:
+            e = buf[i]
+            i += 1
+            if stats is not None:
+                stats["escapes"] = stats.get("escapes", 0) + 1
+            # an escaped NUL is a field the renderer fills in, not a character
+            if e:
+                out.append(bytes([e]).decode("cp1252", "replace"))
+        elif 0x80 <= b <= 0x9F:
             idx = b & 0x1F
             out.append(ph[idx] if ph and idx < len(ph) else "")
         elif 0xA0 <= b <= 0xBF and i < n:
@@ -156,7 +179,8 @@ def expand_refs(buf, ph, stats=None):
                 stats["out_of_range"] = stats.get("out_of_range", 0) + 1
         elif b >= 0xC0:
             if stats is not None:
-                stats["unknown_hi"] = stats.get("unknown_hi", 0) + 1
+                stats["hi_literal"] = stats.get("hi_literal", 0) + 1
+            out.append(bytes([b]).decode("cp1252", "replace"))
         elif 0x20 <= b < 0x7F or b in (9, 10, 13):
             out.append(chr(b))
         else:
@@ -284,20 +308,78 @@ def topic_prose(stream, ph):
     return re.sub(r"\s{2,}", " ", " ".join(kept)).strip(), len(kept), len(recs)
 
 
-def titles(d):
-    """All readable, NUL/printable-delimited title strings from _TTLBTREE."""
+def title_entries(d):
+    """(rank, title) for every article, by walking _TTLBTREE's B-tree.
+
+    This used to scrape printable runs out of the file and dedupe them, which
+    was wrong in both directions: it counted index-page separator keys as
+    articles and it dropped every title shorter than three characters. So the
+    encyclopedia appeared to have 31,517 articles when it has 31,108 - the
+    scraper invented 'ngk', 'bec', 'mac' and ' de' while losing 'A', 'AC' and
+    'AM'. No character test separates those: 'Aar' is a real article (it is a
+    cross-reference to 'Aare') and 'ngk' is a fragment of one, and they look
+    alike. Only the structure tells them apart. Reported in issue #2, where the
+    count was independently measured at 31,108.
+
+    The layout is a WinHelp B-tree with 32-bit fields:
+
+        header    48 bytes; magic 0x293B at 0, page size at 4, page count at
+                  38, level count at 42, and the entry count at 44
+        leaf      u16 free, u16 entries, u32 prev page, u32 next page, then
+                  the entries; prev/next are -1 at the two ends
+        entry     u32 rank, then the title, NUL-terminated
+
+    The entry count in the header is a free check on the walk, and the ranks
+    are a second one - they come out contiguous from 0.
+    """
     data = open(os.path.join(d, "_TTLBTREE"), "rb").read()
-    out, cur, seen = [], bytearray(), set()
-    for b in data:
-        if 0x20 <= b < 0x7f:
-            cur.append(b)
-        else:
-            if len(cur) >= 3:
-                s = cur.decode("latin-1")
-                if s not in seen:        # _TTLBTREE repeats titles in index nodes
-                    seen.add(s); out.append(s)
-            cur = bytearray()
+    magic, = struct.unpack_from("<H", data, 0)
+    if magic != 0x293B:
+        raise ValueError("_TTLBTREE: magic %04X, expected 293B" % magic)
+    page_size, = struct.unpack_from("<H", data, 4)
+    n_pages, = struct.unpack_from("<I", data, 38)
+    declared, = struct.unpack_from("<I", data, 44)
+    HDR = 48
+
+    out = []
+    for pg in range(n_pages):
+        base = HDR + pg * page_size
+        end = base + page_size
+        if end > len(data):
+            break
+        n_ent, = struct.unpack_from("<H", data, base + 2)
+        off, got, ok = base + 12, [], True
+        for _ in range(n_ent):
+            if off + 4 >= end:
+                ok = False
+                break
+            rank, = struct.unpack_from("<I", data, off)
+            off += 4
+            z = data.find(b"\0", off, end)
+            if z < 0:
+                ok = False
+                break
+            got.append((rank, data[off:z].decode("cp1252", "replace")))
+            off = z + 1
+        # an index page does not fit that shape, and its ranks are page
+        # numbers rather than article ranks - either test rejects it
+        if ok and got and all(0 <= r < declared for r, _t in got):
+            out.extend(got)
+
+    if len(out) != declared:
+        raise ValueError("_TTLBTREE: walked %d entries, header declares %d"
+                         % (len(out), declared))
+    out.sort()
     return out
+
+
+def titles(d):
+    """Every article title, in the B-tree's own order (which is alphabetical).
+
+    31,108 entries, of which 31,104 are distinct - a handful of articles
+    genuinely share a title and are told apart by their rank.
+    """
+    return [t for _rank, t in title_entries(d)]
 
 
 def literal_text(topic, ph=None):

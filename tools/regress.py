@@ -204,10 +204,17 @@ def check_app_boots(a):
 
 
 def check_differential(a):
-    """974 ENC97 functions still match the real originals.
+    """The pure leaves still match the real originals, with no mismatch.
 
     The one check that compares lifted code against the code it was translated
     from, rather than against an expectation of what it should do.
+
+    Deliberately not pinned to a count. The pass condition is "every function
+    compared agreed, and none disagreed"; the number that reaches that point
+    moves by a function or two between runs because the image lands at a
+    different address each time and a few functions fault on synthetic input
+    only at some addresses. Pinning the number would fail the run for getting
+    *more* validation, which is not a regression.
     """
     exe = os.path.join(REPO, "build", "tools", "recomp", "Release",
                        "recomp_enc97_full.exe")
@@ -247,7 +254,7 @@ CHECKS = [
     ("article text",       check_article_text),
     ("media list",         check_media_list),
     ("app reaches window", check_app_boots),
-    ("974 fns match real", check_differential),
+    ("leaves match real", check_differential),
 ]
 
 

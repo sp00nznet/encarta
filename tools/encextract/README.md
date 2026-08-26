@@ -17,7 +17,7 @@ cmake --build build --config Release --target m20dump recomp_decode
 
 # mount a disc (PowerShell: Mount-DiskImage CD1ENC97ENC.iso), then:
 py tools/encextract/encextract.py <drive>:\ENCYC97 out_dir --max-images 200
-# -> out_dir/titles.txt   (~31,517 article titles)
+# -> out_dir/titles.txt   (31,108 article titles)
 #    out_dir/images/*.png  (FTC photos decoded by the recompiled codec; .RLE->.bmp)
 #    out_dir/index.html    (gallery)
 ```
