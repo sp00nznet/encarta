@@ -98,7 +98,11 @@ static unsigned apply_relocs(const unsigned char *img, unsigned count,
     return applied;
 }
 
-static int load_ne(const char *path)
+/* Not static any more: ir32_vfw.c loads the same image to answer VFW.
+ * g_ne_autodata goes with it - the DS every driver call needs. */
+uint16_t g_ne_autodata;
+
+int ir32_load_ne(const char *path)
 {
     FILE *f = fopen(path, "rb");
     if (!f) { fprintf(stderr, "cannot open %s\n", path); return 0; }
@@ -120,6 +124,7 @@ static int load_ne(const char *path)
     unsigned shift = rd16f(img + neoff + 0x32);
     if (!shift) shift = 9;
     g_autodata = rd16f(img + neoff + 0x0E);
+    g_ne_autodata = g_autodata;
     uint16_t heapsz = rd16f(img + neoff + 0x10);
 
     ne_mem_init();
@@ -630,6 +635,9 @@ static int decode_frame(const char *path, int w, int h, const char *out_ppm,
     return nonzero ? 0 : 1;
 }
 
+/* IR32_NO_MAIN: link this file for its NE loader without its command line.
+ * The VFW test has a main of its own and needs ir32_load_ne from here. */
+#ifndef IR32_NO_MAIN
 int main(int argc, char **argv)
 {
     /* Unbuffered, because the interesting runs are the ones that fault: a
@@ -642,7 +650,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: %s <IR32.DLL> [init|sweep|driver]\n", argv[0]);
         return 2;
     }
-    if (!load_ne(argv[1])) return 1;
+    if (!ir32_load_ne(argv[1])) return 1;
     ir32_register16();
     ir32_register32();
 
@@ -710,3 +718,4 @@ int main(int argc, char **argv)
     fprintf(stderr, "unknown command %s\n", argv[2]);
     return 2;
 }
+#endif  /* IR32_NO_MAIN */

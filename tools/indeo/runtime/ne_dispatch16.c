@@ -278,6 +278,15 @@ static void kernel_import(CPU *cpu, uint16_t ord)
         cpu->dx = (uint16_t)(bytes >> 16);
         break;
     }
+    case 197:
+        /* One word in - the call sites push 3, then 2 - and nothing on the
+         * decode path reads what comes back. Its argument SIZE is what
+         * mattered: popping nothing left every caller's stack a word out
+         * through driver initialisation. Answering zero is honest about
+         * not knowing which ordinal this is, and keeps the stack level. */
+        cpu->ax = 0;
+        cpu->dx = 0;
+        break;
     default:
         fprintf(stderr, "unimplemented KERNEL.%u\n", ord);
         break;

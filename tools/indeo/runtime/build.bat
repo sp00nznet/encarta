@@ -54,9 +54,23 @@ cl /nologo /W3 /O2 /EHa %WATCH% ^
    /Fo:"%OUT%\\" /Fe:"%OUT%\ir32_run.exe" ^
    /link /STACK:0x20000000 || exit /b 1
 
+rem The VFW bridge: the same lifted codec, presented to Video for Windows.
+rem Its own executable because it links vfw32, and because its main installs
+rem the codec and then asks VFW to find it rather than calling it directly.
+cl /nologo /W3 /O2 /EHa %WATCH% ^
+   "%OUT%"\ir32_seg*.c ^
+   "%HERE%\ne_mem.c" "%HERE%\ne_dispatch16.c" "%HERE%\ne_dispatch32.c" ^
+   "%HERE%\ir32_reg16.c" "%HERE%\ir32_reg32.c" ^
+   "%HERE%\ir32_run.c" /DIR32_NO_MAIN ^
+   "%HERE%\ir32_vfw.c" "%HERE%\ir32_vfwtest.c" ^
+   /I "%HERE%" /I "%OUT%" /I "%PCRECOMP%\runtime" ^
+   /Fo:"%OUT%\vfwobj\\" /Fe:"%OUT%\ir32_vfwtest.exe" ^
+   /link vfw32.lib /STACK:0x20000000 || exit /b 1
 echo.
 echo built %OUT%\ir32_run.exe
 echo   ir32_run ^<IR32.DLL^> init     the decoder's own initialisation
 echo   ir32_run ^<IR32.DLL^> sweep    every lifted 32-bit entry
 echo   ir32_run ^<IR32.DLL^> driver   DriverProc, the 16-bit entry point
+echo   ir32_vfwtest ^<IR32.DLL^> ^<frame^> ^<w^> ^<h^> [out.ppm] [bits]
+echo                                  decode through Video for Windows
 endlocal
