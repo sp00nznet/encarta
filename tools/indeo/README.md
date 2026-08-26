@@ -881,11 +881,16 @@ video: IV32 registered (H:\AAMSSTP\SYSTEM16\IR32.DLL); ICLocate finds it
 
 Env: `IR32_DLL` says where IR32.DLL is, `NO_VIDEO=1` skips the bridge.
 
-**Not yet demonstrated:** a clip actually playing in the running application.
-Everything up to the codec is verified - it is registered, VFW finds it, and it
-decodes correctly through ICM - but driving the app to a video and watching it
-run needs an interactive session, and until someone does that "video plays" is
-not a claim this file makes.
+**Clips play in Encarta.** Driven interactively, the Media Gallery lists all 68
+videos and plays them. Nothing else on the machine could be decoding them:
+`Drivers32` registers cvid, iyuv, mrle, msvc, msyuv and tsbyuv and no Indeo at
+all, so the only `IV32` handler in that process is this one.
+
+Decode rate, since playback is the thing it now has to keep up with: 59 fps at
+24bpp for a 216x192 keyframe, 17 ms a frame. The clips are 10 fps, so there is
+roughly six times the headroom needed. `IR32_REPEAT=N` on `ir32_vfwtest`
+measures it. Audio is a separate stream MCIAVI plays itself; the video codec
+never sees it.
 
 ### Indeo 3: done
 

@@ -84,6 +84,24 @@ int main(int argc, char **argv)
     printf("ICDecompress: %ld\n", (long)r);
     if (r != ICERR_OK) { ICClose(hic); return 1; }
 
+    /* IR32_REPEAT: decode the same frame N times and report the rate. The
+     * question it answers is whether the codec can keep up with playback -
+     * MCIAVI drives the clock and calls ICDecompress per frame, so all this
+     * has to do is come back before the next one is due. */
+    const char *rep = getenv("IR32_REPEAT");
+    if (rep) {
+        int n = atoi(rep);
+        LARGE_INTEGER f, a, b;
+        QueryPerformanceFrequency(&f);
+        QueryPerformanceCounter(&a);
+        for (int k = 0; k < n; k++)
+            ICDecompress(hic, 0, &in, data, &out, pix);
+        QueryPerformanceCounter(&b);
+        double sec = (double)(b.QuadPart - a.QuadPart) / f.QuadPart;
+        printf("decoded %d frames in %.3f s = %.0f fps (%.2f ms/frame)\n",
+               n, sec, n / sec, 1000.0 * sec / n);
+    }
+
     unsigned long nz = 0;
     for (DWORD i = 0; i < out.biSizeImage; i++)
         if (pix[i]) nz++;

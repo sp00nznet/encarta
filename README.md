@@ -34,7 +34,7 @@ From an interactive session against the real CD:
 | **Audio** - narration clips, background music, MindMaze effects | works |
 | **MindMaze** - category select, levels, scoring, progression | works |
 | Article pictures (SPAM media) | works - see note |
-| Video | **not yet** - the codec is done, the wiring is not; see below |
+| **Video** - clips play in the Media Gallery | works - see below |
 
 **Article pictures** initially failed with *"Encarta is not set up properly"*
 (ENCTITLE.DLL string 25). Imagery comes through **SPAM**, Encarta's media
@@ -70,10 +70,16 @@ video: IV32 registered (H:\AAMSSTP\SYSTEM16\IR32.DLL); ICLocate finds it
 68 of 68 clips decode through that path, pixel-identical to driving the codec
 directly. Nothing is hooked and the app is not modified.
 
-What is *not* demonstrated is a clip playing in the running application. Every
-piece up to the codec is verified - registered, found by VFW, decoding
-correctly through ICM - but watching a video play needs an interactive session,
-so the table above still says "not yet".
+**Clips play.** Driven interactively, the Media Gallery lists all 68 videos and
+plays them - decoded frame, transport controls, the lot. Nothing else on the
+machine could have done it: `Drivers32` registers cvid, iyuv, mrle, msvc,
+msyuv and tsbyuv, and no Indeo at all, so the only `IV32` handler in that
+process is the recompiled one.
+
+Timing has room to spare. The clips are 10 fps and the codec decodes at 59 fps
+(17 ms a frame against a 100 ms budget), so it is not what would drop a frame.
+Audio is a separate stream that MCIAVI plays itself and the video codec never
+touches.
 
 ## Why?
 
@@ -342,8 +348,9 @@ approach proven on DECO_32, rather than hand-reimplementation:
 - [x] **Video codec bridged to VFW** — `ir32vfw.dll` registers the
       recompiled decoder with `ICInstall`, and the ENC97 harness confirms VFW
       finds it in-process. 68 of 68 clips decode through `ICM`
-- [ ] **A clip playing in the app** — everything up to the codec is
-      verified; driving the UI to a video and watching it run has not been done
+- [x] **Clips play in the app** — the Media Gallery lists all 68 videos and
+      plays them; no other Indeo decoder exists on the machine, so the frames
+      are the recompiled codec's. 10 fps content, 59 fps decode
 - [x] SPAM media (article pictures) — `AM16.DLL`/`AMF16.DLL` beside the app
 - [ ] Shrink the real-code surface: replace MFC40/EEUIL10 with native equivalents
 
