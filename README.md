@@ -361,7 +361,7 @@ cmake --build build --config Release --target m20dump
 | `decooracle` | `tools/decooracle/` | Faithful DECO_32.DLL bridge → full-colour FTC; ground-truth oracle | **Working — perfect colour** |
 | `ftcdecode` | `tools/ftcdecode/` | Clean-room FTC/FTT/FIF image decoder | Working (FTC grayscale, FTT/FIF perfect) |
 | `m20dump` | `tools/m20dump/` | M20/MVB 2.0 container extractor | Working |
-| `mvbtext` | `tools/mvbtext/` | Encarta article title/text extractor (MVB 2.0) | Titles ✓; topic bodies partial ([details](tools/mvbtext/README.md)) |
+| `mvbtext` | `tools/mvbtext/` | Encarta article title/text extractor (MVB 2.0) | Titles ✓; phrase encoding solved, article prose reads ([details](tools/mvbtext/README.md)) |
 | `encextract` | `tools/encextract/` | End-to-end pipeline: disc → decoded image gallery + titles + HTML | Working ([details](tools/encextract/README.md)) |
 | `strdump` | `tools/strdump/` | STR string table dumper | Working |
 | `spamdump` | `tools/spamdump/` | SPAM multimedia format dumper | Working |
@@ -569,8 +569,13 @@ thing — a memory model that isn't "the register is the address".
 - [x] `|TTLBTREE` titles (31,517), `.RLE` baggage (plain BMPs), FTC/FTT/FIF
 - [x] **Topic entries are LZ77** — same encoder as `|Phrases`; `mvbtext prose`
       decompresses them and reads real article text out
-- [ ] **High-index phrase escapes** — the last thing between here and clean
-      prose. Single-byte references (`byte - 0x80`) are confirmed; the encoding
-      above index 48 is not, so some words still come out wrong
+- [x] **Phrase references decoded** — one byte for the 32 fragments
+      (`0x80-0x9F`), two for the rest (`0xA0-0xBF`: index
+      `((b & 0x0F) << 8) | next`, plus a space when `b & 0x10`). Frequency
+      settled it: the commonest codes are `the`, `of `, `and`, `in ` in order.
+      Article prose now reads as prose
+- [ ] **Topic record structure** — `prose` runs the phrase decoder over the
+      whole decompressed block, so the non-text regions come out as repeated
+      fragments after the article body ends
 - [ ] Clean-room regeneration of the codec's constant tables (drop DLL-data dep)
 - [ ] `"FIFF"` FIF variant + non-full-resolution scaling paths
