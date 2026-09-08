@@ -716,7 +716,8 @@ def find_function_starts(decode16, instructions, seg_len, extra):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("ne_file")
-    ap.add_argument("--pcrecomp", default=r"G:\recomp\pc\tools")
+    ap.add_argument("--pcrecomp",
+                    default=os.environ.get("PCRECOMP", r"G:\recomp\pc\tools"))
     ap.add_argument("--seg", type=int, required=True)
     ap.add_argument("-o", "--out")
     ap.add_argument("--stats", action="store_true")

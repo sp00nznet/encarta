@@ -199,3 +199,71 @@ all of which are real, and belong back in
 - [ ] `mul`/`imul` write flags x86 leaves undefined
 - [ ] 16-bit `adc`/`sbb` lose CF when `src + cf` wraps
 - [ ] `"FIFF"` FIF variant + non-full-resolution scaling paths
+
+## Other Encarta editions
+
+Nothing here has been tried against anything but **Encarta 97 Encyclopedia,
+English, 2-CD Deluxe**. Every number in these documents is from that edition,
+and the rest of this section is a plan, not a result.
+
+There are roughly 500 Encarta items on archive.org spanning 1993 to 1999 — every
+year, most languages, encyclopedia and World Atlas and Virtual Globe, retail and
+OEM. Availability is not the constraint; knowing which ones share this engine is.
+
+**The cheap test, before downloading anything large.** An edition is in scope for
+this work if its disc has all three of these, and out of scope if it has none:
+
+| Look for | Means |
+|---|---|
+| `*.M20` whose `\|SYSTEM` magic is `0x036C` | Multimedia Viewer 2.0 — `m20dump` and `mvbtext` apply as-is |
+| `DECO_32.DLL` | the Iterated Systems FTC codec — the whole `tools/recomp` DECO track applies |
+| `EEUIL*.DLL` | Encarta's own UI library, the thing the app is actually built on |
+
+Mount an edition and run `m20dump -i` on any `.M20` plus a directory listing;
+that is a five-minute answer per disc, and it is the first thing to do rather
+than the last.
+
+**What is expected, and expected is not known:**
+
+- **Encarta 96** almost certainly matches. Same era, same Viewer 2.0 lineage.
+- **Encarta 98 and 99** are the interesting boundary — they are where Microsoft
+  moved the rendering forward, and where the answer is most likely "some of the
+  format tools, none of the recompilation".
+- **93/94/95** are Viewer 2.0 as well but 16-bit applications, which is a
+  different lift problem entirely — and one the [Indeo work](../tools/indeo/README.md)
+  already shows is tractable, since `IR32.DLL` was a 16-bit NE module.
+- **World Atlas / Virtual Globe** share the container and codec but not the
+  application. The format tools should carry; nothing else will.
+
+The order that makes sense: 96 first (cheapest confirmation that the format
+tools generalise at all), then 98 (where they stop), and only then anything
+16-bit.
+
+## Distributing this
+
+The question comes up: why not ship a built binary?
+
+Because a binary would be the least useful part of what is here, and the most
+misleading. `recomp_enc97_run.exe` is 14 MB of lifted C that does nothing
+without `ENC97.EXE`, `DECO_32.DLL`, `AM16`/`AMF16`, `IR32.DLL` and 645 MB of
+content, all of which have to come from a legitimate disc that the downloader
+must already own. Someone who has all that can build; someone who does not
+cannot use the binary. The gap a release would appear to close is not the gap
+that exists.
+
+There is also a real hazard in the appearance. A release page with a run button
+reads as "Encarta 97, packaged" — and the recompiled application is not a
+distribution of Encarta, is not licensed as one, and stops working the moment
+its inputs are absent. Being obviously a build of source, requiring an obvious
+disc, is doing useful work.
+
+What would help, and does not have this problem:
+
+- [ ] **A build the tools actually deserve** — the format tools (`m20dump`,
+      `mvbtext`, `strdump`, `spamdump`, `datdump`, `ftcdecode`) parse data and
+      need no original code at all. Those are shippable as binaries today, and
+      would be genuinely useful to people who only want their disc's contents
+      out.
+- [ ] **CI that builds a clone on every push**, so the claim in
+      [GETTING-STARTED](GETTING-STARTED.md) that a fresh clone builds 16 targets
+      stops being a thing someone checked once by hand.

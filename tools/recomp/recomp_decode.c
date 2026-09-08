@@ -165,7 +165,10 @@ int main(int argc, char **argv)
     const char *in = argv[1];
     uint32_t expect = (argc >= 3) ? (uint32_t)strtoul(argv[2], NULL, 16) : 0;
     const char *outpng = (argc >= 4) ? argv[3] : NULL;
-    const char *dll = (argc >= 5) ? argv[4] : "C:\\encarta\\analysis\\DECO_32.DLL";
+    /* argv[4], else DECO32_DLL, else where this repo keeps it. The old
+     * default was one machine's C:\encarta, which no clone has. */
+    const char *dll = (argc >= 5) ? argv[4] : getenv("DECO32_DLL");
+    if (!dll) dll = "analysis\\DECO_32.DLL";
 
     /* Preferred (standalone build): reconstruct the data image from the linked-in
      * blob — NO DLL file needed at all. Then: data-only map of the DLL file; then

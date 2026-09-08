@@ -27,7 +27,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("ne_file")
     ap.add_argument("-o", "--out", required=True)
-    ap.add_argument("--pcrecomp", default=r"G:\recomp\pc\tools")
+    ap.add_argument("--pcrecomp",
+                    default=os.environ.get("PCRECOMP", r"G:\recomp\pc\tools"))
     a = ap.parse_args()
 
     sys.path.insert(0, os.path.join(a.pcrecomp, "tools", "ne"))

@@ -18,7 +18,12 @@ rem separator back explicitly everywhere it is used.
 set HERE=%~dp0
 set HERE=%HERE:~0,-1%
 set INDEO=%HERE%\..
-set PCRECOMP=G:\recomp\pc\tools
+if not defined PCRECOMP set PCRECOMP=G:\recomp\pc\tools
+if not exist "%PCRECOMP%\runtime\recomp16.h" (
+    echo set PCRECOMP to a pcrecomp checkout ^(https://github.com/sp00nznet/pcrecomp^)
+    echo   currently: %PCRECOMP%
+    exit /b 2
+)
 set OUT=%HERE%\build
 
 if not defined VSINSTALLDIR (

@@ -20,11 +20,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUN = os.path.join(HERE, "runtime", "build", "ir32_vfwtest.exe")
-DLL = r"H:\AAMSSTP\SYSTEM16\IR32.DLL"
-AVIDIR = "H:/ENCYC97/MM/AVI"
-FFDIR = (r"C:\Users\nedch\AppData\Local\Microsoft\WinGet\Packages"
-         r"\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe"
-         r"\ffmpeg-8.1.1-full_build\bin")
+from paths import DLL, AVIDIR, FFDIR, require
 W, H = 216, 192
 
 
@@ -39,6 +35,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
     a = ap.parse_args()
+    require()
     files = sorted(glob.glob(os.path.join(AVIDIR, "*.AVI")))
     if a.limit:
         files = files[:a.limit]

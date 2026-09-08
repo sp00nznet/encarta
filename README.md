@@ -95,8 +95,11 @@ reference implementation for the Encarta data formats.
 
 ## Building
 
-Requires Visual Studio 2022 (Win32 target), CMake 3.16+, and Python 3 with
-`pefile` and `capstone`.
+**Step by step, with what each stage actually costs:
+[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).** The short version:
+
+Requires Visual Studio 2022 (Win32 target), CMake 3.20+, and Python 3.11+ with
+`pefile`, `capstone` and `numpy`.
 
 ```bash
 cmake -B build -G "Visual Studio 17 2022" -A Win32
@@ -105,6 +108,13 @@ cmake --build build --config Release
 # or one tool at a time
 cmake --build build --config Release --target ftcdecode
 ```
+
+That builds 16 tools from a clean clone and needs no disc. Three things are
+**not** in a clone, because each is derived from your own copy of the product:
+the ENC97 lift (needs a function map from IDA or Ghidra), the `DECO_32` data
+blob, and the recompiled Indeo codec (needs a
+[pcrecomp](https://github.com/sp00nznet/pcrecomp) checkout for the 16-bit
+lifter). [GETTING-STARTED](docs/GETTING-STARTED.md) covers all three.
 
 You need a legitimate copy of the product — no original files are distributed
 here. With CD1 mounted, `ENC97_PROFILE` answers the `97Options` profile lookups
@@ -171,13 +181,14 @@ m20dump -x "G:\ENCYC97\PICON.M20" -o out_dir
 recomp_decode out_dir\T000009D.FSM "" image.png
 ```
 
-`PICON.M20` holds **11,348 FTC images** (`.FSM`) + 49 shared fractal transform
+`PICON.M20` holds **11,350 FTC images** (`.FSM`) + 49 shared fractal transform
 tables (`.FTT`); all decode to correct full colour through the recompiled codec.
 
 ## Documentation
 
 | | |
 |---|---|
+| [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) | Build it, step by step — and what each stage needs that a clone does not have |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Where this stands, what is planned, in what order |
 | [docs/FORMATS.md](docs/FORMATS.md) | How the file formats are laid out — M20/MVB, `\|Phrases`, topic entries, FTC/FTT/FIF |
 | [docs/INVENTORY.md](docs/INVENTORY.md) | What is on the discs: every binary and data file, and the architecture |

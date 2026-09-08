@@ -189,6 +189,12 @@ def check_app_boots(a):
         "MSGBOX_LOG": "1",
         "NO_PRINTDLG": "1",
     }
+    # Without this the harness falls back to its H: default, prints "codec
+    # install failed", and the check silently stops exercising the video
+    # bridge its own docstring claims it covers.
+    ir32 = first_existing(IR32_DLL_CANDIDATES)
+    if ir32:
+        env["IR32_DLL"] = ir32
     if content.rstrip("\\").lower() != "h:":
         env["ENC97_REDIRECT"] = "H:\\=%s\\" % content.rstrip("\\")
     try:

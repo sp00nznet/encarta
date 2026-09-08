@@ -9,11 +9,14 @@ enc97_full.c) — it is a build artifact, not redistributed.
 
 Usage: py gen_deco_data.py [DECO_32.DLL] [out.c]
 """
-import struct, sys
+import os, struct, sys
 
-DLL = sys.argv[1] if len(sys.argv) > 1 else r"C:\encarta\analysis\DECO_32.DLL"
+# argv[1], else where this repo keeps it. The old default was one machine's
+# C:\encarta, which no clone has.
+_repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DLL = sys.argv[1] if len(sys.argv) > 1 else os.environ.get(
+    "DECO32_DLL", os.path.join(_repo, "analysis", "DECO_32.DLL"))
 OUT = sys.argv[2] if len(sys.argv) > 2 else "deco32_data.c"
-import os
 # Sections to include. Override via env DECO_SECTIONS (comma list) to minimize.
 # Default: ALL sections. .text is required even though no original code runs —
 # MSVC 4.x embeds the decoder's jump tables inline in .text, and the lifted

@@ -103,7 +103,7 @@ follows, least-significant group first.
 `m20dump` rewrites the leading `|` to `_` so the names are valid on Windows.
 
 Encarta 97 `ENCARTA.M20`: 32,535 internal files, 135 leaf pages.
-`PICON.M20`: 11,348 `.FSM` images plus 49 shared `.FTT` tables.
+`PICON.M20`: 11,350 `.FSM` images plus 49 shared `.FTT` tables.
 
 ---
 
