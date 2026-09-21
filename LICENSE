@@ -42,7 +42,16 @@ the decoders are untestable without them:
   fif_test/oracle_out/*           execution traces and pixel CRCs produced by
                                   running the original DECO_32.DLL
   encart97.ann                    4-byte annotation stub
+  tools/localcontent/encart97.ann the same stub, second copy
   docs/encarta97-running.png      a screenshot of the running program
+  docs/encarta97-video.png        a screenshot of a clip playing
+  docs/encarta97-video.gif        a capture of a clip playing. This one is
+                                  Encarta's own video content, not this
+                                  build's interface, and it is the largest
+                                  file in the repository.
+  docs/mindmaze.png               screenshots of MindMaze. The interface is
+  docs/mindmaze2.png              this build's; the artwork in it is
+  docs/mindmaze3.png              Encarta's.
 
 If you are Microsoft and would like any of that removed, open an issue and it
 goes.

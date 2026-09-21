@@ -221,14 +221,19 @@ Tools and techniques from this project are contributed back to
 The project's own code is MIT licensed — see [LICENSE](LICENSE).
 
 That licence covers the tools, the lifter, the runtime and the harness. It does
-not cover Microsoft Encarta 97 Encyclopedia: **no original executables, DLLs,
-fonts or content files are distributed here**, and you need a legitimate copy of
-the product to use any of this. The build deliberately ignores `*.iso`,
-`analysis/` and the 40 MB generated lift, all of which are derived from your own
-copy.
+not cover Microsoft Encarta 97 Encyclopedia: **no original executables, DLLs or
+fonts are distributed here**, and you need a legitimate copy of the product to
+use any of this. The build deliberately ignores `*.iso`, `analysis/` and the
+40 MB generated lift, all of which are derived from your own copy.
+
+Content files are the one exception to that, and it is a deliberate one rather
+than an oversight. Read the next paragraph as part of the sentence above.
 
 For honesty's sake: a handful of small files *are* derived from the original
 product and are excluded from the MIT grant — the decoder test vectors under
-`fif_test/`, the oracle traces produced by running the original DLL, and the
-screenshots above. They are kept because the decoders cannot be tested without
-them. [LICENSE](LICENSE) lists them explicitly.
+`fif_test/`, which are image fragments extracted from `PICON.M20`; the oracle
+traces produced by running the original DLL; the `encart97.ann` stub; and the
+screenshots and the video capture under `docs/`. The test vectors are kept
+because the decoders cannot be tested without them, and the video capture is
+Encarta's own content rather than this build's interface. [LICENSE](LICENSE)
+names every one of them, and any of them comes out on request.
