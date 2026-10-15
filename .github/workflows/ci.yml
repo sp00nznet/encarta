@@ -1,0 +1,62 @@
+# Builds everything a clone can build, on every OS, and runs the conformance
+# harness. CI has no disc, so tools/regress.py reports every check as SKIP and
+# exits 0; the figure that counts is conformance.json, from a machine with the
+# disc (README, "Status"). The recompiled harness itself needs the generated
+# lift, which is never in a clone, so CI proves the toolchains, not the app.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  native:
+    name: data tools (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --parallel
+      - run: python3 tools/regress.py
+
+  windows:
+    name: Win32 (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -B build -G "Visual Studio 17 2022" -A Win32
+      - run: cmake --build build --config Release --parallel
+      - run: python tools/regress.py
+
+  cross:
+    name: Win32 cross-build (clang-cl on ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      XWIN_VERSION: 0.10.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q clang lld llvm ninja-build
+          curl -sSL https://github.com/Jake-Shadle/xwin/releases/download/$XWIN_VERSION/xwin-$XWIN_VERSION-x86_64-unknown-linux-musl.tar.gz | tar xz
+          sudo mv xwin-$XWIN_VERSION-x86_64-unknown-linux-musl/xwin /usr/local/bin/
+      - name: toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm lld ninja xwin
+      - uses: actions/cache@v4
+        with:
+          path: ~/.xwin
+          key: xwin-x86-${{ env.XWIN_VERSION }}
+      - run: '[ -d ~/.xwin/crt/lib/x86 ] || xwin --accept-license --arch x86 splat --output ~/.xwin'
+      - run: ./build.sh

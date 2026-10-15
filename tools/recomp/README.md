@@ -43,14 +43,17 @@ executed** — the DLL is mapped only as a constant-data image.
 | `test_vlc.c` | Differential fuzz harness: trampolines to the real DLL function and compares against the lifted version over millions of random inputs (used to validate the lifter on the VLC reader — 3,000,000 trials, 0 mismatches). |
 
 The recompilation was driven leaf-up and validated at every step against the
-oracle's golden pixel CRCs and per-function register traces
-(`../../fif_test/oracle_out/`).
+oracle's golden pixel CRCs and per-function register traces. Those, and the
+picon test images, are in `fif_test/`, the one set of product-derived files
+kept in the repository (five small codec test images and their traces). To
+make more from your own disc: `m20dump -x PICON.M20` gives the images,
+`decotrace` the traces.
 
 ## Build & run
 
 ```powershell
 cmake -B build -G "Visual Studio 17 2022" -A Win32
-cmake --build build --config Release --target recomp_decode
+cmake --build build --config Release --target recomp_decode   # needs lifted_codec.c (GETTING-STARTED stage 4)
 
 # decode + verify against the oracle CRC, optionally write a PNG
 build\tools\recomp\Release\recomp_decode.exe fif_test\picon_000.ftc 74D4A38C out.png

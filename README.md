@@ -1,40 +1,34 @@
 # Encarta 97 Encyclopedia — Static Recompilation Project
 
-Statically recompiling Microsoft Encarta 97 Encyclopedia (English, 2-CD
-edition) into native code that runs on Windows 10/11.
+Microsoft Encarta 97 Encyclopedia (English, 2-CD Deluxe) statically recompiled:
+its x86 is mechanically translated to C that runs on Windows 10/11, and on Linux
+and macOS under Wine. You supply the discs; nothing of the product is in this
+repository.
 
-**It runs.** ENC97.EXE's 1.3 MB of x86 is mechanically translated to C, and the
-recompiled code drives the real application on Windows 11 — CRT and MFC startup,
-`InitInstance`, the app's `Run()` loop, the Encarta UI library, and article
-rendering. Over one interactive session: **18,151,514 dispatched calls, 7,499,024
-of them real MFC virtual dispatches landing in recompiled code** — ending in the
-application's own clean `exit(0)`.
+Part of the [pcrecomp](https://github.com/sp00nznet/pcrecomp) family of PC
+recompilation projects, and follows their shared house style: generated source
+is never distributed, a conformance harness guards what works, and a headless
+mode records runs without a window.
 
-![Encarta 97 running as recompiled code](docs/encarta97-running.png)
+## Status
 
-The encyclopedia is **navigable**, not a static screenshot. Below is MindMaze,
-Encarta's trivia game, played from the recompiled binary — rooms render, the
-maze map fills in as you explore, and scoring accumulates across the run:
+**Alpha, no tagged release yet.** The recompiled application boots, browses
+articles, plays MindMaze, shows pictures and plays video, but it is still a
+*hybrid*: the recompiled app body calls Microsoft's own MFC40, MSVCRT40 and
+EEUIL10 underneath ([ROADMAP.md](ROADMAP.md)).
 
-![MindMaze running from recompiled code](docs/mindmaze.png)
-![MindMaze, deeper into the maze](docs/mindmaze2.png)
-![MindMaze, a new area of the map](docs/mindmaze3.png)
+**Conformance: 9 of 9** checks pass (`tools/regress.py`, recorded in
+[`conformance.json`](conformance.json) on a machine with the disc; CI has no disc
+and reports them as skipped).
 
-**Video plays too.** All 68 clips, decoded by the CD's own 16-bit Indeo driver
-recompiled to C and handed back to Video for Windows — here the Media Gallery
-playing *Rodeo*, one of the 68:
+| Platform | How | State |
+|---|---|---|
+| Windows 10/11 | MSVC or clang-cl, Win32 | everything below works |
+| Linux | cross-built with clang-cl, run under Wine | boots; articles and pictures render; no video yet ([docs/porting.md](docs/porting.md)) |
+| macOS | the same cross build, run under CrossOver | builds in CI; **not yet run on a Mac** |
+| Data tools (`m20dump`, `ftcdecode`, ...) | native C | build on Linux, macOS and Windows |
 
-![Encarta 97 playing video through the recompiled Indeo codec](docs/encarta97-video.gif)
-
-Note that the interface keeps its own colours throughout. An earlier build let
-the clip'''s palette leak into the UI chrome, because the codec advertised 8- and
-16-bit output it did not actually produce correctly; it now offers 24bpp only.
-Measured over the frames above, the toolbar button colour moves by 2, 2 and 6
-levels out of 255 — GIF dither noise, not a palette shift.
-
-## What works
-
-Driven interactively against the real disc:
+On Windows, driven interactively against the real disc:
 
 | | |
 |---|---|
@@ -79,56 +73,116 @@ all. Timing has room to spare: the clips are 10 fps and the codec decodes at
 59 fps (17 ms a frame against a 100 ms budget). Audio is a separate stream that
 MCIAVI plays itself and the video codec never touches.
 
-## Why?
+## Screenshots
 
-Encarta 97 was a landmark multimedia encyclopedia — the gold standard of digital
-reference before Wikipedia. It shipped as a Win32 application targeting Windows
-95/NT, built with MFC 4.0 and MSVC 4.x. On modern Windows 11 it barely runs, due
-to 16-bit thunking code (`ENCBOOT.EXE`, `ENC16.DLL`, `MMPLAYER.EXE` are
-NE/Win16), removed WinG/Win32s compatibility layers, deprecated multimedia APIs
-(ACM streams, custom MCI drivers), proprietary media containers (`.M20`,
-`.FIF`/`.FTT`, `.MMM`), palette-based 256-colour display assumptions, and its
-MSVCRT40/MFC40 dependencies.
+![Encarta 97 running as recompiled code](docs/encarta97-running.png)
 
-The goal is a clean, modern C/C++ codebase that runs natively and can serve as a
-reference implementation for the Encarta data formats.
+The encyclopedia is **navigable**, not a static screenshot. Below is MindMaze,
+Encarta's trivia game, played from the recompiled binary — rooms render, the
+maze map fills in as you explore, and scoring accumulates across the run:
 
-## Building
+![MindMaze running from recompiled code](docs/mindmaze.png)
+![MindMaze, deeper into the maze](docs/mindmaze2.png)
+![MindMaze, a new area of the map](docs/mindmaze3.png)
 
-**Step by step, with what each stage actually costs:
-[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).** The short version:
+**Video plays too.** All 68 clips, decoded by the CD's own 16-bit Indeo driver
+recompiled to C and handed back to Video for Windows — here the Media Gallery
+playing *Rodeo*, one of the 68:
 
-Requires Visual Studio 2022 (Win32 target), CMake 3.20+, and Python 3.11+ with
-`pefile`, `capstone` and `numpy`.
+![Encarta 97 playing video through the recompiled Indeo codec](docs/encarta97-video.gif)
+
+Note that the interface keeps its own colours throughout. An earlier build let
+the clip's palette leak into the UI chrome, because the codec advertised 8- and
+16-bit output it did not actually produce correctly; it now offers 24bpp only.
+Measured over the frames above, the toolbar button colour moves by 2, 2 and 6
+levels out of 255 — GIF dither noise, not a palette shift.
+
+**On Linux**, the same recompiled harness under Wine 10 on Debian 13, from a
+fresh Wine prefix with nothing installed: article "A", its picture decoded by
+the recompiled fractal codec, and the Pinpointer listing 31,108 articles.
+
+![Encarta 97 under Wine on Linux](docs/encarta97-linux.png)
+
+## Getting Started
+
+**Quick start: not available yet.** The house style asks for a one-click
+`Setup.cmd` / `setup.sh`. It cannot be written honestly until the lift stops
+needing a function map from IDA or Ghidra, which a setup script cannot make for
+you. That is the first item in [ROADMAP.md](ROADMAP.md).
+
+**Step by step:** [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md), six
+stages, each useful on its own, with what each one costs. In short:
+
+1. Build the tools, no disc needed ([Building from source](#building-from-source)).
+2. Mount or mirror CD1 ([`tools/localcontent`](tools/localcontent/README.md)).
+3. Read the text, decode the pictures, check the video codec.
+4. Make a function map of your `ENC97.EXE`, lift it, build `recomp_enc97_run`,
+   and run it.
+
+You need a legitimate copy of the product, and Python 3.11+ with `pefile`,
+`capstone` and `numpy` for the lifter and the checks.
+
+## Usage
+
+Run the application from a mirror of CD1, with nothing installed and no disc:
+
+```powershell
+# Windows
+tools\localcontent\run-encarta.ps1 -Content G:\encarta97 -Hold
+```
+
+```sh
+# Linux (Wine) or macOS (CrossOver)
+./play.sh /path/to/encarta97-mirror --hold
+./play.sh /path/to/encarta97-mirror --headless --record run.mp4   # Linux: Xvfb, no window
+```
+
+Check that everything that works still works:
+
+```
+py tools/regress.py            # 9 checks; a missing disc is SKIP, never a pass
+py tools/regress.py --update   # accept the run as the baseline (conformance.json)
+```
+
+Decode a real image from the disc:
+
+```bash
+# extract raw images (use -x; the FTC entries are NOT LZ77-compressed, so -d
+# would corrupt them), then decode one to PNG through the recompiled codec
+m20dump -x "G:\ENCYC97\PICON.M20" -o out_dir
+recomp_decode out_dir\T000009D.FSM "" image.png
+```
+
+`PICON.M20` holds **11,350 FTC images** (`.FSM`) + 49 shared fractal transform
+tables (`.FTT`); all decode to correct full colour through the recompiled codec.
+
+## Building from source
+
+Windows (Visual Studio 2022, CMake 3.20+):
 
 ```bash
 cmake -B build -G "Visual Studio 17 2022" -A Win32
 cmake --build build --config Release
-
-# or one tool at a time
-cmake --build build --config Release --target ftcdecode
 ```
 
-That builds 16 tools from a clean clone and needs no disc. Three things are
-**not** in a clone, because each is derived from your own copy of the product:
-the ENC97 lift (needs a function map from IDA or Ghidra), the `DECO_32` data
-blob, and the recompiled Indeo codec (needs a
-[pcrecomp](https://github.com/sp00nznet/pcrecomp) checkout for the 16-bit
-lifter). [GETTING-STARTED](docs/GETTING-STARTED.md) covers all three.
+Linux and macOS, the Win32 harness and tools, cross-built with clang-cl
+([`cmake/clang-cl-x86.cmake`](cmake/clang-cl-x86.cmake)):
 
-You need a legitimate copy of the product — no original files are distributed
-here. With CD1 mounted, `ENC97_PROFILE` answers the `97Options` profile lookups
-(`CodePath`/`DATPath`/`BookPath`) that Setup would have written, so the app finds
-its content **without installing anything**. To run without the disc, mirror it
-once with [`tools/localcontent`](tools/localcontent/README.md).
-
-Check everything still works with one command:
-
-```bash
-py tools/regress.py          # 9 checks, fast set ~4s; --full ~30s
+```sh
+xwin --accept-license --arch x86 splat --output ~/.xwin   # once
+./build.sh
 ```
 
-A missing CD reports SKIP, never a pass.
+Linux and macOS, the data tools natively with gcc or clang:
+
+```sh
+cmake -S . -B build && cmake --build build
+```
+
+A clean clone builds 11 Win32 tools, or 6 natively. Everything lifted from the
+product (the ENC97 lift, the DECO_32 and ENCAPI32 lifts, the Indeo codec) is
+generated locally from your own copy and gitignored; the targets that need it
+appear once it exists. [GETTING-STARTED](docs/GETTING-STARTED.md) covers each.
 
 ## Tools
 
@@ -142,7 +196,7 @@ A missing CD reports SKIP, never a pass.
 | `m20dump` | `tools/m20dump/` | M20/MVB 2.0 container extractor | Working |
 | `decooracle` | `tools/decooracle/` | Faithful DECO_32.DLL bridge; ground-truth oracle | Working |
 | `ftcdecode` | `tools/ftcdecode/` | Clean-room FTC/FTT/FIF image decoder | Working ([details](tools/ftcdecode/README.md)) |
-| `regress` | `tools/regress.py` | One command that re-checks everything that works | 9 checks |
+| `regress` | `tools/regress.py` | The conformance harness: re-checks everything that works | 9 of 9 |
 | `strdump` / `spamdump` / `datdump` | `tools/` | STR, SPAM and DAT dumpers | Working |
 | `fifdecode` | `tools/fifdecode/` | Old DLL bridge (wrong export signatures) | Superseded by `decooracle` |
 
@@ -170,28 +224,31 @@ routed** and `_initterm` routed so 182 static initializers run lifted.
 The full writeups are in [`tools/recomp/README.md`](tools/recomp/README.md) and
 [`tools/indeo/README.md`](tools/indeo/README.md).
 
-### Real-content image pipeline
+## Why?
 
-```bash
-# 1. mount an Encarta ISO  (PowerShell: Mount-DiskImage CD1ENC97ENC.iso)
-# 2. extract raw images from a container (use -x; the FTC entries are NOT
-#    LZ77-compressed, so -d would corrupt them)
-m20dump -x "G:\ENCYC97\PICON.M20" -o out_dir
-# 3. decode a real image to PNG (auto-loads any referenced FTT from the same dir)
-recomp_decode out_dir\T000009D.FSM "" image.png
-```
+Encarta 97 was a landmark multimedia encyclopedia — the gold standard of digital
+reference before Wikipedia. It shipped as a Win32 application targeting Windows
+95/NT, built with MFC 4.0 and MSVC 4.x. On modern Windows 11 it barely runs, due
+to 16-bit thunking code (`ENCBOOT.EXE`, `ENC16.DLL`, `MMPLAYER.EXE` are
+NE/Win16), removed WinG/Win32s compatibility layers, deprecated multimedia APIs
+(ACM streams, custom MCI drivers), proprietary media containers (`.M20`,
+`.FIF`/`.FTT`, `.MMM`), palette-based 256-colour display assumptions, and its
+MSVCRT40/MFC40 dependencies.
 
-`PICON.M20` holds **11,350 FTC images** (`.FSM`) + 49 shared fractal transform
-tables (`.FTT`); all decode to correct full colour through the recompiled codec.
+The goal is a clean, modern C/C++ codebase that runs natively and can serve as a
+reference implementation for the Encarta data formats.
 
 ## Documentation
 
 | | |
 |---|---|
 | [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) | Build it, step by step — and what each stage needs that a clone does not have |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Where this stands, what is planned, in what order |
+| [docs/porting.md](docs/porting.md) | Linux and macOS: what runs, what it took, what is missing |
+| [docs/architecture.md](docs/architecture.md) | The parts, what each owns, and how data flows between them |
+| [ROADMAP.md](ROADMAP.md) | Where this stands, what is planned, in what order |
+| [CHANGELOG.md](CHANGELOG.md) | What changed |
 | [docs/FORMATS.md](docs/FORMATS.md) | How the file formats are laid out — M20/MVB, `\|Phrases`, topic entries, FTC/FTT/FIF |
-| [docs/INVENTORY.md](docs/INVENTORY.md) | What is on the discs: every binary and data file, and the architecture |
+| [docs/INVENTORY.md](docs/INVENTORY.md) | What is on the discs: every binary and data file |
 | [tools/recomp/README.md](tools/recomp/README.md) | The x86→C lifter, the hybrid boundary, and how it was validated |
 | [tools/indeo/README.md](tools/indeo/README.md) | Recompiling a 16-bit NE video codec, start to finish |
 
@@ -208,6 +265,12 @@ The reverse engineering here stands on other people's published work:
   PE parsing the lifter is built on. Used as libraries, not vendored.
 - **Ghidra**, **IDA Pro** and **Resource Hacker** — function boundaries,
   decompilation and resource extraction.
+- **[Wine](https://www.winehq.org/)** and **CrossOver** — run the Win32 harness
+  on Linux and macOS. Used as programs; nothing from Wine is in this repository.
+- **[xwin](https://github.com/Jake-Shadle/xwin)** — fetches the MSVC CRT and
+  Windows SDK the cross build links against. The cross toolchain file comes from
+  [redalert2-recomp](https://github.com/sp00nznet/redalert2-recomp), contributed
+  there by [@cpressland](https://github.com/cpressland).
 
 `DECO_32.DLL` is a fractal image codec Microsoft licensed from **Iterated
 Systems**. It is a subject of the work here, not a contributor to it.
@@ -216,24 +279,35 @@ Tools and techniques from this project are contributed back to
 **[pcrecomp](https://github.com/sp00nznet/pcrecomp)** — in particular
 `runtime/hybrid/` (the lifted↔real boundary) and `docs/HYBRID.md`.
 
-## Legal
+## Contributors
 
-The project's own code is MIT licensed — see [LICENSE](LICENSE).
+Who found and fixed what is in [CONTRIBUTORS.md](CONTRIBUTORS.md). Contributions
+are welcome; [CONTRIBUTING.md](CONTRIBUTING.md) says how, and where your code
+can and cannot come from.
+
+## License
+
+The project's own code is MIT licensed; see [LICENSE](LICENSE).
 
 That licence covers the tools, the lifter, the runtime and the harness. It does
 not cover Microsoft Encarta 97 Encyclopedia: **no original executables, DLLs or
-fonts are distributed here**, and you need a legitimate copy of the product to
-use any of this. The build deliberately ignores `*.iso`, `analysis/` and the
-40 MB generated lift, all of which are derived from your own copy.
+fonts are distributed here, and no source generated from them.** The lifts and
+function maps are made on your machine from your own copy and are gitignored.
+You need a legitimate copy of the product to use any of this. `DECO_32.DLL`
+implements a fractal image codec Microsoft licensed from Iterated Systems; it
+is a subject of the reverse engineering here, not a part of it.
 
-Content files are the one exception to that, and it is a deliberate one rather
-than an oversight. Read the next paragraph as part of the sentence above.
+Content files are the one exception, and a deliberate one. These files are
+derived from the original product and are outside the MIT grant:
 
-For honesty's sake: a handful of small files *are* derived from the original
-product and are excluded from the MIT grant — the decoder test vectors under
-`fif_test/`, which are image fragments extracted from `PICON.M20`; the oracle
-traces produced by running the original DLL; the `encart97.ann` stub; and the
-screenshots and the video capture under `docs/`. The test vectors are kept
-because the decoders cannot be tested without them, and the video capture is
-Encarta's own content rather than this build's interface. [LICENSE](LICENSE)
-names every one of them, and any of them comes out on request.
+| Files | What they are |
+|---|---|
+| `fif_test/*.ftc`, `*.ftt`, `*.fif` | image fragments extracted from `PICON.M20`, the decoder's test vectors |
+| `fif_test/oracle_out/*` | execution traces and pixel CRCs from running the original `DECO_32.DLL` |
+| `docs/encarta97-running.png`, `encarta97-linux.png`, `encarta97-video.png` | screenshots of the running program |
+| `docs/encarta97-video.gif` | a capture of a clip playing: Encarta's own video content, and the largest file here |
+| `docs/mindmaze.png`, `mindmaze2.png`, `mindmaze3.png` | MindMaze; the interface is this build's, the artwork Encarta's |
+
+The test vectors are kept because the decoders cannot be tested without them.
+If you are Microsoft and would like any of that removed, open an issue and it
+goes.

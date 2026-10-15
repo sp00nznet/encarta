@@ -9,6 +9,9 @@ callee's `ret` pops it), so stack layout and arg access match the original.
 
 Usage:
   py -3.11 lift.py <dll> <ida_funcs.txt> <out.c> 0xADDR [0xADDR ...]
+  py -3.11 lift.py <dll> <ida_funcs.txt> <out.c> --exports
+--exports lifts what the DLL's exports reach by direct call or jump, so a
+target list never has to be written down (or committed).
 
 ida_funcs.txt lines: "0xADDR  size  name" (from IDA). Used for function bounds.
 """
@@ -524,13 +527,34 @@ def load_bounds(path):
     return bounds
 
 
+def closure(roots, bounds, read_va, md):
+    """Every function reachable from roots by a direct call or a jump that
+    leaves its function. Calls through pointers are not seen; a target the
+    lift then misses shows up at run time, as dispatch aborting on it."""
+    seen, todo = set(), [r for r in roots if r in bounds]
+    while todo:
+        t = todo.pop()
+        if t in seen:
+            continue
+        seen.add(t)
+        end = t + bounds[t]
+        for ins in md.disasm(read_va(t, bounds[t]), t):
+            if (ins.mnemonic == "call" or ins.mnemonic.startswith("j")) and ins.operands:
+                op = ins.operands[0]
+                if op.type == X86_OP_IMM:
+                    d = op.imm & 0xffffffff
+                    if not (t <= d < end) and d in bounds:
+                        todo.append(d)
+    return sorted(seen)
+
+
 def main():
     dll, funcs_txt, out_c = sys.argv[1], sys.argv[2], sys.argv[3]
     # targets: explicit 0xADDR args, or "@file" of addrs, or (none) => ALL in funcs_txt
     if len(sys.argv) >= 5 and sys.argv[4].startswith("@"):
         targets = [int(x, 16) for x in open(sys.argv[4][1:]).read().split()]
     else:
-        targets = [int(x, 16) for x in sys.argv[4:]]
+        targets = [int(x, 16) for x in sys.argv[4:] if x != "--exports"]
     import pefile
     pe = pefile.PE(dll, fast_load=True)
     global IMAGE_BASE
@@ -557,6 +581,14 @@ def main():
         print(f"[!] reloc parse failed: {ex}", file=sys.stderr)
     print(f"[*] {len(reloc_vas)} base relocations (address immediates -> GVA)", file=sys.stderr)
     bounds = load_bounds(funcs_txt)
+    if sys.argv[4:5] == ["--exports"]:
+        import pefile as _pf
+        pe.parse_data_directories(directories=[_pf.DIRECTORY_ENTRY['IMAGE_DIRECTORY_ENTRY_EXPORT']])
+        roots = [IMAGE_BASE + e.address for e in pe.DIRECTORY_ENTRY_EXPORT.symbols]
+        md = Cs(CS_ARCH_X86, CS_MODE_32)
+        md.detail = True
+        targets = closure(roots, bounds, read_va, md)
+        print(f"[*] {len(roots)} exports reach {len(targets)} functions", file=sys.stderr)
     if not targets:                       # no addrs given => lift every function
         targets = sorted(bounds)
         print(f"[*] no targets given; lifting ALL {len(targets)} functions", file=sys.stderr)

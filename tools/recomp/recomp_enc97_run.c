@@ -124,9 +124,20 @@ static int lifted_index(uint32_t va)
 /* esp-switch trampoline: run real code (import or real internal) on the emulated
    stack, loading GP regs from the CPU and capturing eax+esp afterwards. */
 static uint32_t T_eax,T_ecx,T_edx,T_ebx,T_esi,T_edi,T_ebp,T_espp4,T_tgt,T_fesp,T_sesp;
+/* Both emulated stacks, as one range: set in main once they are allocated. */
+static uint32_t g_emu_lo, g_emu_hi;
 #pragma warning(disable:4731)   /* we clobber ebp on purpose; push/pop restores it */
 static void call_machine(CPU *c, uint32_t target)
 {
+    /* x86 SEH only accepts a registration record that lies between the TIB's
+       StackLimit (fs:[8]) and StackBase (fs:[4]). Real code runs here on the
+       emulated stack, so without this every exception it raises is unhandled -
+       including the ones it catches itself. Some Windows 11 update after Sep
+       2026 throws (and catches) a wil::ResultException, HRESULT 0x8007007E,
+       inside an MFC40 startup call, and that alone killed the app. Restored after, so the host's own
+       stack probing (__chkstk) still sees its real bounds. */
+    uint32_t sv_base=__readfsdword(4), sv_limit=__readfsdword(8);
+    __writefsdword(4, g_emu_hi); __writefsdword(8, g_emu_lo);
     /* Reentrant: the real code we call can call BACK into lifted code (vtable
        routing), which dispatches imports through call_machine again. The inner
        call would otherwise overwrite T_sesp - the outer's saved host esp - and
@@ -171,6 +182,7 @@ static void call_machine(CPU *c, uint32_t target)
     T_eax=sv_eax; T_ecx=sv_ecx; T_edx=sv_edx; T_ebx=sv_ebx; T_esi=sv_esi;
     T_edi=sv_edi; T_ebp=sv_ebp; T_espp4=sv_espp4; T_tgt=sv_tgt;
     T_fesp=sv_fesp; T_sesp=sv_sesp;
+    __writefsdword(4, sv_base); __writefsdword(8, sv_limit);
 }
 
 static uint8_t *g_tramp_pool; static size_t g_tramp_off;   /* (defined below; fwd for dispatch) */
@@ -478,7 +490,11 @@ static HMODULE load_for(const char *dll)
     char path[MAX_PATH];
     /* Encarta-private DLLs (EEUIL10, DECO_32, ENCAPI32) sit next to the exe. */
     snprintf(path,sizeof path,"%s%s",g_exedir,dll);
-    if (GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES) return LoadLibraryA(path);
+    /* Altered search path: their own imports (EEUIL10 -> MFC40) resolve from
+       that folder too. Windows has MFC40 in SysWOW64 and never noticed; Wine
+       has none, and EEUIL10 failed to load with all 93 of its imports. */
+    if (GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES)
+        return LoadLibraryExA(path,NULL,LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!_stricmp(dll,"MSVCRT40.dll")) return LoadLibraryA("msvcrt.dll");
     return LoadLibraryA(dll);
 }
@@ -722,6 +738,16 @@ static LONG WINAPI regquery_hook(HKEY k, LPCSTR name, LPDWORD res, LPDWORD type,
                                  LPBYTE data, LPDWORD len)
 {
     const char *ov = profile_lookup(name);
+    /* "#N" answers a REG_DWORD - Deluxe=#1 is the one the app needs: without
+       it the 2-CD edition looks for the 1-CD edition's HILITSTD.M20 and MFC
+       throws a CFileException out of startup. */
+    if (ov && ov[0] == '#' && data && len) {
+        if (*len < 4) { *len = 4; return ERROR_MORE_DATA; }
+        *(DWORD *)data = (DWORD)strtoul(ov + 1, NULL, 0); *len = 4;
+        if (type) *type = REG_DWORD;
+        if (g_reg_log) fprintf(stderr, "  reg query  %-30s -> profile %s\n", name, ov), fflush(stderr);
+        return ERROR_SUCCESS;
+    }
     if (ov && data && len) {
         size_t n = strlen(ov) + 1;
         if (*len < n) { *len = (DWORD)n; return ERROR_MORE_DATA; }
@@ -831,6 +857,12 @@ static int map_and_wire(const char *path)
                     }
                     g_ninames++; }
             }
+            /* IAT_LOG: name what did not resolve. Under Wine it is not the same
+               set as on Windows, and that is where a port starts looking. */
+            else if(getenv("IAT_LOG")){
+                if(ent&0x80000000u) fprintf(stderr,"unresolved: %s#%u%s\n",dll,ent&0xFFFF,h?"":" (dll not loaded)");
+                else fprintf(stderr,"unresolved: %s!%s%s\n",dll,(const char*)(base+(ent&0x7FFFFFFF)+2),h?"":" (dll not loaded)");
+            }
         }
     }
     free(file);
@@ -858,6 +890,24 @@ static LONG CALLBACK veh_diag(PEXCEPTION_POINTERS ep)
         fprintf(stderr, "VEH fault 0x%08lX @%08X%s after %lu calls; last lifted=0x%06X last import=0x%08X (%s)\n",
                 code, fa, ova ? "" : " (external)", g_calls, g_last, g_last_import, imp_name(g_last_import));
         if (ova) fprintf(stderr, "  faulting addr is ENC97 original-VA 0x%06X\n", ova);
+        /* An MSVC C++ throw (from MFC's AfxThrow*): name the type, which says
+           which kind of failure it was, and dump the head of the object - for a
+           CFileException that holds m_cause and the OS error. x86 layout:
+           ThrowInfo+12 -> CatchableTypeArray, [1] -> CatchableType, +4 ->
+           TypeDescriptor, whose name starts at +8. */
+        if (code == 0xE06D7363u && ep->ExceptionRecord->NumberParameters >= 3) {
+            const uint32_t *ti = (const uint32_t *)ep->ExceptionRecord->ExceptionInformation[2];
+            const uint32_t *obj = (const uint32_t *)ep->ExceptionRecord->ExceptionInformation[1];
+            if (ti && !IsBadReadPtr(ti, 16)) {
+                const uint32_t *cta = (const uint32_t *)(uintptr_t)ti[3];
+                const uint32_t *ct = cta ? (const uint32_t *)(uintptr_t)cta[1] : NULL;
+                const char *nm = ct ? (const char *)(uintptr_t)ct[1] + 8 : NULL;
+                fprintf(stderr, "  C++ throw of %s\n", nm && !IsBadReadPtr(nm, 4) ? nm : "?");
+            }
+            if (obj && !IsBadReadPtr(obj, 24))
+                fprintf(stderr, "  object: %08X %08X %08X %08X %08X %08X\n",
+                        obj[0], obj[1], obj[2], obj[3], obj[4], obj[5]);
+        }
         if (code == 0xC0000005u && ep->ExceptionRecord->NumberParameters >= 2)
             fprintf(stderr, "  %s %08X\n",
                     ep->ExceptionRecord->ExceptionInformation[0] ? "bad WRITE to" : "bad READ from",
@@ -1021,6 +1071,24 @@ int main(int argc, char **argv)
     { const char *pf = getenv("ENC97_PROFILE");
       if (pf) { strncpy(g_profile, pf, sizeof g_profile - 1); g_profile[sizeof g_profile - 1] = 0; } }
     { const char *h = getenv("R2L_HEAPCHECK"); g_heapcheck = h ? (atoi(h) ? atoi(h) : 1) : 0; }
+    /* ENC97_FONTS: Setup would install MSREF1/MSREF2/PHONETIC system-wide; load
+       the CD's AAMSSTP\FONTS for this process only, so nothing is installed and
+       a fresh machine (or Wine prefix) gets the article text faces. */
+    { const char *fd = getenv("ENC97_FONTS");
+      if (fd && fd[0]) {
+          char pat[MAX_PATH], path[MAX_PATH]; WIN32_FIND_DATAA fdata; int nf = 0;
+          snprintf(pat, sizeof pat, "%s\\*.*", fd);
+          HANDLE fh = FindFirstFileA(pat, &fdata);
+          if (fh != INVALID_HANDLE_VALUE) {
+              do { const char *x = strrchr(fdata.cFileName, '.');
+                   if (x && (!_stricmp(x, ".ttf") || !_stricmp(x, ".fon"))) {
+                       snprintf(path, sizeof path, "%s\\%s", fd, fdata.cFileName);
+                       nf += AddFontResourceExA(path, FR_PRIVATE, 0) > 0; }
+              } while (FindNextFileA(fh, &fdata));
+              FindClose(fh);
+          }
+          fprintf(stderr, "fonts: %d loaded from %s (this process only)\n", nf, fd);
+      } }
     AddVectoredExceptionHandler(1, veh_diag);
     fprintf(stderr,"[1] start\n");
     const char *exe = (argc>=2)?argv[1]:"C:\\encarta\\analysis\\ENC97.EXE";
@@ -1044,8 +1112,11 @@ int main(int argc, char **argv)
     qsort(g_lifted,NLIFTED,sizeof *g_lifted,cmp_entry);
     if(g_lift_hi - g_lift_lo == 1 && g_lift_lo < (int)NLIFTED)
         fprintf(stderr,"lift index %d = 0x%06X\n", g_lift_lo, g_lifted[g_lift_lo].va);
-    g_estack=VirtualAlloc(NULL,EMU_STACK,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
-    g_r2l_arena=VirtualAlloc(NULL,R2L_ARENA,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    /* One block for both emulated stacks, so call_machine can hand the TIB a
+       single range that holds whichever one esp is on. */
+    g_estack=VirtualAlloc(NULL,EMU_STACK+R2L_ARENA,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    g_r2l_arena=g_estack+EMU_STACK;
+    g_emu_lo=(uint32_t)(uintptr_t)g_estack; g_emu_hi=g_emu_lo+EMU_STACK+R2L_ARENA;
     g_r2l_top=(uint32_t)(uintptr_t)(g_r2l_arena+R2L_ARENA);
     g_tramp_pool=VirtualAlloc(NULL,0x200000,MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE);
 

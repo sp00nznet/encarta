@@ -19,39 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----------------------------------------------------------------------------
-Scope
-
-The MIT licence above covers the code in this repository: the analysis and
-extraction tools, the x86->C lifter, the recompilation runtime and harness,
-the build files, and the documentation.
-
-It does NOT and cannot cover Microsoft Encarta 97 Encyclopedia itself. The
-original executables, DLLs, fonts and content files are Microsoft's, are not
-distributed here, and you need a legitimate copy of the product to use any of
-this. DECO_32.DLL implements a fractal image codec licensed from Iterated
-Systems; it is a subject of the reverse engineering here, not a part of it.
-
-A small number of files in this repository are DERIVED from that original
-product and are therefore outside the MIT grant as well. They are kept because
-the decoders are untestable without them:
-
-  fif_test/*.ftc, *.ftt, *.fif    image fragments extracted from PICON.M20,
-                                  used as decoder test vectors
-  fif_test/oracle_out/*           execution traces and pixel CRCs produced by
-                                  running the original DECO_32.DLL
-  encart97.ann                    4-byte annotation stub
-  tools/localcontent/encart97.ann the same stub, second copy
-  docs/encarta97-running.png      a screenshot of the running program
-  docs/encarta97-video.png        a screenshot of a clip playing
-  docs/encarta97-video.gif        a capture of a clip playing. This one is
-                                  Encarta's own video content, not this
-                                  build's interface, and it is the largest
-                                  file in the repository.
-  docs/mindmaze.png               screenshots of MindMaze. The interface is
-  docs/mindmaze2.png              this build's; the artwork in it is
-  docs/mindmaze3.png              Encarta's.
-
-If you are Microsoft and would like any of that removed, open an issue and it
-goes.

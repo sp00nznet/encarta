@@ -1,0 +1,15 @@
+{
+ "passed": 9,
+ "of": 9,
+ "passing": [
+  "codec loads",
+  "decoder byte-exact",
+  "ICM returns picture",
+  "VFW finds codec",
+  "phrase encoding",
+  "article text",
+  "media list",
+  "app reaches window",
+  "leaves match real"
+ ]
+}

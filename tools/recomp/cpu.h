@@ -31,6 +31,13 @@ typedef struct {
     uint32_t fpu_sw;   /* status word: only C0/C1/C2/C3 condition bits modelled */
 } CPU;
 
+/* Every harness defines these; lifted code calls them for anything it cannot
+   reach with a direct call. Declared here because clang 16+ rejects the
+   implicit declaration the generated C would otherwise rely on. */
+void dispatch(CPU *c, uint32_t target);
+void dispatch_jmp(CPU *c, uint32_t target);
+void dispatch_indirect(CPU *c, uint32_t target);
+
 /* ---- partial register access (preserve unaffected bits, like x86) ---- */
 #define R8L(r)        ((uint8_t)(r))
 #define R8H(r)        ((uint8_t)((r) >> 8))

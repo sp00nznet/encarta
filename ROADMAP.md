@@ -1,7 +1,7 @@
 # Roadmap
 
 Where it stands, what is planned, and in what order. The short version -
-what works today - is in the [README](../README.md); this is the long one.
+what works today - is in the [README](README.md); this is the long one.
 
 Where it stands: the application body is recompiled C; MFC40, MSVCRT40,
 EEUIL10 and Windows itself are still real code underneath. That is a
@@ -26,7 +26,7 @@ working program, not yet a port. The distance between the two is this file.
 - [x] Set up build system (CMake + MSVC, Win32 target)
 - [x] Reverse engineer DECO_32.DLL (FTC/FIF image codec) — **fully statically
       recompiled to native C** (all 28 exports, 137-function closure —
-      [`tools/recomp`](../tools/recomp/README.md))
+      [`tools/recomp`](tools/recomp/README.md))
 - [x] Reverse engineer M20/MVB 2.0 container format (`m20dump`: B-tree walk,
       leaf-page parse, extract; `.FSM` entries are uncompressed `FTC\0` images)
 - [x] Write standalone content extraction tools (`m20dump`, `decooracle`, `recomp`)
@@ -80,19 +80,19 @@ approach proven on DECO_32, rather than hand-reimplementation:
       (`CodePath`/`DATPath`/`BookPath`) that Setup would have written — so with
       CD1 mounted the app finds its content **without installing anything**
 - [x] **Encarta 97 runs**: toolbar, article text, and its illuminated-manuscript
-      artwork decoded and drawn ([screenshot](encarta97-running.png))
+      artwork decoded and drawn ([screenshot](docs/encarta97-running.png))
 - [x] **Driven interactively** — article browsing, search, dictionary, the media
       archive, audio and MindMaze all work from recompiled code
 - [x] **Indeo 3.2 decoder** — the 16-bit `IR32.DLL` driver statically
       recompiled and **byte-exact**: 68 of 68 first frames decode to 100.00%
       identical pixels against FFmpeg, and the RGB frame the codec itself
       returns matches at correlation 1.0000
-      ([`tools/indeo`](../tools/indeo/README.md))
+      ([`tools/indeo`](tools/indeo/README.md))
 - [x] **Video codec bridged to VFW** — `ir32vfw.dll` registers the
       recompiled decoder with `ICInstall`, and the ENC97 harness confirms VFW
       finds it in-process. 68 of 68 clips decode through `ICM`
 - [x] **Clips play in the app** — the Media Gallery lists all 68 videos and
-      plays them ([screenshot](encarta97-video.png)); no other Indeo
+      plays them ([screenshot](docs/encarta97-video.png)); no other Indeo
       decoder exists on the machine, so those frames are the recompiled
       codec's. 10 fps content, 59 fps decode
 - [x] SPAM media (article pictures) — `AM16.DLL`/`AMF16.DLL` beside the app
@@ -115,13 +115,29 @@ See `tools/recomp/README.md` for the full ENC97 recompilation writeup.
       Windows, so no FFmpeg or reimplementation was needed
 - [ ] MIDI playback
 - [x] CD check / volume label — answered per-process for one drive letter
-      ([`tools/localcontent`](../tools/localcontent/README.md))
+      ([`tools/localcontent`](tools/localcontent/README.md))
 - [x] Content from a local directory — mirror the disc once and run from
       it, **with no disc in the machine**: 26 file operations on the copy and
       none anywhere else
 - [ ] Testing and compatibility
 
 ## What is next
+
+**0. Lift without IDA.** Every lift here starts from a function map made by IDA
+or Ghidra, which a one-click `Setup.cmd` / `setup.sh` cannot make for you, so
+the README's Quick start waits on this. pcrecomp's own `disasm32` is the
+candidate (house style: fix the toolkit rather than depend on IDA). Measured
+against the IDA map on 2026-10-14:
+- [ ] **ENC97.EXE**: disasm32 finds 16,907 function starts against IDA's
+      7,326; 7,214 agree, 112 are IDA-only, 9,693 disasm32-only. `lift.py` over
+      its map stops on `push cs` in a "function" that is data
+- [ ] **DECO_32.DLL**: `lift.py --exports` over disasm32's map reaches 194
+      functions, a strict superset of IDA's 137, and lifts cleanly, but
+      `recomp_decode` then segfaults: disasm32 ends some functions earlier
+      than IDA does (`0x110048A0` is split off its parent), so lifted bodies
+      stop short
+- [ ] Then: `Setup.cmd` and `setup.sh`, running exactly the steps of
+      GETTING-STARTED
 
 **1. Prove it, and stop it regressing.** The app boots to the article view —
 that is one code path. Everything else (search, atlas, timeline, MindMaze,
@@ -141,6 +157,10 @@ bugs the way `sub_4BB6F0` did.
       fourth on `sub_50BE80`, a distance test reading its arguments as doubles
       from a stack the harness never filled. Now filled with a known pattern
       and each side run twice under two of them; 15 runs, same number
+- [ ] **One unexplained sweep failure**: on 2026-10-14 "leaves match real"
+      failed once in 0.1 s ("sweep did not pass"), in the run right after the
+      app-boot check had crashed. 18 runs since, 15 of them back to back, all
+      passed. Not reproduced, so not fixed
 - [~] **Past the leaves: the callee policy is measured, not yet running.**
       5,316 functions call something. The two barriers are entangled — against
       a 1,059 baseline, stubbing imports alone reaches 1,127 and tolerating
@@ -160,18 +180,30 @@ in cost order:
       reimplement the used subset; a decision, not an obligation
 - [x] Run from a local content directory — `mirror-cd.ps1` copies the
       disc, `run-encarta.ps1` runs from the copy
-      ([`tools/localcontent`](../tools/localcontent/README.md))
+      ([`tools/localcontent`](tools/localcontent/README.md))
 
 **3. The 1997 assumptions.** Palette-based 256-colour rendering, GDI, ACM audio,
 MIDI. Replace with modern equivalents once the code above is ours to change.
 Indeo is already handled - not by replacing it, but by recompiling the driver
 the disc ships (all 68 clips are Indeo 3.2; there is no Cinepak on CD1).
 
-**4. Then the interesting question: 64-bit and non-Windows.** Today everything
-is 32-bit because lifted registers hold real host pointers. Both need the same
-thing — a memory model that isn't "the register is the address".
+**4. Linux and macOS.** ([docs/porting.md](docs/porting.md))
+- [x] **Under Wine on Linux**: the same Win32 harness, cross-built with
+      clang-cl (`build.sh`), boots and renders articles and pictures from a
+      fresh prefix (`play.sh`), with `--headless --record` under Xvfb
+- [ ] **macOS under CrossOver**: builds in CI; not yet run on a Mac
+- [ ] **Video off Windows**: move `tools/indeo/runtime/build.bat` into CMake so
+      the cross build has `ir32vfw.dll`, then find out whether Wine's MCIAVI
+      takes a codec installed with `ICInstall`
+- [ ] **Native**, no Wine: lift MFC40, MSVCRT40 and EEUIL10 too (item 2), and
+      answer what they import from pcrecomp's `win32hle`, as a 32-bit (`-m32`)
+      Linux process the way redalert2-recomp's native build runs
 
-**Formats** — documented in **[docs/FORMATS.md](FORMATS.md)**
+**5. 64-bit.** Today everything is 32-bit because lifted registers hold real
+host pointers. 64-bit needs a memory model that isn't "the register is the
+address".
+
+**Formats** — documented in **[docs/FORMATS.md](docs/FORMATS.md)**
 - [x] M20/MVB 2.0 container, B-tree directory, internal file layout
 - [x] **`|Phrases` phrase dictionary decoded** — 1,808 entries, byte-exact
       against the size its own header declares
@@ -198,6 +230,11 @@ all of which are real, and belong back in
 - [ ] shifts do not set OF
 - [ ] `mul`/`imul` write flags x86 leaves undefined
 - [ ] 16-bit `adc`/`sbb` lose CF when `src + cf` wraps
+- [ ] `runtime/hybrid/hybrid.c` switches `esp` to the guest stack without
+      moving the TIB's StackBase/StackLimit, the bug that killed this
+      harness at startup once Windows 11 threw (and caught) an exception
+      inside MFC40 ([porting.md](docs/porting.md#what-it-took)). native32
+      already sets them
 - [ ] `"FIFF"` FIF variant + non-full-resolution scaling paths
 
 ## Other Encarta editions
@@ -230,7 +267,7 @@ than the last.
   moved the rendering forward, and where the answer is most likely "some of the
   format tools, none of the recompilation".
 - **93/94/95** are Viewer 2.0 as well but 16-bit applications, which is a
-  different lift problem entirely — and one the [Indeo work](../tools/indeo/README.md)
+  different lift problem entirely — and one the [Indeo work](tools/indeo/README.md)
   already shows is tractable, since `IR32.DLL` was a 16-bit NE module.
 - **World Atlas / Virtual Globe** share the container and codec but not the
   application. The format tools should carry; nothing else will.
@@ -264,6 +301,7 @@ What would help, and does not have this problem:
       need no original code at all. Those are shippable as binaries today, and
       would be genuinely useful to people who only want their disc's contents
       out.
-- [ ] **CI that builds a clone on every push**, so the claim in
-      [GETTING-STARTED](GETTING-STARTED.md) that a fresh clone builds 16 targets
-      stops being a thing someone checked once by hand.
+- [x] **CI that builds a clone on every push** (`.github/workflows/ci.yml`):
+      the data tools natively on Linux and macOS, the Win32 tree with MSVC,
+      and the clang-cl cross build on Linux and macOS. The native and MSVC
+      jobs then run `tools/regress.py`, which reports all SKIP without a disc.

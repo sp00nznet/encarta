@@ -4,7 +4,8 @@ Six stages, each one useful on its own. Stop at whichever gets you what you
 came for — most people want stage 1 or 3 and never need 6.
 
 Every step below was run from a clean `git clone` of this repository on
-Windows 11 while writing this page. Where something cannot be reproduced from a
+Windows 11 while writing this page. The Linux and macOS route is noted where it
+differs, and in full in [porting.md](porting.md). Where something cannot be reproduced from a
 clone, it says so and why, rather than leaving you to find out.
 
 | Stage | What you get | What it costs you |
@@ -20,11 +21,13 @@ clone, it says so and why, rather than leaving you to find out.
 
 ## Prerequisites
 
-- **Windows 10 or 11, x64.** Windows-only today — see
-  [Why Windows only](#why-windows-only) at the end.
-- **Visual Studio 2022** with the *Desktop development with C++* workload.
-  Everything targets **Win32/x86**, not x64; that is not a preference, it is
-  [structural](#why-windows-only).
+- **Windows 10 or 11, x64**, with **Visual Studio 2022** and the *Desktop
+  development with C++* workload. Everything targets **Win32/x86**, not x64;
+  that is not a preference, it is [structural](#why-32-bit-windows-code).
+- **Or Linux or macOS**, with clang, lld, CMake, Ninja and
+  [xwin](https://github.com/Jake-Shadle/xwin) to cross-build that same Win32
+  code, and Wine (Linux) or CrossOver (macOS) to run it. The data tools also
+  build natively with gcc or clang.
 - **CMake 3.20 or newer** (`cmake_minimum_required(VERSION 3.20)`).
 - **Python 3.11+** with `pefile`, `capstone` and `numpy`:
   ```powershell
@@ -40,7 +43,7 @@ clone, it says so and why, rather than leaving you to find out.
   |---|---|---|
   | Encarta 97 Encyclopedia, English, **2-CD Deluxe** | yes | what everything here was developed against |
   | Encarta 97 Encyclopedia, English, 1-CD | mostly | same engine; CD2-only media is absent |
-  | Encarta 97 **World Atlas**, any Encarta 96/98/99 | untested | see [Other editions](ROADMAP.md#other-encarta-editions) |
+  | Encarta 97 **World Atlas**, any Encarta 96/98/99 | untested | see [Other editions](../ROADMAP.md#other-encarta-editions) |
 
 ## 1. Build the tools
 
@@ -51,23 +54,29 @@ cmake -B build -G "Visual Studio 17 2022" -A Win32
 cmake --build build --config Release
 ```
 
-That is the whole of stage 1 and it needs no disc. It produces 16 executables
+That is the whole of stage 1 and it needs no disc. It produces 11 executables
 under `build\tools\*\Release\`:
 
 ```
 datdump  decooracle  decotrace  fifdecode  ftcdecode  ftcprobe  indeodec
-m20dump  recomp_decode  recomp_enc97  recomp_enc97_iat  recomp_encapi
-spamdump  strdump  test_vlc  test_vlc_auto
+m20dump  recomp_enc97_iat  spamdump  strdump
 ```
 
-Two more targets appear only once you have generated their inputs from your own
-copy of the product, because those inputs are derived files we do not
-redistribute:
+On Linux or macOS, `./build.sh` makes the same 11 as Win32 executables under
+`build-x86/` (run `xwin --accept-license --arch x86 splat --output ~/.xwin`
+once first), and `cmake -S . -B build && cmake --build build` makes the six data
+tools natively.
+
+The rest appear only once you have generated their inputs from your own copy of
+the product, because those inputs are derived files we do not redistribute:
 
 | Target | Needs | Made in |
 |---|---|---|
-| `recomp_decode_standalone` | `tools/recomp/deco32_data.c` | [stage 4](#4-decode-the-pictures) |
-| `recomp_enc97_full`, `recomp_enc97_run` | `tools/recomp/enc97_full.c` | [stage 6](#6-run-the-application) |
+| `recomp_decode` | `tools/recomp/lifted_codec.c` | [stage 4](#4-decode-the-pictures) |
+| `recomp_decode_standalone` | that, and `tools/recomp/deco32_data.c` | [stage 4](#4-decode-the-pictures) |
+| `recomp_enc97_run` | `tools/recomp/enc97_full.c` | [stage 6](#6-run-the-application) |
+| `recomp_enc97_full` | that, and the `find_*.py` headers | [tools/recomp](../tools/recomp/README.md) |
+| `recomp_encapi`, `recomp_enc97`, `test_vlc`, `test_vlc_auto` | their own small lifts | [tools/recomp](../tools/recomp/README.md) |
 
 CMake guards both with `if(EXISTS ...)`, so a clone without them configures and
 builds cleanly rather than failing — which is also why they are silently absent
@@ -134,6 +143,18 @@ $env:ENC97_M20 = "D:\wherever\enc_dir"     # absolute; a relative path
 ```
 
 ## 4. Decode the pictures
+
+First lift the codec from your own `DECO_32.DLL`. That needs a function map,
+made the same way as ENC97's in [stage 6](#6-run-the-application). `--exports`
+lifts what the DLL's 28 exports reach by direct call, so no list of addresses
+has to be kept anywhere:
+
+```powershell
+py tools\recomp\lift.py analysis\DECO_32.DLL deco_funcs.txt tools\recomp\lifted_codec.c --exports
+cmake -B build -G "Visual Studio 17 2022" -A Win32          # picks up the new file
+```
+
+Then:
 
 ```powershell
 build\tools\m20dump\Release\m20dump.exe -x $CD1\ENCYC97\PICON.M20 -o picon_dir
@@ -252,9 +273,22 @@ cd tools\localcontent
 .\run-encarta.ps1 -Content G:\encarta97 -Hold
 ```
 
-`-Hold` keeps the window open so you can click around. The script sets the four
+`-Hold` keeps the window open so you can click around. The script sets the
 environment variables the harness needs (`ENC97_PROFILE`, `ENC97_CDROM`,
-`ENC97_REDIRECT`, `IR32_DLL`) and prints how to undo the `subst` it makes.
+`ENC97_REDIRECT`, `ENC97_FONTS`, `IR32_DLL`) and prints how to undo the `subst`
+it makes. `ENC97_PROFILE` answers what Setup would have written to the registry,
+`Deluxe`, `DiscPath0` and the paths among them, so nothing is installed.
+
+On Linux or macOS, after `./build.sh`:
+
+```sh
+./play.sh /path/to/encarta97-mirror --hold                        # Wine / CrossOver
+./play.sh /path/to/encarta97-mirror --headless --record run.mp4   # Linux, no window
+```
+
+`play.sh` does the same job, maps the content as drive H: in the Wine prefix,
+and copies MFC40 and MSVCRT40 from CD1 beside `ENC97.EXE`, since Wine has
+neither. There is no video yet; [porting.md](porting.md) says why.
 Copy `tools\indeo\runtime\build\ir32vfw.dll` next to `recomp_enc97_run.exe`
 first, or video will not play — the CMake build does that for you if stage 5 ran
 before this one.
@@ -290,25 +324,30 @@ still failed`. Both are resource pressure, not decoder faults — the same check
 pass on a re-run. If you see either while something large is compiling, that is
 why.
 
-## Why Windows only
+## Why 32-bit Windows code
 
-Everything here is 32-bit x86 on Windows, and both halves of that are load-bearing.
+Everything here is 32-bit x86 Windows code, even when it runs on Linux or macOS
+(under Wine), and both halves of that are load-bearing.
 
 **32-bit** is the lifter's memory model. `cpu.h` keeps the guest registers as
 `uint32_t` and a lifted `mov eax, [ebx]` dereferences `ebx` as a real host
 pointer — so every address the recompiled code touches has to fit in 32 bits.
-That is why targets are linked `/LARGEADDRESSAWARE:NO`, and why
-`recomp_enc97_run` is based at `0x60000000`: the mapped image has to land at
-ENC97's preferred base with delta 0. Moving to 64-bit is not a compiler flag,
+That is why targets are linked `/LARGEADDRESSAWARE:NO`. ENC97 itself no longer
+has to land at its preferred base: the harness applies its relocations and the
+lifter wraps every relocatable immediate in `GVA()`, so it runs wherever the OS
+puts it (delta +35,454,976 on Windows 11 and +8,323,072 under Wine, both
+measured 2026-10-14). `recomp_enc97_run` is still based at `0x60000000`, which
+keeps the host out of the low range. Moving to 64-bit is not a compiler flag,
 it is a different memory model.
 
 **Windows** is what is underneath. This is a hybrid, not a port: the recompiled
 application calls out to real MFC40, MSVCRT40 and Win32, and real MFC calls back
 into recompiled code through a `__thiscall` trampoline. Video goes out through
 Video for Windows to MCIAVI in the app's own process. Replacing that surface —
-`EEUIL10.DLL` first, then MFC40 — is [the roadmap](ROADMAP.md#2-shrink-the-real-code-surface),
-and it is the same work that would make another operating system possible.
+`EEUIL10.DLL` first, then MFC40 — is [the roadmap](../ROADMAP.md#2-shrink-the-real-code-surface),
+and it is the same work that would make a native Linux or macOS build possible.
+Until then, Wine supplies the Windows underneath ([porting.md](porting.md)).
 
-The tools that only parse data — `m20dump`, `mvbtext`, `strdump`, `spamdump`,
-`datdump`, `ftcdecode` — have no such constraint and are the obvious first thing
-to make portable.
+The tools that only parse data — `m20dump`, `strdump`, `datdump`, `ftcdecode`,
+`indeodec`, and the Python `mvbtext` — have no such constraint and build
+natively anywhere.

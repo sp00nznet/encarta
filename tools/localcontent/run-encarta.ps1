@@ -110,7 +110,11 @@ if ($NoSubst) {
     $books = "$letter`:\ENCYC97\"
     $ir32  = "$letter`:\AAMSSTP\SYSTEM16\IR32.DLL"
 }
-$env:ENC97_PROFILE = "CodePath=$appPath;DATPath=$appPath;BookPath=$books"
+# Deluxe=#1: the 2-CD edition. Setup writes it; without it the app asks for the
+# 1-CD edition's HILITSTD.M20 and startup throws.
+$env:ENC97_PROFILE = "CodePath=$appPath;DATPath=$appPath;BookPath=$books;DiscPath0=$letter`:\;Deluxe=#1"
+# Setup would install these fonts; the harness loads them for its own process.
+$env:ENC97_FONTS   = Join-Path $Content "AAMSSTP\FONTS"
 $env:MSGBOX_LOG     = "1"     # answer the startup dialogs instead of blocking
 $env:NO_PRINTDLG    = "1"     # the printer query can stall on a machine with none
 if ($Hold)     { $env:HOLD = "1" }     else { Remove-Item Env:HOLD -ErrorAction SilentlyContinue }

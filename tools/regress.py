@@ -15,12 +15,18 @@ being byte-exact. This is the script that would have caught it.
     py tools/regress.py              the fast set, a couple of minutes
     py tools/regress.py --full       every frame rather than six
     py tools/regress.py --list       what it would run, and why each is skipped
+    py tools/regress.py --update     ...and accept this run as the baseline
+
+The baseline (conformance.json at the repo root) records which checks passed on
+a machine with the disc. One of those failing now is a regression; the README's
+figure is that file's count.
 
 A check whose inputs are missing is reported as SKIP, never as a pass. The
 exit code is nonzero only for real failures, so this is usable in a hook
 without a CD in the drive.
 """
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -29,6 +35,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
+BASELINE = os.path.join(REPO, "conformance.json")
 
 IR32_DLL_CANDIDATES = [
     r"H:\AAMSSTP\SYSTEM16\IR32.DLL",
@@ -171,8 +178,8 @@ def check_app_boots(a):
     functions, the 914-import IAT, the content path and the codec bridge - and
     the one a lifter change is most likely to break silently.
     """
-    exe = os.path.join(REPO, "build", "tools", "recomp", "Release",
-                       "recomp_enc97_run.exe")
+    exe = os.environ.get("ENC97_HARNESS") or os.path.join(
+        REPO, "build", "tools", "recomp", "Release", "recomp_enc97_run.exe")
     app = os.path.join(REPO, "analysis", "ENC97.EXE")
     if not os.path.exists(exe):
         return "skip", "recomp_enc97_run.exe not built"
@@ -184,7 +191,8 @@ def check_app_boots(a):
     appdir = os.path.join(REPO, "analysis") + "\\"
     env = {
         "ENC97_PROFILE": "CodePath=%s;DATPath=%s;BookPath=%s\\ENCYC97\\"
-                         % (appdir, appdir, content.rstrip("\\")),
+                         % (appdir, appdir, content.rstrip("\\")) + ";DiscPath0=H:\\;Deluxe=#1",
+        "ENC97_FONTS": content.rstrip("\\") + "\\AAMSSTP\\FONTS",
         "ENC97_CDROM": content[0],
         "MSGBOX_LOG": "1",
         "NO_PRINTDLG": "1",
@@ -270,6 +278,8 @@ def main():
                     help="every frame rather than a sample of six")
     ap.add_argument("--list", action="store_true", help="list the checks and exit")
     ap.add_argument("-k", metavar="SUBSTR", help="only checks matching SUBSTR")
+    ap.add_argument("--update", action="store_true",
+                    help="accept this run as the baseline (conformance.json)")
     a = ap.parse_args()
 
     checks = [(n, f) for n, f in CHECKS if not a.k or a.k.lower() in n.lower()]
@@ -299,6 +309,22 @@ def main():
     nfail = sum(r.status == "fail" for r in results)
     nskip = sum(r.status == "skip" for r in results)
     print("\n%d passed, %d failed, %d skipped" % (npass, nfail, nskip))
+    try:
+        with open(BASELINE) as f:
+            base = json.load(f)
+        lost = [r.name for r in results
+                if r.name in base["passing"] and r.status == "fail"]
+        print("baseline: %d of %d%s" % (base["passed"], base["of"],
+              "; REGRESSED: " + ", ".join(lost) if lost else ""))
+    except FileNotFoundError:
+        print("baseline: none yet (--update on a machine with the disc)")
+    if a.update and not a.k:
+        with open(BASELINE, "w") as f:
+            json.dump({"passed": npass, "of": len(results),
+                       "passing": [r.name for r in results if r.status == "pass"]},
+                      f, indent=1)
+            f.write("\n")
+        print("baseline written to conformance.json")
     if nskip:
         print("skipped checks are NOT passes - their inputs were missing:")
         for r in results:

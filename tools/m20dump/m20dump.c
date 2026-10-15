@@ -17,7 +17,13 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <sys/stat.h>
+#ifdef _WIN32
 #include <direct.h>
+#define mkdir(p) _mkdir(p)
+#else
+#include <sys/types.h>
+#define mkdir(p) mkdir((p), 0777)
+#endif
 #include "m20format.h"
 
 /* ------------------------------------------------------------------ */
@@ -35,7 +41,7 @@ static bool make_dir(const char *path)
     struct stat st;
     if (stat(path, &st) == 0)
         return true;
-    return _mkdir(path) == 0;
+    return mkdir(path) == 0;
 }
 
 /* Make a filename safe for the filesystem */
