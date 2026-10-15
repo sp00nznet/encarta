@@ -57,6 +57,6 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.xwin
-          key: xwin-x86-${{ env.XWIN_VERSION }}
+          key: xwin-x86-${{ runner.os }}-${{ env.XWIN_VERSION }}  # per OS: a Linux splat restored on macOS loses its case-variant links
       - run: '[ -d ~/.xwin/crt/lib/x86 ] || xwin --accept-license --arch x86 splat --output ~/.xwin'
       - run: ./build.sh
