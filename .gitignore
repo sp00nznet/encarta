@@ -55,3 +55,12 @@ tools/indeo/runtime/build/
 # Function lists of DECO_32.DLL (a disassembler's or a trace's output)
 tools/decooracle/deco_funcs.txt
 tools/decooracle/hot_functions.txt
+
+# What Setup.cmd / setup.sh make from your own disc, and their logs
+content/
+tools/recomp/funcs.txt
+build-*/
+.venv/
+setup.log
+Encarta 97.cmd
+Encarta 97.sh

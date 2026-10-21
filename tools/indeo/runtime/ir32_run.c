@@ -719,3 +719,11 @@ int main(int argc, char **argv)
     return 2;
 }
 #endif  /* IR32_NO_MAIN */
+
+/* pcrecomp's lift16 calls this when a guest div or idiv would fault (#DE), as
+   its own win16 host does: say so and leave the registers alone. */
+void recomp_div0(const char *kind)
+{
+    static int fired = 0;
+    if (fired++ < 6) fprintf(stderr, "[DIV0] IR32 %s by zero; registers left unchanged\n", kind);
+}

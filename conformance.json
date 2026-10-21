@@ -1,7 +1,8 @@
 {
- "passed": 9,
- "of": 9,
+ "passed": 10,
+ "of": 10,
  "passing": [
+  "function map",
   "codec loads",
   "decoder byte-exact",
   "ICM returns picture",

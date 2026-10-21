@@ -19,7 +19,7 @@ set HERE=%~dp0
 set HERE=%HERE:~0,-1%
 set INDEO=%HERE%\..
 if not defined PCRECOMP set PCRECOMP=G:\recomp\pc\tools
-if not exist "%PCRECOMP%\runtime\recomp16.h" (
+if not exist "%PCRECOMP%\runtime\recomp16\cpu.h" (
     echo set PCRECOMP to a pcrecomp checkout ^(https://github.com/sp00nznet/pcrecomp^)
     echo   currently: %PCRECOMP%
     exit /b 2
@@ -39,9 +39,12 @@ if not defined VSINSTALLDIR (
 :havevc
 
 if not exist "%OUT%" mkdir "%OUT%"
+if not exist "%OUT%\vfwobj" mkdir "%OUT%\vfwobj"
+if not exist "%OUT%\dllobj" mkdir "%OUT%\dllobj"
 
 echo [1/2] lifting every code segment
-py "%INDEO%\lift_all.py" "%~1" -o "%OUT%" || exit /b 1
+if not defined PYTHON set PYTHON=py
+"%PYTHON%" "%INDEO%\lift_all.py" "%~1" -o "%OUT%" || exit /b 1
 
 echo [2/2] compiling
 rem build.bat <IR32.DLL> [watch]

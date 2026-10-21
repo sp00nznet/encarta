@@ -1,0 +1,4 @@
+# cmd needs CRLF for goto and labels; GitHub zips (the installer) honour this
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.sh  text eol=lf

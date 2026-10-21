@@ -1,0 +1,19 @@
+{
+  "title": "Encarta 97",
+  "repo": "sp00nznet/encarta",
+  "accent": "#c8102e",
+  "note": {
+    "windows": "The first build takes 15 to 30 minutes and about 2 GB. Python and the Visual Studio Build Tools are installed if they are missing; the Build Tools are about 3 GB and add 15 to 30 minutes, and Windows asks for permission once.",
+    "linux": "The first build takes 15 to 30 minutes and about 3 GB, and Encarta runs under Wine, without video for now. It needs clang, lld, llvm, cmake, ninja, Wine (with 32-bit support) and Python 3 from your package manager; if any are missing it says which, with the command to install them. It downloads xwin and, through it, Microsoft's C runtime and Windows SDK (about 1 GB, under Microsoft's licence)."
+  },
+  "game": {
+    "name": "Encarta 97 (CD1)",
+    "files": ["ENCYC97/ENCARTA.M20|encyc97/encarta.m20|*.iso"]
+  },
+  "sources": [{ "repo": "sp00nznet/pcrecomp", "ref": "c5376ff63e6e37d52880373c3c584f458dfa2ff0", "dir": "pcrecomp" }],
+  "setup": {
+    "windows": ["cmd", "/c", "Setup.cmd", "-Yes", "-GameDir", "{game}"],
+    "linux": ["bash", "setup.sh", "--yes", "--game-dir", "{game}"]
+  },
+  "play": "Encarta 97.*"
+}

@@ -123,21 +123,29 @@ See `tools/recomp/README.md` for the full ENC97 recompilation writeup.
 
 ## What is next
 
-**0. Lift without IDA.** Every lift here starts from a function map made by IDA
-or Ghidra, which a one-click `Setup.cmd` / `setup.sh` cannot make for you, so
-the README's Quick start waits on this. pcrecomp's own `disasm32` is the
-candidate (house style: fix the toolkit rather than depend on IDA). Measured
-against the IDA map on 2026-10-14:
-- [ ] **ENC97.EXE**: disasm32 finds 16,907 function starts against IDA's
-      7,326; 7,214 agree, 112 are IDA-only, 9,693 disasm32-only. `lift.py` over
-      its map stops on `push cs` in a "function" that is data
-- [ ] **DECO_32.DLL**: `lift.py --exports` over disasm32's map reaches 194
-      functions, a strict superset of IDA's 137, and lifts cleanly, but
-      `recomp_decode` then segfaults: disasm32 ends some functions earlier
-      than IDA does (`0x110048A0` is split off its parent), so lifted bodies
-      stop short
-- [ ] Then: `Setup.cmd` and `setup.sh`, running exactly the steps of
-      GETTING-STARTED
+**0. Lift without IDA.** Every lift here started from a function map made by
+IDA or Ghidra, which a one-click `Setup.cmd` / `setup.sh` cannot make for you.
+pcrecomp's `disasm32` was the first candidate; measured on 2026-10-14 it found
+16,907 starts in ENC97.EXE against IDA's 7,326, and `lift.py` over its map
+stopped on `push cs` in a "function" that is data.
+- [x] **ENC97.EXE**: `tools/recomp/funcmap.py` (recursive descent from the
+      entry and every relocated code pointer, jump tables, MSVC's int3 padding
+      as the function boundary, EH funclets folded into their parent). On
+      2026-10-21: 7,264 functions, 7,035 identical to IDA's in start and size;
+      the 220 IDA-only ones have no call or pointer anywhere in the binary.
+      The lift builds and passes `regress.py`, which now checks the map too
+- [x] Then: `Setup.cmd` and `setup.sh`, and the recomp-launcher installer
+      (`launcher/launcher.json`)
+- [ ] Upstream `funcmap.py`'s rules into pcrecomp's `disasm32`, so other
+      games get them
+- [ ] Fix pcrecomp `deccd6a`'s jump-table walk for NE code (it reads past an
+      IR32 table, so the codec decodes 31 of 68 clips exactly), then unpin
+      the video step and `launcher.json` from `c5376ff`
+- [ ] **DECO_32.DLL** with `funcmap.py`: 300 functions, 247 of IDA's 268
+      identical, and `--exports` reaches 170 (IDA: 137). Not yet built or
+      checked byte-exact; the installer does not need it (the app loads the
+      real DLL). disasm32's map reached 194 there and lifted, but
+      `recomp_decode` segfaulted: it split `0x110048A0` off its parent
 
 **1. Prove it, and stop it regressing.** The app boots to the article view —
 that is one code path. Everything else (search, atlas, timeline, MindMaze,
