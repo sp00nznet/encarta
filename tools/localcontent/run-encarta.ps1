@@ -43,6 +43,9 @@ param(
     [switch]$NoSubst,
     # ENC97.EXE and its DLLs (AM16/AMF16 must be here too - see the README)
     [string]$AppDir,
+    # the recompiled harness to run, if not this checkout's own build (e.g. one
+    # built elsewhere: ir32vfw.dll still has to sit beside it for video)
+    [string]$Harness,
     [int]$TimeoutMs = 900000,
     [switch]$Hold,
     [ValidateSet("", "1", "all")][string]$FileLog = "",
@@ -53,7 +56,7 @@ $ErrorActionPreference = "Stop"
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 if (-not $AppDir) { $AppDir = Join-Path $repo "analysis" }
 
-$harness = Join-Path $repo "build\tools\recomp\Release\recomp_enc97_run.exe"
+$harness = if ($Harness) { $Harness } else { Join-Path $repo "build\tools\recomp\Release\recomp_enc97_run.exe" }
 if (-not (Test-Path $harness)) {
     Write-Error "No harness at $harness - build it first:`n" +
                 "  cmake -B build -G ""Visual Studio 17 2022"" -A Win32`n" +
