@@ -78,4 +78,7 @@ uint16_t ne_code_alias(uint16_t sel, unsigned nseg);
  * under a second selector, which the driver does when it hands a buffer on. */
 void ne_alias(uint16_t sel, uint32_t arena_off);
 
+/* A guest div/idiv that would fault (#DE): pcrecomp's lifter calls this. */
+void recomp_div0(const char *kind);
+
 #endif /* IR32_NE_MEM_H */

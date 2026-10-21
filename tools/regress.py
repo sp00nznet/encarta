@@ -259,7 +259,31 @@ def check_differential(a):
 #     py tools/indeo/difftest16.py <IR32.DLL> --seg 7 --out runtime/build
 
 
+def check_funcmap(a):
+    """funcmap.py still finds ENC97's functions the way IDA bounds them.
+
+    The map every lift (and Setup) starts from. Pinned to the count measured
+    on 2026-10-21 and to functions each rule exists for: the entry, a switch
+    with its jump table after it, a function with an EH funclet behind it, a
+    tail-jumping thunk, and the jump table itself, which must not be a function.
+    """
+    app = os.path.join(REPO, "analysis", "ENC97.EXE")
+    if not os.path.exists(app):
+        return "skip", "no analysis/ENC97.EXE"
+    sys.path.insert(0, os.path.join(REPO, "tools", "recomp"))
+    import funcmap
+    fm = funcmap.build(app)
+    want = {0x50DB70: None, 0x401DB0: 357, 0x401000: 167, 0x4438A0: 1270, 0x401760: 5}
+    bad = ["%X" % f for f, n in want.items() if f not in fm or n is not None and fm[f] != n]
+    if 0x401F18 in fm:
+        bad.append("401F18 (a jump table)")
+    if bad or len(fm) != 7264:
+        return "fail", "%d functions (want 7264); wrong: %s" % (len(fm), ", ".join(bad) or "-")
+    return "pass", "7264 functions, the IDA-checked ones exact"
+
+
 CHECKS = [
+    ("function map",       check_funcmap),
     ("codec loads",        check_codec_init),
     ("decoder byte-exact", check_decoder_exact),
     ("ICM returns picture", check_icm_picture),

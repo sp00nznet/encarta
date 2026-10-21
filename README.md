@@ -17,7 +17,7 @@ articles, plays MindMaze, shows pictures and plays video, but it is still a
 *hybrid*: the recompiled app body calls Microsoft's own MFC40, MSVCRT40 and
 EEUIL10 underneath ([ROADMAP.md](ROADMAP.md)).
 
-**Conformance: 9 of 9** checks pass (`tools/regress.py`, recorded in
+**Conformance: 10 of 10** checks pass (`tools/regress.py`, recorded in
 [`conformance.json`](conformance.json) on a machine with the disc; CI has no disc
 and reports them as skipped).
 
@@ -105,10 +105,21 @@ the recompiled fractal codec, and the Pinpointer listing 31,108 articles.
 
 ## Getting Started
 
-**Quick start: not available yet.** The house style asks for a one-click
-`Setup.cmd` / `setup.sh`. It cannot be written honestly until the lift stops
-needing a function map from IDA or Ghidra, which a setup script cannot make for
-you. That is the first item in [ROADMAP.md](ROADMAP.md).
+**Quick start.** Download the installer for Windows or Linux from the
+[releases](https://github.com/sp00nznet/encarta/releases) (or the latest
+[installer run](https://github.com/sp00nznet/encarta/actions/workflows/installer.yml)),
+open it, point it at your CD1 or its `.iso`, and press **Build**. From a clone,
+the same thing is one script:
+
+```
+Setup.cmd                          # Windows: double-click it
+./setup.sh                         # Linux: runs under Wine, no video yet
+```
+
+It installs what is missing (asking first), copies CD1 into `content\`, finds
+every function in `ENC97.EXE` itself (no IDA or Ghidra), lifts and builds it,
+and leaves **Encarta 97** beside it to start the app. The first run takes 15 to
+30 minutes, more if Visual Studio's Build Tools have to be installed.
 
 **Step by step:** [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md), six
 stages, each useful on its own, with what each one costs. In short:
@@ -116,8 +127,8 @@ stages, each useful on its own, with what each one costs. In short:
 1. Build the tools, no disc needed ([Building from source](#building-from-source)).
 2. Mount or mirror CD1 ([`tools/localcontent`](tools/localcontent/README.md)).
 3. Read the text, decode the pictures, check the video codec.
-4. Make a function map of your `ENC97.EXE`, lift it, build `recomp_enc97_run`,
-   and run it.
+4. Make a function map of your `ENC97.EXE` (`tools/recomp/funcmap.py`), lift
+   it, build `recomp_enc97_run`, and run it.
 
 You need a legitimate copy of the product, and Python 3.11+ with `pefile`,
 `capstone` and `numpy` for the lifter and the checks.
@@ -140,7 +151,7 @@ tools\localcontent\run-encarta.ps1 -Content G:\encarta97 -Hold
 Check that everything that works still works:
 
 ```
-py tools/regress.py            # 9 checks; a missing disc is SKIP, never a pass
+py tools/regress.py            # 10 checks; a missing disc is SKIP, never a pass
 py tools/regress.py --update   # accept the run as the baseline (conformance.json)
 ```
 
@@ -196,7 +207,7 @@ appear once it exists. [GETTING-STARTED](docs/GETTING-STARTED.md) covers each.
 | `m20dump` | `tools/m20dump/` | M20/MVB 2.0 container extractor | Working |
 | `decooracle` | `tools/decooracle/` | Faithful DECO_32.DLL bridge; ground-truth oracle | Working |
 | `ftcdecode` | `tools/ftcdecode/` | Clean-room FTC/FTT/FIF image decoder | Working ([details](tools/ftcdecode/README.md)) |
-| `regress` | `tools/regress.py` | The conformance harness: re-checks everything that works | 9 of 9 |
+| `regress` | `tools/regress.py` | The conformance harness: re-checks everything that works | 10 of 10 |
 | `strdump` / `spamdump` / `datdump` | `tools/` | STR, SPAM and DAT dumpers | Working |
 | `fifdecode` | `tools/fifdecode/` | Old DLL bridge (wrong export signatures) | Superseded by `decooracle` |
 

@@ -8,6 +8,17 @@ history before this file is in `git log`.
 ## [Unreleased]
 
 ### Added
+- **One-click setup and an installer.** `Setup.cmd` (Windows) and `setup.sh`
+  (Linux, Wine) go from your CD1, a copy of it or its `.iso` to a runnable app,
+  installing what is missing; `launcher/launcher.json` and
+  `.github/workflows/installer.yml` build the recomp-launcher installer for
+  both on every push. `tools/content.py` copies the disc (ISOs read in place).
+- **No IDA needed.** `tools/recomp/funcmap.py` makes ENC97's function map
+  itself: 7,035 of IDA's 7,326 functions identical; of the other 291, 220 are
+  referenced nowhere and 71 have their tails counted differently. The lift from
+  it passes `regress.py`, which now checks the map itself (10 checks).
+- `run-encarta.ps1 -Harness` runs a harness built elsewhere (#3), and picks a
+  free drive letter when H: is a real drive.
 - **Linux and macOS.** `build.sh` cross-builds the Win32 harness and tools with
   clang-cl against xwin's CRT and SDK (`cmake/clang-cl-x86.cmake`, from
   redalert2-recomp, where @cpressland contributed it). `play.sh` runs it under

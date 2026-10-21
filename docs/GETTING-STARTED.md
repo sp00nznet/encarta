@@ -15,7 +15,7 @@ clone, it says so and why, rather than leaving you to find out.
 | [3](#3-read-the-encyclopedia-text) | 31,108 titles, article prose | stage 1 + 2 |
 | [4](#4-decode-the-pictures) | 11,350 images to PNG | stage 3 + your `DECO_32.DLL` |
 | [5](#5-the-video-codec) | byte-exact Indeo 3 decode, and video in the app | a [pcrecomp][pcr] checkout |
-| [6](#6-run-the-application) | Encarta 97 running as recompiled C | a function map from IDA or Ghidra |
+| [6](#6-run-the-application) | Encarta 97 running as recompiled C | stage 1 + 2, about 10 minutes |
 
 [pcr]: https://github.com/sp00nznet/pcrecomp
 
@@ -106,15 +106,14 @@ cd tools\localcontent
 ```
 
 Either way you end up with a directory containing `ENCYC97\` and `AAMSSTP\`.
-Everything below calls that `$CD1`. Set it once and copy four files out:
+Everything below calls that `$CD1`. Set it once and copy the app out:
 
 ```powershell
 $CD1 = "G:\encarta97"                  # or "H:\" if you mounted the image
 
-# the app, its codec, and the two Setup would have put in System32
+# the app and its DLLs, and the two Setup would have put in System32
 mkdir analysis
-copy $CD1\ENCYC97\ENC97.EXE           analysis\
-copy $CD1\ENCYC97\DECO_32.DLL         analysis\
+copy $CD1\AAMSSTP\ENCARTA\*           analysis\
 copy $CD1\AAMSSTP\SYSTEM32\AM16.DLL   analysis\
 copy $CD1\AAMSSTP\SYSTEM32\AMF16.DLL  analysis\
 ```
@@ -193,6 +192,12 @@ cd tools\indeo\runtime
 .\build.bat $CD1\AAMSSTP\SYSTEM16\IR32.DLL
 ```
 
+**Use pcrecomp at `c5376ff` for this,** not today's `main`. Its commit
+`deccd6a` (2026-09-13) walks a jump table until a dword is not an address in
+the image, which an NE segment's small offsets never stop, and the codec it
+lifts decodes only 31 of 68 clips exactly; `c5376ff`, just before it, decodes
+all 68. `Setup.cmd` notices and fetches `c5376ff` for this step by itself.
+
 `build.bat` finds `vcvars32.bat` itself, lifts forty code segments, and produces
 `build\ir32_run.exe`, `build\ir32_vfwtest.exe` and `build\ir32vfw.dll`. It stops
 with a message if `PCRECOMP` does not point at a checkout.
@@ -212,16 +217,27 @@ say so and stop; they will not report "0 of 0" as if that were a result.
 
 ## 6. Run the application
 
-This is the one stage a clone cannot reach unaided, and it is worth being blunt
-about why.
+`Setup.cmd` / `setup.sh` do all of this stage in one go. By hand:
 
-Lifting `ENC97.EXE` needs a **function map** — where each of its 7,326 functions
-starts and how long it is. That map is derived from your own copy of
-`ENC97.EXE`, so like the lift itself it is not distributed here, and producing it
-needs a disassembler. Either works:
+Lifting `ENC97.EXE` needs a **function map**: where each function starts and
+how long it is. It is derived from your own copy, so like the lift it is not
+distributed here. `funcmap.py` makes it, with no disassembler to install:
 
-`lift.py` wants that map as one function per line, `0xADDR  size  name`. Neither
-disassembler emits exactly that, so both paths end in a one-line conversion.
+```powershell
+py tools\recomp\funcmap.py analysis\ENC97.EXE tools\recomp\funcs.txt
+```
+
+It traces from the entry point and every relocated pointer into code, following
+calls, jumps and jump tables, in about 20 seconds. Measured against IDA's map on
+2026-10-21: 7,264 functions to IDA's 7,326, **7,035 identical** in start and
+size. The 220 that IDA has and it lacks are referenced nowhere in the binary
+(no call, no pointer), so nothing can reach them; the rest differ in where a
+function's tail is counted. A lift from it builds, reaches the main window, and
+passes `regress.py`.
+
+A disassembler's map works too. `lift.py` wants one function per line,
+`0xADDR  size  name`, and neither disassembler emits exactly that, so both
+paths end in a one-line conversion.
 
 **With Ghidra** (free). Run pcrecomp's `DumpBounds.java` headless — note
 `-scriptPath`, or Ghidra will not find the script — and turn its `start,end`
@@ -244,9 +260,6 @@ py -c "import json,sys; [print('0x%08X %6d %s' % (f['ea'], f['size'], f['name'])
 ```
 
 IDA is where the **7,326** functions quoted throughout these docs came from.
-Ghidra's function finder will not agree exactly, and that disagreement is where
-any divergence from the numbers here begins — a function it misses is a function
-that does not get lifted.
 
 Writing `funcs.txt` to `tools\recomp\` is deliberate: the analysis scripts
 (`find_pure_chain.py` and friends) look for it there, or at `%ENC97_FUNCS%`.
@@ -296,15 +309,16 @@ before this one.
 ## Check it all still works
 
 ```powershell
-py tools\regress.py            # 9 checks, ~5s
-py tools\regress.py --full     # every frame rather than six, ~35s
+py tools\regress.py            # 10 checks, ~40s
+py tools\regress.py --full     # every frame rather than six, ~70s
 py tools\regress.py --list     # what it would run, and why each might skip
 ```
 
 A check whose inputs are missing reports **SKIP**, never a pass, so this is
-usable with no disc in the machine. On a complete setup all nine pass:
+usable with no disc in the machine. On a complete setup all ten pass:
 
 ```
+  function map         ... ok    7264 functions, the IDA-checked ones exact
   codec loads          ... ok    init matches the disassembly
   decoder byte-exact   ... ok    68 of 68 frames byte-exact
   ICM returns picture  ... ok    68 of 68 frames correct through ICM

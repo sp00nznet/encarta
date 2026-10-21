@@ -35,9 +35,10 @@
 param(
     # the local mirror made by mirror-cd.ps1
     [Parameter(Mandatory = $true)][string]$Content,
-    # the drive letter this copy of the app asks for. The mirror is mapped to it
-    # with subst, so every component resolves it - not just the app.
-    [string]$CdDrive = "H:",
+    # the drive letter the mirror is mapped to with subst, so every component
+    # resolves it - not just the app. Default: H:, or the first free letter
+    # after it when H: is a real drive.
+    [string]$CdDrive = "",
     # Fall back to rewriting paths inside the app instead of mapping a drive.
     # Content works; VIDEO DOES NOT - see the README.
     [switch]$NoSubst,
@@ -80,6 +81,14 @@ if (-not (Test-Path (Join-Path $Content "ENCYC97\ENCARTA.M20"))) {
 # and no separator of its own, so "…\analysis" + "ENCART97.DAT" becomes one
 # nonexistent path and it reports a missing CD.
 $appPath = $AppDir.TrimEnd('\') + '\'
+if (-not $CdDrive) {
+    # H: unless something other than our own subst holds it
+    $substs = @(subst)
+    $CdDrive = "HIJKLMNOPQRSTUVWXY".ToCharArray() | ForEach-Object { "$_`:" } |
+        Where-Object { -not (Test-Path "$_\") -or ($substs -match "^$_\\: => $([regex]::Escape($Content))") } |
+        Select-Object -First 1
+    if (-not $CdDrive) { Write-Error "No free drive letter for the content (H: to Y: are all taken). Use -NoSubst."; exit 1 }
+}
 $letter = $CdDrive.TrimEnd('\', ':')
 
 if ($NoSubst) {
