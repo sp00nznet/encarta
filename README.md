@@ -12,7 +12,7 @@ mode records runs without a window.
 
 ## Status
 
-**Alpha, no tagged release yet.** The recompiled application boots, browses
+**Alpha: [v0.1.0-alpha.1](https://github.com/sp00nznet/encarta/releases) is the first release.** The recompiled application boots, browses
 articles, plays MindMaze, shows pictures and plays video, but it is still a
 *hybrid*: the recompiled app body calls Microsoft's own MFC40, MSVCRT40 and
 EEUIL10 underneath ([ROADMAP.md](ROADMAP.md)).
