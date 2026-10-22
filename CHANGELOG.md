@@ -2,10 +2,12 @@
 
 All notable changes to this project. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
-[Semantic Versioning](https://semver.org/). There is no tagged release yet; the
+[Semantic Versioning](https://semver.org/). The first tagged release is 0.1.0-alpha.1; the
 history before this file is in `git log`.
 
 ## [Unreleased]
+
+## [0.1.0-alpha.1] - 2026-10-21
 
 ### Added
 - **One-click setup and an installer.** `Setup.cmd` (Windows) and `setup.sh`
